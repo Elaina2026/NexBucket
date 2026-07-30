@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <link rel="icon" type="image/png" href="/favicon.ico">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NexBucket — Service Status</title>
+  <meta name="description" content="Check the real-time status of NexBucket services.">
+  <link rel="stylesheet" href="/style.css?v=1.5" />
+  <script src="/theme-init.js"></script>
+  <script type="module" src="/i18n.js?v=1.0"></script>
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <div class="logo-wrap">
+        <div class="logo-icon-bg">
+          <img src="/api/bot-avatar" alt="Bot Avatar" style="width:100%;height:100%;object-fit:cover;border-radius:inherit;" data-hide-on-error/>
+        </div>
+        <div>
+          <h1 class="logo-title">NexBucket Status</h1>
+          <p class="logo-sub">Real-time Service Monitoring</p>
+        </div>
+      </div>
+      <div class="header-meta">
+        <a href="/" class="nav-btn">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09"/></svg>
+          Bot Dashboard
+        </a>
+        <span class="refresh-badge" id="refreshBadge">Auto-refresh in <strong id="refreshTimer">30</strong>s</span>
+        <button id="langToggle" class="theme-toggle" title="Language" style="font-size:16px;line-height:1;">🇬🇧</button>
+        <button id="themeToggle" class="theme-toggle" aria-label="Toggle theme">
+          <svg class="sun-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+          <svg class="moon-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <div class="status-banner" id="statusBanner">
+      <div class="banner-icon" id="bannerIcon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="24" height="24"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+      </div>
+      <div class="banner-text">
+        <strong id="bannerTitle">Checking Systems...</strong>
+        <p id="bannerDesc">Verifying the status of all core services.</p>
+      </div>
+    </div>
+
+    <section class="health-strip">
+      <div class="health-pill"><span class="pill-label">Uptime</span><span class="pill-value" id="hUptime">—</span></div>
+      <div class="health-pill"><span class="pill-label">Latency</span><span class="pill-value" id="hPing">—</span></div>
+      <div class="health-pill"><span class="pill-label">Memory</span><span class="pill-value" id="hMemory">—</span></div>
+      <div class="health-pill"><span class="pill-label">Servers</span><span class="pill-value" id="hGuilds">—</span></div>
+      <div class="health-pill"><span class="pill-label">Users</span><span class="pill-value" id="hUsers">—</span></div>
+    </section>
+
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="tab-status">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+        Services
+      </button>
+      <button class="tab-btn" data-tab="tab-incidents">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        Incidents
+      </button>
+    </div>
+
+    <div id="tab-status" class="tab-content active">
+      <section class="section">
+        <h2 class="section-heading">CORE SERVICES</h2>
+        <div class="services-list" id="servicesList">
+          <div class="empty-state">Loading services...</div>
+        </div>
+      </section>
+    </div>
+
+    <div id="tab-incidents" class="tab-content">
+      <section class="section">
+        <h2 class="section-heading">SYSTEM INCIDENTS (LAST 24 HOURS)</h2>
+        <div class="incident-summary-bar" id="incidentSummary"></div>
+        <div class="incident-card">
+          <div class="incident-feed" id="incidentFeed">
+            <div class="empty-state">No incidents recorded. All systems running smoothly!</div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <footer class="footer">
+      <p>NexBucket Status &bull; Real-time Monitoring Platform</p>
+    </footer>
+  </div>
+
+  <script type="module" src="/app.js"></script>
+  <script type="module" src="/common-inline.js"></script>
+</html>

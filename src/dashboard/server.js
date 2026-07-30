@@ -1,0 +1,1043 @@
+import express from 'express';
+import rateLimit from 'express-rate-limit';
+import cors from 'cors';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import crypto from 'crypto';
+import os from 'os';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+import dotenv from 'dotenv';
+const execAsync = promisify(exec);
+import axios from 'axios';
+dotenv.config({ override: true });
+import ConfigManager from '../ticket/configManager.js';
+import { getWelcomeConfig } from '../welcome/welcomeManager.js';
+import { getJtcSettings, normalizeJtcConfig, setJtcSettingsCache } from '../utils/jtcManager.js';
+import { getIncidents, getIncidentSummary } from '../utils/errorHandler.js';
+import { getAllServicesStatus, getOverallStatus } from '../utils/uptimeTracker.js';
+import { getBankConfig } from '../banking/bankManager.js';
+import { getCardConfig, normalizeCardDomain } from '../banking/cardConfig.js';
+import { getStatsConfigForGuild } from '../status/serverStatsManager.js';
+import { getAllSections, saveSections } from '../database/guildSettings.js';
+import { getModConfig } from '../moderation/moderationManager.js';
+import { applyCardResult } from '../banking/cardResult.js';
+import { supabase } from '../database/supabaseClient.js';
+import { encryptToken, decryptToken, generateCsrfToken, sanitizePayload } from '../utils/securityUtils.js';
+import { parseCookies, pickKey } from './dashboardUtils.js';
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+function isSnowflake(value) {
+    return typeof value === 'string' && /^\d{17,20}$/.test(value);
+}
+
+async function getGuildMember(guild, userId) {
+    if (!guild || !isSnowflake(userId)) return null;
+    const cached = guild.members.cache.get(userId);
+    if (cached) return cached;
+    return guild.members.fetch(userId).catch(() => null);
+}
+
+export function startDashboard(client) {
+    const app = express();
+    app.set('trust proxy', 1);
+    const port = process.env.DASHBOARD_PORT || 3000;
+    const dashboardOrigin = process.env.DASHBOARD_URL || `http://localhost:${port}`;
+    // Mẫu CPU trước đó, dùng để tính % theo chênh lệch ở /api/admin/system.
+    let lastCpuSample = process.cpuUsage();
+    let lastCpuSampleAt = Date.now();
+    // Ghi log ngay tại limiter. Middleware log cũ được đăng ký SAU tất cả route
+    // nên Express không bao giờ chạy tới nó — không sự kiện RATE_LIMIT nào được ghi.
+    const rateLimitHandler = (req, res, next, options) => {
+        const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket.remoteAddress;
+        logSecurityEvent('RATE_LIMIT', ip, req.headers['user-agent'], `Path: ${req.path}`);
+        res.status(options.statusCode).send(options.message);
+    };
+    const apiLimiter = rateLimit({
+        windowMs: 60 * 1000,
+        max: 500,
+        standardHeaders: true,
+        legacyHeaders: false,
+        handler: rateLimitHandler,
+    });
+    const authLimiter = rateLimit({
+        windowMs: 60 * 1000,
+        max: 100,
+        standardHeaders: true,
+        legacyHeaders: false,
+        handler: rateLimitHandler,
+    });
+    app.use((req, res, next) => {
+        res.setHeader('X-Frame-Options', 'DENY');
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.setHeader('X-XSS-Protection', '1; mode=block');
+        res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+        res.setHeader('Content-Security-Policy', [
+            "default-src 'self'",
+            "script-src 'self' https://static.cloudflareinsights.com",
+            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+            "font-src 'self' https://fonts.gstatic.com",
+            "img-src 'self' data: https://cdn.discordapp.com https://img.vietqr.io https://*.supabase.co",
+            "connect-src 'self' https://cloudflareinsights.com",
+            "frame-ancestors 'none'",
+            "base-uri 'self'",
+            "form-action 'self'",
+        ].join('; '));
+        res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+        res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
+        res.removeHeader('X-Powered-By');
+        next();
+    });
+    const allowedOrigins = [
+        `http://localhost:${port}`,
+        `http://127.0.0.1:${port}`,
+        process.env.DASHBOARD_URL
+    ].filter(Boolean);
+    app.use(cors({
+        origin: function(origin, callback) {
+            if (!origin) return callback(null, true);
+            if (allowedOrigins.includes(origin)) return callback(null, true);
+            callback(new Error('CORS: DASHBOARD_URL not configured or origin not allowed'));
+        },
+        methods: ['GET', 'POST'],
+        allowedHeaders: ['Content-Type', 'Authorization'],
+        credentials: true,
+        maxAge: 86400,
+    }));
+    app.use(express.json({ limit: '1mb' }));
+    app.use(express.urlencoded({ extended: true, limit: '1mb' }));
+    app.use('/api', apiLimiter);
+    app.use('/api/auth', authLimiter);
+    const sourcePublicPath = path.join(__dirname, 'public');
+    const builtPublicPath = path.join(__dirname, '..', '..', 'dist', 'dashboard', 'public');
+    app.use(express.static(builtPublicPath, { maxAge: 0, etag: true }));
+    app.use(express.static(sourcePublicPath, { maxAge: 0, etag: true }));
+    app.get('/favicon.ico', (req, res) => {
+        if (!client || !client.user) return res.status(404).end();
+        res.redirect(client.user.displayAvatarURL({ extension: 'png', size: 128 }));
+    });
+    app.get('/status', (req, res) => {
+        res.sendFile(path.join(sourcePublicPath, 'status.html'));
+    });
+    app.get('/tos', (req, res) => {
+        res.sendFile(path.join(sourcePublicPath, 'tos.html'));
+    });
+    app.get('/privacy', (req, res) => {
+        res.sendFile(path.join(sourcePublicPath, 'privacy.html'));
+    });
+
+    app.get('/api/invite', (req, res) => {
+        const clientId = process.env.CLIENT_ID || client.user?.id;
+        if (!clientId) return res.redirect('/');
+        const permissions = 8;
+        const inviteUrl = `https://discord.com/oauth2/authorize?client_id=${clientId}&permissions=${permissions}&integration_type=0&scope=bot+applications.commands`;
+        res.redirect(inviteUrl);
+    });
+    app.get('/admin', (req, res) => {
+        res.sendFile(path.join(sourcePublicPath, 'admin.html'));
+    });
+    app.get('/admin/:section', (req, res) => {
+        res.sendFile(path.join(sourcePublicPath, 'admin.html'));
+    });
+
+    // Đích quay về mà bankManager.createPaymentLink() gửi cho PayOS.
+    // Không có hai route này thì người dùng thanh toán xong sẽ nhận 404.
+    app.get('/payos/success', (req, res) => res.redirect('/?payment=success'));
+    app.get('/payos/cancel', (req, res) => res.redirect('/?payment=cancelled'));
+
+    app.get('/api/admin/system', requireAdmin, async (req, res) => {
+        try {
+            const cpus = os.cpus();
+            // Đo CHÊNH LỆCH giữa hai lần lấy mẫu. Trước đây code dùng thẳng
+            // process.cpuUsage() — đó là tổng CPU-giây tích luỹ từ lúc khởi động,
+            // nên con số chỉ tăng dần rồi kẹt ở 100% mãi mãi.
+            const nowMs = Date.now();
+            const cpuDelta = process.cpuUsage(lastCpuSample);
+            const elapsedMs = nowMs - lastCpuSampleAt;
+            lastCpuSample = process.cpuUsage();
+            lastCpuSampleAt = nowMs;
+            const cpuPercent = elapsedMs > 0
+                ? Math.max(0, Math.min(100, ((cpuDelta.user + cpuDelta.system) / 1000) / elapsedMs * 100 / (cpus.length || 1)))
+                : 0;
+
+            const totalMem = os.totalmem();
+            const freeMem = os.freemem();
+            const processMem = process.memoryUsage().rss;
+
+            let diskTotal = 0;
+            let diskFree = 0;
+            try {
+                if (process.platform === 'win32') {
+                    const { stdout } = await execAsync('wmic logicaldisk get size,freespace /format:csv', { timeout: 2000 });
+                    const lines = (stdout || '').split(/\r?\n/).filter(l => l.trim().length > 0);
+                    const dataLines = lines.slice(1);
+                    for (const line of dataLines) {
+                        const parts = line.split(',');
+                        if (parts.length >= 3 && parts[1] && parts[2]) {
+                            diskFree += parseInt(parts[1].trim(), 10) || 0;
+                            diskTotal += parseInt(parts[2].trim(), 10) || 0;
+                        }
+                    }
+                } else {
+                    const { stdout } = await execAsync('df -k /');
+                    const lines = (stdout || '').split(/\r?\n/).filter(l => l.trim().length > 0);
+                    if (lines.length > 1) {
+                        const parts = lines[1].split(/\s+/);
+                        diskTotal = (parseInt(parts[1], 10) || 0) * 1024;
+                        diskFree = (parseInt(parts[3], 10) || 0) * 1024;
+                    }
+                }
+            } catch (e) {
+                // Silently ignore disk space errors (e.g. wmic timeout) to prevent console spam
+            }
+
+            res.json({
+                cpu: {
+                    model: cpus[0]?.model || 'Unknown',
+                    cores: cpus.length,
+                    processUsagePercent: cpuPercent
+                },
+                ram: {
+                    total: totalMem,
+                    free: freeMem,
+                    process: processMem
+                },
+                disk: {
+                    total: diskTotal,
+                    free: diskFree
+                },
+                db: {
+                    status: supabase ? 'Connected (Remote)' : 'Disconnected',
+                    size: 'Cloud'
+                }
+            });
+        } catch (err) {
+            console.error('[Admin API] System Error:', err);
+            res.status(500).json({ error: err.message });
+        }
+    });
+
+    app.get('/dashboard', (req, res) => {
+        res.sendFile(path.join(sourcePublicPath, 'index.html'));
+    });
+    app.get('/dashboard/:serverId', (req, res) => {
+        res.sendFile(path.join(sourcePublicPath, 'index.html'));
+    });
+    app.get('/dashboard/:serverId/:section', (req, res) => {
+        res.sendFile(path.join(sourcePublicPath, 'index.html'));
+    });
+    app.get('/', (req, res) => {
+        res.sendFile(path.join(sourcePublicPath, 'index.html'));
+    });
+    async function logSecurityEvent(eventType, ipAddress, userAgent, details) {
+        if (!supabase) return;
+        try {
+            const { error } = await supabase.from('security_logs').insert([{
+                event_type: eventType,
+                ip_address: ipAddress || 'unknown',
+                user_agent: (userAgent || '').substring(0, 500),
+                details: (details || '').substring(0, 2000),
+            }]);
+            if (error) throw error;
+        } catch (err) {
+            console.error('[Security] Failed to log event:', err.message);
+        }
+    }
+    async function requireAdmin(req, res, next) {
+        try {
+            const auth = await getAuthenticatedUser(req);
+            if (!auth || auth.session.user_id !== process.env.BOT_OWNER_ID) {
+                const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket.remoteAddress;
+                logSecurityEvent('ADMIN_ACCESS_DENIED', ip, req.headers['user-agent'], `User: ${auth?.session?.user_id || 'anonymous'}`);
+                return res.status(403).json({ error: 'Forbidden: Admin access only' });
+            }
+            req.auth = auth;
+            next();
+        } catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    }
+    const ALLOWED_PROXY_DOMAINS = ['cdn.koya.gg', 'cdn.discordapp.com', 'media.discordapp.net', 'img.vietqr.io'];
+    app.get('/api/proxy-image', async (req, res) => {
+        const imageUrl = typeof req.query.url === 'string' ? req.query.url : '';
+        if (!imageUrl) return res.status(400).send('Missing url parameter');
+        try {
+            const urlObj = new URL(imageUrl);
+            if (!ALLOWED_PROXY_DOMAINS.some(d => urlObj.hostname === d || urlObj.hostname.endsWith('.' + d))) {
+                return res.status(403).send('Domain not allowed');
+            }
+        } catch { return res.status(400).send('Invalid URL'); }
+        try {
+            const response = await axios.get(imageUrl, {
+                responseType: 'stream',
+                timeout: 10000,
+                maxContentLength: 10 * 1024 * 1024,
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                }
+            });
+            const contentType = response.headers['content-type'];
+            if (contentType) res.set('Content-Type', String(contentType));
+            res.set('Cache-Control', 'public, max-age=86400');
+            response.data.pipe(res);
+        } catch (error) {
+            res.status(500).send('Failed to fetch image');
+        }
+    });
+    app.get('/api/auth/login', (req, res) => {
+        const clientId = process.env.CLIENT_ID;
+        const redirectUri = encodeURIComponent(`${dashboardOrigin}/api/auth/callback`);
+        const state = generateCsrfToken();
+        res.cookie ? res.cookie('oauth_state', state, { httpOnly: true, maxAge: 600000 }) :
+            res.setHeader('Set-Cookie', `oauth_state=${state}; HttpOnly; Path=/; Max-Age=600`);
+        const oauthUrl = `https://discord.com/api/oauth2/authorize?client_id=${clientId}&redirect_uri=${redirectUri}&response_type=code&scope=identify%20guilds&state=${state}`;
+        res.redirect(oauthUrl);
+    });
+    app.get('/api/auth/callback', async (req, res) => {
+        try {
+            const { code, state } = req.query;
+            const cookies = parseCookies(req);
+            if (!code || !state || state !== cookies.oauth_state) {
+                return res.status(400).send('❌ Authentication Failed: Invalid state parameter (CSRF protection trigger).');
+            }
+            const clientId = process.env.CLIENT_ID;
+            const clientSecret = process.env.CLIENT_SECRET || process.env.DISCORD_CLIENT_SECRET;
+            const redirectUri = `${dashboardOrigin}/api/auth/callback`;
+            if (!clientSecret) {
+                console.error('[Dashboard Auth] Missing CLIENT_SECRET in .env');
+                return res.status(500).send('❌ Server configuration error: CLIENT_SECRET missing in .env');
+            }
+            const tokenResponse = await axios.post('https://discord.com/api/oauth2/token', new URLSearchParams({
+                client_id: clientId,
+                client_secret: clientSecret,
+                grant_type: 'authorization_code',
+                code: code.toString(),
+                redirect_uri: redirectUri,
+            }), {
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+            });
+            const { access_token, refresh_token, expires_in } = tokenResponse.data;
+            const userResponse = await axios.get('https://discord.com/api/users/@me', {
+                headers: { Authorization: `Bearer ${access_token}` }
+            });
+            const userData = userResponse.data;
+            const encryptedAccessToken = encryptToken(access_token);
+            const encryptedRefreshToken = encryptToken(refresh_token);
+            const sessionId = crypto.randomUUID();
+            const expiresAt = new Date(Date.now() + expires_in * 1000).toISOString();
+            if (!supabase) return res.status(500).send('❌ Database not configured');
+            const { error: sessionError } = await supabase.from('user_sessions').upsert({
+                session_id: sessionId,
+                user_id: userData.id,
+                username: userData.username,
+                discriminator: userData.discriminator,
+                avatar: userData.avatar,
+                access_token_encrypted: encryptedAccessToken,
+                refresh_token_encrypted: encryptedRefreshToken,
+                expires_at: expiresAt,
+                updated_at: new Date().toISOString()
+            });
+            if (sessionError) throw sessionError;
+            res.setHeader('Set-Cookie', `session_id=${sessionId}; HttpOnly; Path=/; Max-Age=604800; SameSite=Lax`);
+            res.redirect('/');
+        } catch (err) {
+            console.error('[Dashboard Auth Callback Error]:', err.response?.data || err.message);
+            res.status(500).send('❌ OAuth Login Error: Failed to complete authentication with Discord.');
+        }
+    });
+    async function getAuthenticatedUser(req) {
+        const cookies = parseCookies(req);
+        const sessionId = cookies.session_id;
+        if (!sessionId || !supabase) return null;
+        let { data: session, error } = await supabase
+            .from('user_sessions')
+            .select('*')
+            .eq('session_id', sessionId)
+            .maybeSingle();
+        if (error || !session) return null;
+
+        if (new Date(session.expires_at) < new Date()) {
+            const refreshToken = decryptToken(session.refresh_token_encrypted);
+            if (!refreshToken) return null;
+            try {
+                const tokenResponse = await axios.post('https://discord.com/api/oauth2/token', new URLSearchParams({
+                    client_id: process.env.CLIENT_ID,
+                    client_secret: process.env.CLIENT_SECRET || process.env.DISCORD_CLIENT_SECRET,
+                    grant_type: 'refresh_token',
+                    refresh_token: refreshToken
+                }), { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
+
+                const { access_token, refresh_token: new_refresh_token, expires_in } = tokenResponse.data;
+                const newExpiresAt = new Date(Date.now() + expires_in * 1000).toISOString();
+
+                const encryptedNewAccessToken = encryptToken(access_token);
+                const encryptedNewRefreshToken = encryptToken(new_refresh_token);
+                const { error: refreshError } = await supabase.from('user_sessions')
+                    .update({
+                        access_token_encrypted: encryptedNewAccessToken,
+                        refresh_token_encrypted: encryptedNewRefreshToken,
+                        expires_at: newExpiresAt,
+                        updated_at: new Date().toISOString()
+                    })
+                    .eq('session_id', sessionId);
+                if (refreshError) throw refreshError;
+
+                session.access_token_encrypted = encryptedNewAccessToken;
+                session.refresh_token_encrypted = encryptedNewRefreshToken;
+                session.expires_at = newExpiresAt;
+            } catch (err) {
+                return null;
+            }
+        }
+
+        const accessToken = decryptToken(session.access_token_encrypted);
+        if (!accessToken) return null;
+        return { session, accessToken };
+    }
+    app.get('/api/auth/me', async (req, res) => {
+        try {
+            const auth = await getAuthenticatedUser(req);
+            if (!auth) return res.status(401).json({ error: 'Unauthorized' });
+            let guildsResponse;
+            try {
+                guildsResponse = await axios.get('https://discord.com/api/users/@me/guilds', {
+                    headers: { Authorization: `Bearer ${auth.accessToken}` }
+                });
+            } catch (discordErr) {
+                if (discordErr.response && discordErr.response.status === 401) {
+                    return res.status(401).json({ error: 'Unauthorized via Discord' });
+                }
+                throw discordErr;
+            }
+
+            const manageableGuilds = guildsResponse.data
+                .filter(g => {
+                    const permissions = BigInt(g.permissions);
+                    const isAdmin = (permissions & 0x8n) === 0x8n || (permissions & 0x20n) === 0x20n;
+                    const isBotInGuild = client.guilds.cache.has(g.id);
+                    return isAdmin && isBotInGuild;
+                })
+                .map(g => {
+                    const permissions = BigInt(g.permissions);
+                    const isOwner = g.owner === true;
+                    const isAdministrator = (permissions & 0x8n) === 0x8n;
+                    const isManageGuild = (permissions & 0x20n) === 0x20n;
+                    const botGuild = client.guilds.cache.get(g.id);
+                    let permissionTier = 'manage_server';
+                    if (isOwner) permissionTier = 'owner';
+                    else if (isAdministrator) permissionTier = 'administrator';
+                    return {
+                        id: g.id,
+                        name: g.name,
+                        icon: g.icon ? `https://cdn.discordapp.com/icons/${g.id}/${g.icon}.${g.icon.startsWith('a_') ? 'gif' : 'png'}?size=128` : null,
+                        memberCount: botGuild?.memberCount || 0,
+                        permissionTier,
+                    };
+                });
+            res.json({
+                user: {
+                    id: auth.session.user_id,
+                    username: auth.session.username,
+                    avatar: auth.session.avatar,
+                },
+                guilds: manageableGuilds
+            });
+        } catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+    app.post('/api/auth/logout', async (req, res) => {
+        try {
+            const cookies = parseCookies(req);
+            if (cookies.session_id && supabase) {
+                const { error } = await supabase.from('user_sessions').delete().eq('session_id', cookies.session_id);
+                if (error) throw error;
+            }
+            res.setHeader('Set-Cookie', 'session_id=; HttpOnly; Path=/; Max-Age=0');
+            res.json({ success: true });
+        } catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+    app.get('/api/guilds/:guildId/data', async (req, res) => {
+        try {
+            const auth = await getAuthenticatedUser(req);
+            if (!auth) return res.status(401).json({ error: 'Unauthorized' });
+            const guildId = req.params.guildId;
+            const guildMember = await getGuildMember(client.guilds.cache.get(guildId), auth.session.user_id);
+            if (!guildMember || (!guildMember.permissions.has('Administrator') && !guildMember.permissions.has('ManageGuild'))) {
+                return res.status(403).json({ error: 'Forbidden: You do not have Administrator permissions on this server.' });
+            }
+            const guild = client.guilds.cache.get(guildId);
+            if (!guild) return res.status(404).json({ error: 'Guild not found in bot cache' });
+            const channels = guild.channels.cache
+                .filter(c => [0, 2, 4, 5, 13, 15].includes(c.type))
+                .map(c => ({ id: c.id, name: c.name, type: c.type, parentId: c.parentId, position: c.position }))
+                .sort((a, b) => a.position - b.position);
+            const roles = guild.roles.cache
+                .filter(r => r.id !== guild.id)
+                .map(r => ({ id: r.id, name: r.name, color: r.hexColor, position: r.position }))
+                .sort((a, b) => b.position - a.position);
+            const bannerUrl = guild.bannerURL({ size: 1024 }) || null;
+            const iconUrl = guild.iconURL({ size: 128 }) || null;
+            res.json({ channels, roles, bannerUrl, iconUrl, name: guild.name, memberCount: guild.memberCount });
+        } catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+    app.get('/api/config/:guildId', async (req, res) => {
+        try {
+            res.setHeader('Cache-Control', 'no-store');
+            const auth = await getAuthenticatedUser(req);
+            if (!auth) return res.status(401).json({ error: 'Unauthorized' });
+            const { guildId } = req.params;
+            const guildMember = await getGuildMember(client.guilds.cache.get(guildId), auth.session.user_id);
+            if (!guildMember || (!guildMember.permissions.has('Administrator') && !guildMember.permissions.has('ManageGuild'))) {
+                return res.status(403).json({ error: 'Forbidden: You do not have Administrator permissions on this server.' });
+            }
+            const ticketConfig = await ConfigManager.getConfig(guildId);
+            const welcomeConfig = await getWelcomeConfig(guildId);
+            const jtcConfig = await getJtcSettings(guildId, true);
+            const bankConfig = await getBankConfig(guildId);
+            const cardConfig = await getCardConfig(guildId);
+            const statsConfig = await getStatsConfigForGuild(guildId);
+            const modConfig = await getModConfig(guildId);
+            const settings = await getAllSections(guildId);
+            const minecraftServers = Array.isArray(settings.minecraft?.servers) ? settings.minecraft.servers : [];
+            const guild = client.guilds.cache.get(guildId);
+            const configVersion = Number(settings.version || 0);
+            const serverBanner = guild?.bannerURL({ size: 1024 }) || '';
+
+            res.json({
+                guildId,
+                autoroleId: settings.utility?.autoroleId || '',
+                ticketConfig,
+                welcomeConfig: {
+                    welcomeChannel: welcomeConfig.welcomeChannel || '',
+                    goodbyeChannel: welcomeConfig.goodbyeChannel || '',
+                    welcomeMessageContent: welcomeConfig.welcomeMessageContent || '',
+                    goodbyeMessageContent: welcomeConfig.goodbyeMessageContent || '',
+                    welcomeText: welcomeConfig.welcomeText || '',
+                    goodbyeText: welcomeConfig.goodbyeText || '',
+                    welcomeBg: welcomeConfig.welcomeBg || '',
+                    goodbyeBg: welcomeConfig.goodbyeBg || '',
+                },
+                jtcConfig,
+                modConfig,
+                bankConfig: {
+                    bankBin: bankConfig.bankBin || '',
+                    accountNo: bankConfig.accountNo || '',
+                    accountName: bankConfig.accountName || '',
+                    notificationChannelId: bankConfig.notificationChannelId || '',
+                    payosConfigured: !!(bankConfig.payosClientId && bankConfig.payosApiKey && bankConfig.payosChecksumKey),
+                },
+                cardConfig: {
+                    partnerId: cardConfig.partnerId,
+                    domain: cardConfig.domain,
+                    cardConfigured: cardConfig.configured,
+                    status: cardConfig.status,
+                },
+                statsConfig,
+                statusConfig: {
+                    refreshInterval: parseInt(process.env.UPDATE_INTERVAL || '60000', 10) || 60000,
+                    servers: minecraftServers.map(server => ({
+                        channelId: server.channelId,
+                        ip: server.ip,
+                        port: server.port,
+                        messageId: server.messageId,
+                    })),
+                },
+                configVersion,
+                serverBanner,
+            });
+        } catch (err) {
+            console.error('[GET /api/config] 500 Error:', err);
+            res.status(500).json({ error: err.message });
+        }
+    });
+    app.post('/api/config/:guildId', async (req, res) => {
+        try {
+            const auth = await getAuthenticatedUser(req);
+            if (!auth) return res.status(401).json({ error: 'Unauthorized' });
+            const { guildId } = req.params;
+            const guildMember = await getGuildMember(client.guilds.cache.get(guildId), auth.session.user_id);
+            if (!guildMember || (!guildMember.permissions.has('Administrator') && !guildMember.permissions.has('ManageGuild'))) {
+                return res.status(403).json({ error: 'Forbidden: You do not have Administrator permissions on this server.' });
+            }
+            if (!supabase) return res.status(500).json({ error: 'Database not configured' });
+            const cleanBody = sanitizePayload(req.body);
+            const expectedVersion = Number(cleanBody.configVersion);
+            if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 0) {
+                return res.status(400).json({ error: 'Invalid configVersion' });
+            }
+            const autoroleId = String(pickKey(cleanBody, 'autoroleId', 'autorole_id') || '');
+            const ticketConfig = pickKey(cleanBody, 'ticketConfig', 'ticket_config') || {};
+            const welcomeConfig = pickKey(cleanBody, 'welcomeConfig', 'welcome_config') || {};
+            const jtcConfig = pickKey(cleanBody, 'jtcConfig', 'jtc_config') || {};
+            const modConfig = pickKey(cleanBody, 'modConfig', 'mod_config') || {};
+            const bankConfig = pickKey(cleanBody, 'bankConfig', 'bank_config') || {};
+            const cardConfig = pickKey(cleanBody, 'cardConfig', 'card_config') || {};
+            const statsConfig = pickKey(cleanBody, 'statsConfig', 'stats_config') || {};
+            const statusConfig = pickKey(cleanBody, 'statusConfig', 'status_config') || {};
+            const existingSettings = await getAllSections(guildId);
+            const existingBank = await getBankConfig(guildId);
+            const preserveSecret = (incoming, encrypted) => {
+                const value = incoming === undefined || incoming === null ? '' : String(incoming).trim();
+                if (value === '__CLEAR__') return '';
+                if (value) return encryptToken(value) || '';
+                return encrypted || '';
+            };
+            const existingCard = await getCardConfig(guildId);
+            const incomingCardKey = pickKey(cardConfig, 'partnerKey', 'partner_key');
+            if ((incomingCardKey === undefined || incomingCardKey === null || String(incomingCardKey).trim() === '') && existingCard.status === 'unreadable-key') {
+                return res.status(400).json({ error: 'Saved Card2K key cannot be decrypted. Enter it again.' });
+            }
+            const servers = Array.isArray(statusConfig.servers) ? statusConfig.servers : [];
+
+            const snowflake = /^\d{17,20}$/;
+            const guild = client.guilds.cache.get(guildId);
+            const validChannel = (id) => !id || (typeof id === 'string' && snowflake.test(id) && guild?.channels.cache.has(id));
+            const validChannelType = (id, types) => !id || (validChannel(id) && types.includes(guild.channels.cache.get(id)?.type));
+            const validRole = (id) => !id || (typeof id === 'string' && snowflake.test(id) && guild?.roles.cache.has(id));
+            if (!validRole(autoroleId)) return res.status(400).json({ error: 'Invalid auto-role' });
+            if (!validChannelType(jtcConfig.hubChannelId, [2])) return res.status(400).json({ error: 'JTC hub must be a voice channel' });
+            if (!validChannelType(jtcConfig.categoryId, [4])) return res.status(400).json({ error: 'JTC category must be a category channel' });
+            for (const id of [welcomeConfig.welcomeChannel, welcomeConfig.goodbyeChannel, bankConfig.notificationChannelId, statsConfig.categoryId, statsConfig.allMembersChannelId, statsConfig.humansChannelId, statsConfig.staffOnlineChannelId, statsConfig.botCountChannelId]) {
+                if (!validChannel(id)) return res.status(400).json({ error: 'Invalid channel in configuration' });
+            }
+            const jtcName = String(jtcConfig.defaultName || '').trim();
+            const invalidPlaceholders = [...jtcName.matchAll(/\{([^}]+)\}/g)].some(match => !['username', 'displayName'].includes(match[1]));
+            const jtcLimit = Number(jtcConfig.defaultLimit);
+            const jtcBitrate = Number(jtcConfig.defaultBitrate);
+            if (!jtcName || jtcName.length > 100 || invalidPlaceholders) return res.status(400).json({ error: 'Invalid JTC default name' });
+            if (!Number.isInteger(jtcLimit) || jtcLimit < 0 || jtcLimit > 99) return res.status(400).json({ error: 'JTC limit must be between 0 and 99' });
+            if (!Number.isInteger(jtcBitrate) || jtcBitrate < 8000 || jtcBitrate > (guild?.maximumBitrate || 96000)) return res.status(400).json({ error: 'Invalid JTC bitrate for this server' });
+            if (typeof jtcConfig.defaultLocked !== 'boolean') return res.status(400).json({ error: 'Invalid JTC lock setting' });
+            for (const server of servers) {
+                if (!validChannel(server.channelId) || typeof server.ip !== 'string' || !server.ip.trim()) return res.status(400).json({ error: 'Invalid Minecraft server' });
+                const port = Number(server.port || 25565);
+                if (!Number.isInteger(port) || port < 1 || port > 65535) return res.status(400).json({ error: 'Invalid Minecraft port' });
+            }
+
+            const currentBankSection = existingSettings.bank || {};
+            const currentCardSection = existingSettings.card || {};
+            const nextCardKey = incomingCardKey === undefined || incomingCardKey === null || String(incomingCardKey).trim() === ''
+                ? (currentCardSection.partnerKey || '')
+                : (String(incomingCardKey).trim() === '__CLEAR__' ? '' : encryptToken(String(incomingCardKey).trim()) || '');
+            const payload = {
+                ticket: ticketConfig,
+                welcome: welcomeConfig,
+                jtc: normalizeJtcConfig(jtcConfig),
+                moderation: modConfig,
+                bank: {
+                    bankBin: String(bankConfig.bankBin ?? existingBank.bankBin ?? ''),
+                    accountNo: String(bankConfig.accountNo ?? existingBank.accountNo ?? ''),
+                    accountName: String(bankConfig.accountName ?? existingBank.accountName ?? ''),
+                    notificationChannelId: String(bankConfig.notificationChannelId ?? existingBank.notificationChannelId ?? ''),
+                    payosClientId: preserveSecret(bankConfig.payosClientId, currentBankSection.payosClientId),
+                    payosApiKey: preserveSecret(bankConfig.payosApiKey, currentBankSection.payosApiKey),
+                    payosChecksumKey: preserveSecret(bankConfig.payosChecksumKey, currentBankSection.payosChecksumKey),
+                },
+                card: {
+                    partnerId: String(cardConfig.partnerId ?? existingCard.partnerId ?? ''),
+                    partnerKey: nextCardKey,
+                    domain: normalizeCardDomain(cardConfig.domain ?? existingCard.domain),
+                },
+                server_stats: statsConfig,
+                minecraft: { servers: servers.map(server => ({
+                    channelId: String(server.channelId),
+                    ip: server.ip.trim(),
+                    port: Number(server.port || 25565),
+                    messageId: String(server.messageId || 'pending'),
+                })) },
+                utility: { ...(existingSettings.utility || {}), autoroleId },
+            };
+            let nextVersion;
+            try {
+                nextVersion = await saveSections(guildId, payload, expectedVersion);
+            } catch (saveError) {
+                if (saveError.code === '40001' || String(saveError.message).includes('CONFIG_VERSION_CONFLICT')) {
+                    return res.status(409).json({ error: 'Settings changed from Discord or database. Reload before saving.' });
+                }
+                throw saveError;
+            }
+            setJtcSettingsCache(guildId, payload.jtc);
+            for (const server of servers) {
+                import('../status/statusManager.js').then(({ updateServerStatus }) => updateServerStatus({
+                    id: server.channelId,
+                    channelId: server.channelId,
+                    guildId,
+                    ip: server.ip,
+                    port: Number(server.port || 25565),
+                    messageId: server.messageId || 'pending',
+                    name: server.ip,
+                }, client).catch(err => console.error('Immediate status update error:', err))).catch(console.error);
+            }
+            res.json({ success: true, configVersion: Number(nextVersion), message: 'Configuration saved to Supabase successfully!' });
+        } catch (err) {
+            console.error('[Dashboard Config Save Error]:', err);
+            res.status(500).json({ error: err.message });
+        }
+    });
+
+    // ===== WEBHOOK: PayOS Callback =====
+    app.post('/api/webhooks/payos', async (req, res) => {
+        try {
+            const payload = req.body;
+            if (!payload || !payload.data) return res.status(400).json({ error: 'Invalid payload' });
+            const { orderCode, amount, description, accountNumber, reference, transactionDateTime, code } = payload.data;
+            if (code !== '00') {
+                console.log('[PayOS Webhook] Transaction not successful:', code);
+                return res.json({ success: true });
+            }
+            if (supabase) {
+                // Đọc từ `bank_transactions` — đây mới là bảng mà chatFeatures.js ghi vào khi
+                // tạo link thanh toán. Trước đây webhook đọc `payos_transactions`, một bảng
+                // KHÔNG file nào ghi vào, nên nó luôn rỗng và thông báo thanh toán không bao giờ gửi.
+                const { data: txn, error: txnError } = await supabase.from('bank_transactions')
+                    .select('guild_id, channel_id, user_id')
+                    .eq('order_code', orderCode)
+                    .maybeSingle();
+                if (txnError) throw txnError;
+                if (txn) {
+                    const bankConfig = await import('../banking/bankManager.js').then(m => m.getBankConfig(txn.guild_id));
+
+                    try {
+                        const PayOS = (await import('@payos/node')).default;
+                        const payos = new PayOS(bankConfig.payosClientId, bankConfig.payosApiKey, bankConfig.payosChecksumKey);
+                        payos.verifyPaymentWebhookData(payload);
+                    } catch (err) {
+                        console.error('[PayOS Webhook] Signature verification failed:', err.message);
+                        return res.status(401).json({ error: 'Invalid Signature - Unauthorized' });
+                    }
+
+                    const notifChannelId = bankConfig?.notificationChannelId;
+                    if (notifChannelId) {
+                        const channel = await client.channels.fetch(notifChannelId).catch(() => null);
+                        if (channel) {
+                            const { EmbedBuilder } = await import('../utils/embed.js');
+                            const embed = new EmbedBuilder()
+                                .setColor('#43b581')
+                                .setTitle('✅ PayOS Payment Received')
+                                .addFields(
+                                    { name: 'Order Code', value: `#${orderCode}`, inline: true },
+                                    { name: 'Amount', value: `${amount?.toLocaleString('vi-VN')} VND`, inline: true },
+                                    { name: 'Reference', value: reference || 'N/A', inline: true },
+                                    { name: 'Description', value: description || 'N/A' },
+                                )
+                                .setTimestamp(transactionDateTime ? new Date(transactionDateTime) : new Date())
+                                .setFooter({ text: 'PayOS Webhook' });
+                            if (txn.user_id) embed.addFields({ name: 'User', value: `<@${txn.user_id}>`, inline: true });
+                            await channel.send({ embeds: [embed] });
+                        }
+                    }
+                    const { error: paidError } = await supabase.from('bank_transactions').update({ status: 'paid', paid_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq('order_code', orderCode);
+                    if (paidError) throw paidError;
+                }
+            }
+            res.json({ success: true });
+        } catch (err) {
+            console.error('[PayOS Webhook Error]:', err);
+            res.status(500).json({ error: err.message });
+        }
+    });
+
+    // ===== WEBHOOK: Card2K Callback =====
+    app.all('/api/webhooks/card2k', async (req, res) => {
+        // KHÔNG log req.query/req.body: chúng chứa `code` và `serial` — thông tin có giá trị tiền.
+        const wlog = (...args) => { if (process.env.DEBUG_WEBHOOKS === '1') console.log('[Card2K]', ...args); };
+        try {
+            const payload = { ...req.query, ...req.body };
+            const { status, message, request_id, declared_value, value, amount, code, serial, telco, trans_id, callback_sign } = payload;
+
+            if (!request_id || !callback_sign) {
+                console.warn('[Card2K Webhook] Missing request_id or callback_sign');
+                return res.status(400).json({ error: 'Invalid payload' });
+            }
+
+            if (supabase) {
+                wlog('lookup request_id=', request_id);
+                const { data: txn, error: txnError } = await supabase.from('card_transactions').select('guild_id, channel_id, message_id, status').eq('request_id', request_id).maybeSingle();
+
+                if (txnError || !txn) {
+                    console.warn(`[Card2K Webhook] Transaction not found: request_id=${request_id}`);
+                    return res.status(404).json({ error: 'Transaction not found' });
+                }
+
+                const cardCfg = await getCardConfig(txn.guild_id);
+
+                if (cardCfg.configured) {
+                    const partnerKey = cardCfg.partnerKey;
+                    const signString = partnerKey + (code || '') + (serial || '');
+                    const computedSignature = crypto.createHash('md5').update(signString).digest('hex');
+
+                    // Không log chữ ký: md5(partnerKey‖code‖serial) có thể bị brute-force offline để lộ partnerKey.
+                    if (computedSignature !== callback_sign) {
+                        console.warn(`[Card2K Webhook] Signature mismatch for request_id=${request_id}`);
+                        return res.status(401).json({ error: 'Invalid Signature - Unauthorized' });
+                    }
+                    wlog('signature ok, status=', status, 'telco=', telco, 'trans_id=', trans_id);
+
+                    // Chốt kết quả bằng hàm dùng chung với poller, để hai đường
+                    // (callback đẩy về / bot chủ động hỏi) không bao giờ lệch logic.
+                    const outcome = await applyCardResult(client, {
+                        request_id, status, message, trans_id, value, declared_value,
+                    }, 'Webhook');
+                    wlog('apply result:', outcome.applied ? 'applied' : `skipped (${outcome.reason})`);
+                } else {
+                    console.warn('[Card2K Webhook] Card2K config unavailable for guild:', txn.guild_id);
+                }
+            }
+            res.json({ success: true });
+        } catch (err) {
+            console.error('[Card2K Webhook Error]:', err);
+            res.status(500).json({ error: err.message });
+        }
+    });
+
+    app.get('/api/bot-avatar', (req, res) => {
+        if (!client.user) return res.status(404).send('Bot not ready');
+        res.redirect(client.user.displayAvatarURL({ size: 128, extension: 'png' }));
+    });
+    app.get('/api/health', async (req, res) => {
+        try {
+            const mem = process.memoryUsage();
+            const uptimeSec = process.uptime();
+            let totalUsers = 0;
+            client.guilds.cache.forEach(g => { totalUsers += g.memberCount; });
+            res.json({
+                status: await getOverallStatus(),
+                ping: client.ws.ping,
+                uptime: uptimeSec,
+                guilds: client.guilds.cache.size,
+                totalUsers,
+                memory: {
+                    rss: +(mem.rss / 1024 / 1024).toFixed(2),
+                    heapUsed: +(mem.heapUsed / 1024 / 1024).toFixed(2),
+                    heapTotal: +(mem.heapTotal / 1024 / 1024).toFixed(2),
+                },
+                timestamp: new Date().toISOString(),
+            });
+        } catch (err) {
+            res.status(500).json({ status: 'Down', error: err.message });
+        }
+    });
+    app.get('/api/incidents', async (req, res) => {
+        try {
+            const { severity, startDate, endDate } = req.query;
+            res.json({
+                summary: await getIncidentSummary({ severity, startDate, endDate }),
+                incidents: await getIncidents({ severity, startDate, endDate }),
+            });
+        } catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+    app.get('/api/services', async (req, res) => {
+        try {
+            res.json({
+                overall: await getOverallStatus(),
+                services: await getAllServicesStatus(),
+            });
+        } catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+    app.get('/api/admin/bot-info', requireAdmin, (req, res) => {
+        const botUser = client.user;
+        res.json({
+            id: botUser.id,
+            username: botUser.username,
+            discriminator: botUser.discriminator,
+            avatar: botUser.displayAvatarURL({ size: 256, extension: 'png' }),
+            banner: botUser.bannerURL({ size: 512 }) || null,
+        });
+    });
+    app.get('/api/admin/overview', requireAdmin, async (req, res) => {
+        try {
+            const mem = process.memoryUsage();
+            let totalUsers = 0;
+            client.guilds.cache.forEach(g => { totalUsers += g.memberCount; });
+            let activeSessions = 0;
+            if (supabase) {
+                const { count } = await supabase.from('user_sessions').select('*', { count: 'exact', head: true }).gt('expires_at', new Date().toISOString());
+                activeSessions = count || 0;
+            }
+            res.json({
+                guilds: client.guilds.cache.size,
+                totalUsers,
+                uptime: process.uptime(),
+                ping: client.ws.ping,
+                memory: {
+                    rss: +(mem.rss / 1024 / 1024).toFixed(2),
+                    heapUsed: +(mem.heapUsed / 1024 / 1024).toFixed(2),
+                    heapTotal: +(mem.heapTotal / 1024 / 1024).toFixed(2),
+                },
+                nodeVersion: process.version,
+                platform: process.platform,
+                activeSessions,
+                timestamp: new Date().toISOString(),
+            });
+        } catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+    app.get('/api/admin/growth', requireAdmin, async (req, res) => {
+        try {
+            if (!supabase) return res.json([]);
+            const { data, error } = await supabase
+                .from('bot_growth_snapshots')
+                .select('*')
+                .order('timestamp', { ascending: true })
+                .limit(200);
+            if (error) throw error;
+            res.json(data || []);
+        } catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+    app.get('/api/admin/sessions', requireAdmin, async (req, res) => {
+        try {
+            if (!supabase) return res.json([]);
+            const { data, error } = await supabase
+                .from('user_sessions')
+                .select('session_id, user_id, username, avatar, updated_at, expires_at')
+                .order('updated_at', { ascending: false })
+                .limit(50);
+            if (error) throw error;
+            res.json(data || []);
+        } catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+    app.post('/api/admin/sessions/:id/revoke', requireAdmin, async (req, res) => {
+        try {
+            if (!supabase) return res.status(500).json({ error: 'No database' });
+            const { error } = await supabase.from('user_sessions').delete().eq('session_id', req.params.id);
+            if (error) throw error;
+            const forwardedFor = req.headers['x-forwarded-for'];
+            const ip = (Array.isArray(forwardedFor) ? forwardedFor[0] : forwardedFor)?.split(',')[0]?.trim() || req.socket.remoteAddress;
+            logSecurityEvent('SESSION_REVOKE', ip, req.headers['user-agent'], `Revoked session: ${req.params.id}`);
+            res.json({ success: true });
+        } catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+    app.get('/api/admin/security-log', requireAdmin, async (req, res) => {
+        try {
+            if (!supabase) return res.json([]);
+            const { data, error } = await supabase
+                .from('security_logs')
+                .select('*')
+                .order('timestamp', { ascending: false })
+                .limit(100);
+            if (error) throw error;
+            res.json(data || []);
+        } catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+    async function saveGrowthSnapshot() {
+        if (!supabase) return;
+        try {
+            let totalUsers = 0;
+            client.guilds.cache.forEach(g => { totalUsers += g.memberCount; });
+            await supabase.from('bot_growth_snapshots').insert([{
+                guild_count: client.guilds.cache.size,
+                user_count: totalUsers,
+                memory_mb: +(process.memoryUsage().heapUsed / 1024 / 1024).toFixed(2),
+                avg_ping: client.ws.ping,
+            }]);
+            console.log('[Admin] Growth snapshot saved.');
+        } catch (err) {
+            console.error('[Admin] Failed to save growth snapshot:', err.message);
+        }
+    }
+    setTimeout(() => saveGrowthSnapshot(), 30000);
+    setInterval(() => saveGrowthSnapshot(), 6 * 60 * 60 * 1000);
+    app.get('/transcript/:id', (req, res) => {
+        res.sendFile(path.join(sourcePublicPath, 'transcript.html'));
+    });
+
+    app.get('/api/guilds/:guildId/transcripts', async (req, res) => {
+        try {
+            const auth = await getAuthenticatedUser(req);
+            if (!auth) return res.status(401).json({ error: 'Unauthorized' });
+            const { guildId } = req.params;
+            const guildMember = await getGuildMember(client.guilds.cache.get(guildId), auth.session.user_id);
+            if (!guildMember || (!guildMember.permissions.has('Administrator') && !guildMember.permissions.has('ManageGuild'))) {
+                return res.status(403).json({ error: 'Forbidden' });
+            }
+            if (!supabase) return res.status(500).json({ error: 'Database not configured' });
+            const { data, error } = await supabase
+                .from('ticket_transcripts')
+                .select('id, ticket_name, created_at, creator_id, closed_by, claimed_by')
+                .eq('guild_id', guildId)
+                .order('created_at', { ascending: false });
+            if (error) throw error;
+            res.json(data || []);
+        } catch (err) {
+            console.error('[API /transcripts] Error:', err);
+            res.status(500).json({ error: err.message });
+        }
+    });
+
+    app.get('/api/transcript/:id', async (req, res) => {
+        try {
+            if (!supabase) return res.status(500).json({ error: 'Supabase not configured' });
+            const { id } = req.params;
+            const { pwd } = req.query;
+
+            const { data, error } = await supabase
+                .from('ticket_transcripts')
+                .select('*')
+                .eq('id', id)
+                .maybeSingle();
+            if (error || !data) return res.status(404).json({ error: 'Transcript not found or expired' });
+
+            let hasAdminBypass = false;
+            try {
+                const auth = await getAuthenticatedUser(req);
+                if (auth && auth.session) {
+                    const guildMember = await getGuildMember(client.guilds.cache.get(data.guild_id), auth.session.user_id);
+                    if (guildMember && (guildMember.permissions.has('Administrator') || guildMember.permissions.has('ManageGuild'))) {
+                        hasAdminBypass = true;
+                    }
+                }
+            } catch (err) {
+                // ignore auth errors
+            }
+
+            if (!hasAdminBypass && data.password && data.password !== pwd) {
+                return res.status(401).json({
+                    error: 'Incorrect password or you do not have permission to access.',
+                    meta: {
+                        ticket_name: data.ticket_name,
+                        created_at: data.created_at
+                    }
+                });
+            }
+
+            res.json(data);
+        } catch (err) {
+            res.status(500).json({ error: 'Internal Server Error' });
+        }
+    });
+
+    setInterval(async () => {
+        if (!supabase) return;
+        try {
+            await supabase.from('ticket_transcripts').delete().lt('expires_at', new Date().toISOString());
+        } catch (err) {
+            console.error('[Transcript Cleanup] Error:', err);
+        }
+    }, 24 * 60 * 60 * 1000);
+
+    app.listen(port, () => {
+        const baseUrl = process.env.DASHBOARD_URL || `http://localhost:${port}`;
+        console.log(`🌐 [Dashboard] Web Server running at ${baseUrl}`);
+        console.log(`   └─ Status Page: ${baseUrl}/status`);
+        console.log(`   └─ Admin Panel: ${baseUrl}/admin`);
+        console.log(`   └─ Bot Control Dashboard: ${baseUrl}/`);
+    });
+}
