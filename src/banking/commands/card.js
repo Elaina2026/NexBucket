@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import { supabase } from '../../database/supabaseClient.js';
 import { getCardConfig } from '../cardConfig.js';
 import { v4 as uuidv4 } from 'uuid';
+import { wakeCardStatusPoller } from '../cardPoller.js';
 export async function handleCardCommand(message) {
     const args = message.content.trim().split(/\s+/);
     const telcoRates = {
@@ -84,6 +85,7 @@ export async function handleCardCommand(message) {
             console.error('[Card] Pre-insert failed:', preErr);
             return message.reply('❌ Lỗi cơ sở dữ liệu, không thể tạo giao dịch. Vui lòng báo Admin.');
         }
+        wakeCardStatusPoller();
     }
     // Chỉ ghi khi webhook CHƯA chốt giao dịch (status vẫn là 0),
     // tránh ghi đè kết quả thật nếu callback về trước khi hàm này chạy.

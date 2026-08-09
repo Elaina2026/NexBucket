@@ -45,17 +45,6 @@ function initTabs() {
     });
   });
 }
-let incFilters = { severity: 'all', startDate: '', endDate: '' };
-function initFilters() {
-  const btn = document.getElementById('incFilterBtn');
-  if (!btn) return;
-  btn.addEventListener('click', () => {
-    incFilters.severity = document.getElementById('incSeverityFilter').value;
-    incFilters.startDate = document.getElementById('incStartDate').value;
-    incFilters.endDate = document.getElementById('incEndDate').value;
-    refreshAll(); 
-  });
-}
 function formatUptime(sec) {
   const d = Math.floor(sec / 86400);
   const h = Math.floor((sec % 86400) / 3600);
@@ -70,11 +59,6 @@ function formatShortDate(iso) {
   const isToday = d.getDate() === today.getDate() && d.getMonth() === today.getMonth();
   const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   return isToday ? `Today, ${time}` : `${d.toLocaleDateString()} ${time}`;
-}
-function escapeHTML(str) {
-  const d = document.createElement('div');
-  d.textContent = str;
-  return d.innerHTML;
 }
 async function fetchJSON(url) {
   try {
@@ -165,101 +149,28 @@ function renderServices(data) {
     container.appendChild(card);
   }
 }
-function renderIncidents(data) {
-  const summaryEl = document.getElementById('incidentSummary');
-  const feedEl = document.getElementById('incidentFeed');
-  if (!data) {
-    if (feedEl.children.length === 0 || feedEl.querySelector('.empty-state')) {
-      feedEl.innerHTML = '<div class="empty-state">Failed to connect to server. Retrying...</div>';
-    }
-    return;
-  }
-  const { summary, incidents } = data;
-  summaryEl.innerHTML = '';
-  if (summary.total === 0) {
-    summaryEl.innerHTML = '<span class="inc-badge inc-ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="16" height="16"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg> No incidents in the last 24 hours</span>';
-  } else {
-    if (summary.errors > 0) summaryEl.innerHTML += `<span class="inc-badge inc-error"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="16" height="16"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg> ${summary.errors} Error${summary.errors > 1 ? 's' : ''}</span>`;
-    if (summary.warnings > 0) summaryEl.innerHTML += `<span class="inc-badge inc-warning"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="16" height="16"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg> ${summary.warnings} Warning${summary.warnings > 1 ? 's' : ''}</span>`;
-    if (summary.info > 0) summaryEl.innerHTML += `<span class="inc-badge inc-info"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="16" height="16"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg> ${summary.info} Info</span>`;
-  }
-  if (incidents.length === 0) {
-    feedEl.innerHTML = '<div class="empty-state">No incidents recorded. All systems running smoothly! <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" style="vertical-align: text-bottom; color: #f1c40f; margin-left: 4px;"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/><path d="M4 17v2"/><path d="M5 18H3"/></svg></div>';
-    return;
-  }
-  feedEl.innerHTML = '';
-  for (const inc of incidents) {
-    const tagCls = inc.severity === 'error' ? 'tag-error' : (inc.severity === 'warning' ? 'tag-warning' : 'tag-info');
-    const label = inc.severity.toUpperCase();
-    const item = document.createElement('div');
-    item.className = 'incident-item';
-    const d = new Date(inc.timestamp);
-    const timeStr = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`;
-    item.innerHTML = `
-      <div class="inc-time">${timeStr}</div>
-      <div class="inc-status-tag ${tagCls}">${label}</div>
-      <div class="inc-body">
-        <div class="inc-module">${escapeHTML(inc.module)}${inc.guildName ? ` - ${escapeHTML(inc.guildName)}` : ''}</div>
-        <div class="inc-msg">${escapeHTML(inc.message)}</div>
-      </div>
-    `;
-    feedEl.appendChild(item);
-  }
-}
-function renderActivities(activities) {
-  const feedEl = document.getElementById('activityFeed');
-  if (!activities) {
-    feedEl.innerHTML = '<div class="empty-state">Failed to load audit logs.</div>';
-    return;
-  }
-  if (activities.length === 0) {
-    feedEl.innerHTML = '<div class="empty-state">No audit logs recorded yet.</div>';
-    return;
-  }
-  feedEl.innerHTML = '';
-  for (const act of activities) {
-    const item = document.createElement('div');
-    item.className = 'audit-row';
-    const d = new Date(act.timestamp);
-    const timeStr = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`;
-    item.innerHTML = `
-      <div class="audit-time">${timeStr}</div>
-      <div><span class="audit-event">${act.action}</span></div>
-      <div class="audit-scope">${escapeHTML(act.guild_name || 'Global System')}</div>
-      <div class="audit-details">${escapeHTML(act.details || '')}</div>
-    `;
-    feedEl.appendChild(item);
-  }
-}
 let isRefreshing = false;
 async function refreshAll() {
   if (isRefreshing) return;
   isRefreshing = true;
   const timerEl = document.getElementById('refreshBadge');
-  const originalHtml = timerEl.innerHTML;
-  timerEl.innerHTML = '<span style="color:var(--text-muted)">Syncing...</span>';
-  const qParams = new URLSearchParams();
-  if (incFilters.severity !== 'all') qParams.append('severity', incFilters.severity);
-  if (incFilters.startDate) qParams.append('startDate', incFilters.startDate);
-  if (incFilters.endDate) qParams.append('endDate', incFilters.endDate);
-  const incUrl = '/api/incidents' + (qParams.toString() ? '?' + qParams.toString() : '');
-  const [health, services, incidents, activities] = await Promise.all([
-    fetchJSON('/api/health'),
-    fetchJSON('/api/services'),
-    fetchJSON(incUrl),
-    fetchJSON('/api/activities'),
-  ]);
-  renderHealth(health);
-  renderServices(services);
-  renderIncidents(incidents);
-  renderActivities(activities);
-  timerEl.innerHTML = originalHtml;
-  isRefreshing = false;
+  const originalHtml = timerEl?.innerHTML || '';
+  if (timerEl) timerEl.innerHTML = '<span style="color:var(--text-muted)">Syncing...</span>';
+  try {
+    const [health, services] = await Promise.all([
+      fetchJSON('/api/health'),
+      fetchJSON('/api/services'),
+    ]);
+    renderHealth(health);
+    renderServices(services);
+  } finally {
+    if (timerEl) timerEl.innerHTML = originalHtml;
+    isRefreshing = false;
+  }
 }
 function startLoop() {
   initTheme();
   initTabs();
-  initFilters();
   const timerEl = document.getElementById('refreshTimer');
   countdown = REFRESH_SEC;
   refreshAll();

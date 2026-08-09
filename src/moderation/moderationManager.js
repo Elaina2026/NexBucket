@@ -469,30 +469,64 @@ async function handleHardmute(interaction) {
   const embed = buildModEmbed('🔕 USER HARDMUTED', '#ff0000', user, durationMs ? durationStr : 'Infinite', reason, interaction.user);
   await interaction.reply({ embeds: [embed] }).catch(() => {});
 }
+export function shouldAutoBanForWarnings(warnCount, threshold, previousWarnCount = warnCount - 1) {
+  const parsedThreshold = Number.parseInt(threshold, 10);
+  const effectiveThreshold = Number.isSafeInteger(parsedThreshold) && parsedThreshold > 0
+    ? parsedThreshold
+    : DEFAULT_MOD_CONFIG.warnThreshold;
+  return Number.isSafeInteger(warnCount)
+    && Number.isSafeInteger(previousWarnCount)
+    && previousWarnCount < effectiveThreshold
+    && warnCount >= effectiveThreshold;
+}
 async function handleWarn(interaction) {
   await interaction.deferReply().catch(() => {});
   const user = interaction.options.getUser('user');
   if (!user || !isSnowflake(user.id)) return interaction.editReply({ content: '❌ Invalid Discord user.' });
   const reason = interaction.options.getString('reason') || 'No reason provided';
+  const member = interaction.guild.members.cache.get(user.id)
+    || await interaction.guild.members.fetch(user.id).catch(() => null);
+  if (user.id === interaction.guild.ownerId || isProtectedUser(member, interaction.member)) {
+    return interaction.editReply({ content: '❌ You cannot warn another Admin, Dev, or Owner.' });
+  }
   const modData = await getModData(interaction.guild.id);
   if (!modData.warnings[user.id]) modData.warnings[user.id] = [];
+  const previousWarnCount = modData.warnings[user.id].length;
   modData.warnings[user.id].push({ reason, moderator: interaction.user.id, date: Date.now() });
   await saveModData(interaction.guild.id, modData);
   const warnCount = modData.warnings[user.id].length;
+  const thresholdReached = shouldAutoBanForWarnings(warnCount, modData.warnThreshold, previousWarnCount);
   try {
     const dmEmbed = new EmbedBuilder()
-      .setTitle('⚠️ Warning Received')
-      .setColor('#ffcc00')
+      .setTitle(thresholdReached ? '🔨 Warning Limit Reached' : '⚠️ Warning Received')
+      .setColor(thresholdReached ? '#ff3333' : '#ffcc00')
       .setDescription(
         `You have received a warning in **${interaction.guild.name}**.\n\n` +
         `**Reason:** ${reason}\n` +
-        `**Warning #:** ${warnCount}`
+        `**Warning #:** ${warnCount}` +
+        (thresholdReached ? '\n**Action:** Automatic ban' : '')
       )
       .setTimestamp();
     await user.send({ embeds: [dmEmbed] });
-  } catch (e) {}
+  } catch {}
+  let autoBanResult = '';
+  if (thresholdReached) {
+    if (member && !member.bannable) {
+      autoBanResult = ' Warning limit reached, but the bot cannot ban this user due to role hierarchy or permissions.';
+    } else {
+      try {
+        await interaction.guild.members.ban(user, {
+          reason: `Automatic ban after ${warnCount} warnings. Latest warning by ${interaction.user.tag}: ${reason}`,
+        });
+        autoBanResult = ' Warning limit reached; the user was automatically banned.';
+      } catch (error) {
+        console.error(`[Moderation] Failed to auto-ban ${user.id}:`, error.message || error);
+        autoBanResult = ' Warning limit reached, but automatic ban failed.';
+      }
+    }
+  }
   const embed = buildModEmbed('⚠️ USER WARNED', '#ffcc00', user, null, reason, interaction.user);
-  embed.setFooter({ text: `This user now has ${warnCount} warning(s).` });
+  embed.setFooter({ text: `This user now has ${warnCount} warning(s).${autoBanResult}` });
   await interaction.editReply({ embeds: [embed] }).catch(() => {});
 }
 async function handleBanlist(interaction) {

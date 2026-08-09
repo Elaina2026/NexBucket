@@ -21,9 +21,9 @@ document.addEventListener('DOMContentLoaded', async () => {
       particleContainer.appendChild(p);
     }
   }
-  let currentUser = null, currentGuildId = null, guildsData = [];
+  let currentGuildId = null, guildsData = [];
   let configVersion = 0;
-  let guildChannels = [], guildRoles = [], guildBanner = '';
+  let guildChannels = [], guildRoles = [];
   function parseRoute() {
     const path = window.location.pathname;
     const match = path.match(/^\/dashboard\/([\d]+)(?:\/([\w-]+))?/);
@@ -95,7 +95,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   async function checkAuth() {
     try {
       const r = await fetch('/api/auth/me');
-      if (r.ok) { const d = await r.json(); currentUser = d.user; guildsData = d.guilds || []; renderLoggedIn(d); }
+      if (r.ok) { const d = await r.json(); guildsData = d.guilds || []; renderLoggedIn(d); }
       else renderLoggedOut();
     } catch { renderLoggedOut(); }
   }
@@ -156,7 +156,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         const gd = await guildDataRes.json();
         guildChannels = gd.channels || [];
         guildRoles = gd.roles || [];
-        guildBanner = gd.bannerUrl || '';
       }
     } catch {  }
     buildAllSections();
@@ -551,36 +550,44 @@ document.addEventListener('DOMContentLoaded', async () => {
     overlay.innerHTML = `<div class="modal"><h3>Add Tracked Server</h3>${makeInput('msIp', 'Server IP', 'play.example.com', '')}${makeInput('msPort', 'Server Port', '25565', '', 'number')}${makeChannelPicker('msChannel', 'Update Channel', '', [0, 5])}<div class="modal-actions"><button class="btn-modal" id="btnCancelModal">Cancel</button><button class="btn-modal primary" id="btnConfirmModal">Add</button></div></div>`;
     overlay.classList.add('show');
     
-    // Quick initialize pickers inside modal
-    const dropdown = overlay.querySelector('.picker-dropdown');
-    if (dropdown) {
-       const selectBtn = overlay.querySelector('.picker-display');
-       const search = overlay.querySelector('.picker-search');
-       const options = overlay.querySelectorAll('.picker-option');
-       let isOpen = false;
-       selectBtn.addEventListener('click', (e) => { e.stopPropagation(); isOpen = !isOpen; dropdown.classList.toggle('show', isOpen); search?.focus(); });
-       search?.addEventListener('input', (e) => {
-         const val = e.target.value.toLowerCase();
-         options.forEach(opt => { opt.style.display = opt.dataset.name.toLowerCase().includes(val) ? 'flex' : 'none'; });
-       });
-       options.forEach(opt => {
-         opt.addEventListener('click', () => {
-           const wrap = opt.closest('.picker-wrap');
-           const val = opt.dataset.value;
-           wrap.dataset.value = val;
-           wrap.querySelector('.picker-display span').textContent = opt.querySelector('.po-name').textContent;
-           dropdown.classList.remove('show');
-           isOpen = false;
-         });
-       });
-       document.addEventListener('click', (e) => { if (!dropdown.contains(e.target) && e.target !== selectBtn) { dropdown.classList.remove('show'); isOpen = false; }});
-    }
+    const wrap = overlay.querySelector('.picker-wrap[data-picker-id="msChannel"]');
+    const dropdown = wrap?.querySelector('.picker-dropdown');
+    const selectBtn = wrap?.querySelector('.picker-display');
+    const search = wrap?.querySelector('.picker-search');
+    const options = wrap?.querySelectorAll('.picker-option') || [];
+    selectBtn?.addEventListener('click', (event) => {
+      event.stopPropagation();
+      const opening = !dropdown.classList.contains('show');
+      wrap.classList.toggle('elevated', opening);
+      dropdown.classList.toggle('show', opening);
+      selectBtn.classList.toggle('open', opening);
+      if (opening) search?.focus();
+    });
+    search?.addEventListener('input', () => {
+      const query = search.value.toLowerCase();
+      options.forEach(option => {
+        option.style.display = option.textContent.toLowerCase().includes(query) ? '' : 'none';
+      });
+    });
+    options.forEach(option => option.addEventListener('click', (event) => {
+      event.stopPropagation();
+      options.forEach(item => item.classList.remove('selected'));
+      option.classList.add('selected');
+      const selectedText = selectBtn.querySelector('.selected-text');
+      const placeholder = selectBtn.querySelector('.ph');
+      selectedText.textContent = option.querySelector('.ch-name')?.textContent || option.textContent;
+      selectedText.classList.remove('hidden');
+      placeholder.classList.add('hidden');
+      wrap.classList.remove('elevated');
+      dropdown.classList.remove('show');
+      selectBtn.classList.remove('open');
+    }));
 
     overlay.querySelector('#btnCancelModal').addEventListener('click', () => overlay.classList.remove('show'));
     overlay.querySelector('#btnConfirmModal').addEventListener('click', () => {
       const ip = document.getElementById('msIp')?.value?.trim();
       const port = parseInt(document.getElementById('msPort')?.value) || 25565;
-      const channelId = document.getElementById('msChannel_wrap')?.dataset.value;
+      const channelId = getPickerValue('msChannel');
       if (!ip || !channelId) {
          showStatus('IP and Channel are required!', 'error');
          return;
@@ -630,10 +637,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
     overlay.addEventListener('click', e => { if (e.target === overlay) overlay.classList.remove('show'); });
   };
-  async function loadConfig(guildId) {
-    showStatus('Loading configuration...', 'info');
+  async function loadConfig(guildId, attempt = 0) {
+    showStatus(attempt ? 'Database waking up, retrying...' : 'Loading configuration...', 'info');
     try {
       const r = await fetch(`/api/config/${guildId}`);
+      if (r.status === 503) {
+        if (attempt < 2) {
+          await new Promise(resolve => setTimeout(resolve, 4000 * (attempt + 1)));
+          return loadConfig(guildId, attempt + 1);
+        }
+        const unavailable = await r.json().catch(() => ({}));
+        throw new Error(unavailable.error || 'Database temporarily unavailable. Try again in a few seconds.');
+      }
       if (!r.ok) throw new Error('Failed to load config');
       const c = await r.json();
       configVersion = Number(c.configVersion || 0);
@@ -882,17 +897,18 @@ document.addEventListener('DOMContentLoaded', async () => {
       .replace(/&lt;@!?(\d+)&gt;/g, '<span style="background:var(--brand-experiment-15a);color:var(--brand-experiment);padding:0 4px;border-radius:3px;">@User</span>')
       .replace(/&lt;@&amp;(\d+)&gt;/g, '<span style="background:var(--brand-experiment-15a);color:var(--brand-experiment);padding:0 4px;border-radius:3px;">@Role</span>')
       .replace(/&lt;#(\d+)&gt;/g, '<span style="background:var(--brand-experiment-15a);color:var(--brand-experiment);padding:0 4px;border-radius:3px;">#channel</span>')
-      .replace(/&lt;a?:(\w+):(\d+)&gt;/g, '<img src="https://cdn.discordapp.com/emojis/$2.png" alt=":$1:" style="width:18px;height:18px;vertical-align:middle;"/>');
+      .replace(/&lt;(a?):(\w+):(\d+)&gt;/g, (_, animated, name, id) => `<img src="https://cdn.discordapp.com/emojis/${id}.${animated ? 'gif' : 'png'}" alt=":${name}:" style="width:18px;height:18px;vertical-align:middle;"/>`);
   }
 
-  async function loadTranscripts() {
+  async function loadTranscripts(page = 1) {
     const area = document.getElementById('transcriptListArea');
     if (!area || !currentGuildId) return;
     area.innerHTML = '<div class="empty-state">Loading transcripts...</div>';
     try {
-      const r = await fetch(`/api/guilds/${currentGuildId}/transcripts`);
+      const r = await fetch(`/api/guilds/${currentGuildId}/transcripts?page=${page}&limit=50`);
       if (!r.ok) throw new Error('Failed to load');
-      const list = await r.json();
+      const payload = await r.json();
+      const list = Array.isArray(payload) ? payload : payload.items || [];
       if (!list.length) { area.innerHTML = '<div class="empty-state">No transcripts found for this server.</div>'; return; }
       const grouped = {};
       list.forEach(t => {
@@ -920,7 +936,17 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
         html += `</div>`;
       }
+      if (!Array.isArray(payload) && payload.totalPages > 1) {
+        html += `<div style="display:flex;align-items:center;justify-content:center;gap:12px;margin-top:16px;">`;
+        html += `<button type="button" class="btn-back" data-transcript-page="${payload.page - 1}" ${payload.page <= 1 ? 'disabled' : ''}>Previous</button>`;
+        html += `<span style="color:var(--text-m);font-size:13px;">Page ${payload.page} of ${payload.totalPages} • ${payload.total} transcripts</span>`;
+        html += `<button type="button" class="btn-back" data-transcript-page="${payload.page + 1}" ${payload.page >= payload.totalPages ? 'disabled' : ''}>Next</button>`;
+        html += `</div>`;
+      }
       area.innerHTML = html;
+      area.querySelectorAll('[data-transcript-page]').forEach(button => {
+        button.addEventListener('click', () => loadTranscripts(Number(button.dataset.transcriptPage)));
+      });
     } catch (err) { area.innerHTML = `<div class="empty-state">Error: ${esc(err.message)}</div>`; }
   }
   await checkAuth();

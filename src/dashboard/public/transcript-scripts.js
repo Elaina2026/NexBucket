@@ -6,7 +6,6 @@ const passwordScreen = document.getElementById('passwordScreen');
 const errorScreen = document.getElementById('errorScreen');
 const errorDesc = document.getElementById('errorDesc');
 const errorMsg = document.getElementById('errorMsg');
-const errorMsgText = document.getElementById('errorMsgText');
 
 const topbar = document.getElementById('topbar');
 const chatArea = document.getElementById('chatArea');
@@ -18,9 +17,9 @@ const messagesContainer = document.getElementById('messagesContainer');
 const pwdInput = document.getElementById('pwdInput');
 const btnSubmit = document.getElementById('btnSubmit');
 
-function escapeHTML(str) {
-    if (!str) return '';
-    return str.replace(/[&<>'"]/g, 
+function escapeHTML(value) {
+    const str = String(value ?? '');
+    return str.replace(/[&<>'"]/g,
     tag => ({
         '&': '&amp;',
         '<': '&lt;',
@@ -31,7 +30,23 @@ function escapeHTML(str) {
     );
 }
 
-function parseMarkdown(text, msg) {
+function safeHttpUrl(value, allowedHosts = []) {
+    try {
+        const url = new URL(String(value || ''));
+        if (url.protocol !== 'https:') return '';
+        if (allowedHosts.length && !allowedHosts.some(host => url.hostname === host || url.hostname.endsWith(`.${host}`))) return '';
+        return url.href;
+    } catch {
+        return '';
+    }
+}
+
+function safeColor(value, fallback = 'inherit') {
+    const color = String(value || '');
+    return /^#[0-9a-f]{6}$/i.test(color) ? color : fallback;
+}
+
+function parseMarkdown(text, msg = {}) {
     if (!text) return '';
     let html = escapeHTML(text);
 
@@ -41,23 +56,26 @@ function parseMarkdown(text, msg) {
     return `<img class="emoji" src="https://cdn.discordapp.com/emojis/${id}.${ext}" alt=":${name}:" title=":${name}:" />`;
     });
 
-    if (msg && msg.mentions) {
-    if (msg.mentions.users) {
+    if (msg.mentions) {
+    if (Array.isArray(msg.mentions.users)) {
         msg.mentions.users.forEach(u => {
+        if (!/^\d+$/.test(String(u?.id || ''))) return;
         const regex = new RegExp(`&lt;@!?${u.id}&gt;`, 'g');
         html = html.replace(regex, `<span class="mention">@${escapeHTML(u.name)}</span>`);
         });
     }
-    if (msg.mentions.roles) {
+    if (Array.isArray(msg.mentions.roles)) {
         msg.mentions.roles.forEach(r => {
+        if (!/^\d+$/.test(String(r?.id || ''))) return;
         const regex = new RegExp(`&lt;@&amp;${r.id}&gt;`, 'g');
-        const color = (r.color && r.color !== '#000000') ? r.color : '';
+        const color = r.color === '#000000' ? '' : safeColor(r.color, '');
         const style = color ? `style="color: ${color}; background-color: ${color}20;"` : '';
         html = html.replace(regex, `<span class="mention" ${style}>@${escapeHTML(r.name)}</span>`);
         });
     }
-    if (msg.mentions.channels) {
+    if (Array.isArray(msg.mentions.channels)) {
         msg.mentions.channels.forEach(c => {
+        if (!/^\d+$/.test(String(c?.id || ''))) return;
         const regex = new RegExp(`&lt;#${c.id}&gt;`, 'g');
         html = html.replace(regex, `<span class="mention">#${escapeHTML(c.name)}</span>`);
         });
@@ -80,39 +98,52 @@ function parseMarkdown(text, msg) {
 
 function formatTime(timestamp) {
     const d = new Date(timestamp);
-    return d.toLocaleString('vi-VN', { 
+    if (Number.isNaN(d.getTime())) return 'Unknown time';
+    return d.toLocaleString('vi-VN', {
     timeZone: 'Asia/Ho_Chi_Minh',
     day: '2-digit', month: '2-digit', year: 'numeric',
     hour: '2-digit', minute: '2-digit'
     });
 }
 
-function renderMessage(msg) {
+function renderMessage(value) {
+    const msg = value && typeof value === 'object' ? value : {};
+    const author = msg.author && typeof msg.author === 'object' ? msg.author : {};
     const timeStr = formatTime(msg.timestamp);
-    const botTag = msg.author.bot ? '<span class="message-bot-tag">BOT</span>' : '';
-    
+    const botTag = author.bot ? '<span class="message-bot-tag">BOT</span>' : '';
+    const avatarUrl = safeHttpUrl(author.avatar, ['cdn.discordapp.com', 'media.discordapp.net'])
+        || 'https://cdn.discordapp.com/embed/avatars/0.png';
+    const authorColor = author.color === '#000000' ? 'inherit' : safeColor(author.color);
+
     let attachmentsHtml = '';
-    if (msg.attachments && msg.attachments.length > 0) {
+    if (Array.isArray(msg.attachments) && msg.attachments.length > 0) {
     attachmentsHtml = '<div class="attachments">';
     msg.attachments.forEach(att => {
+        const attachmentUrl = safeHttpUrl(att.url, ['cdn.discordapp.com', 'media.discordapp.net']);
+        if (!attachmentUrl) return;
         if (att.contentType && att.contentType.startsWith('image/')) {
-        attachmentsHtml += `<img src="${escapeHTML(att.url)}" alt="${escapeHTML(att.name)}" class="attachment-img" />`;
+        attachmentsHtml += `<img src="${escapeHTML(attachmentUrl)}" alt="${escapeHTML(att.name)}" class="attachment-img" />`;
         } else {
-        attachmentsHtml += `<div class="attachment-file"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><polyline points="13 2 13 9 20 9"></polyline></svg><a href="${escapeHTML(att.url)}" target="_blank">${escapeHTML(att.name)}</a></div>`;
+        attachmentsHtml += `<div class="attachment-file"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><polyline points="13 2 13 9 20 9"></polyline></svg><a href="${escapeHTML(attachmentUrl)}" target="_blank" rel="noopener noreferrer">${escapeHTML(att.name)}</a></div>`;
         }
     });
     attachmentsHtml += '</div>';
     }
 
     let embedsHtml = '';
-    if (msg.embeds && msg.embeds.length > 0) {
-    msg.embeds.forEach(emb => {
-        const colorHex = emb.color ? '#' + emb.color.toString(16).padStart(6, '0') : '#202225';
+    if (Array.isArray(msg.embeds) && msg.embeds.length > 0) {
+    msg.embeds.forEach(value => {
+        const emb = value && typeof value === 'object' ? value : {};
+        const numericColor = Number(emb.color);
+        const colorHex = Number.isInteger(numericColor) && numericColor >= 0 && numericColor <= 0xffffff
+            ? `#${numericColor.toString(16).padStart(6, '0')}`
+            : '#202225';
         let authorHtml = '';
         if (emb.author) {
+        const authorIcon = safeHttpUrl(emb.author.icon_url, ['cdn.discordapp.com', 'media.discordapp.net']);
         authorHtml = `
             <div class="embed-author">
-            ${emb.author.icon_url ? `<img src="${escapeHTML(emb.author.icon_url)}" class="embed-author-icon"/>` : ''}
+            ${authorIcon ? `<img src="${escapeHTML(authorIcon)}" class="embed-author-icon" alt=""/>` : ''}
             <div class="embed-author-name">${escapeHTML(emb.author.name)}</div>
             </div>`;
         }
@@ -121,7 +152,7 @@ function renderMessage(msg) {
         let descHtml = emb.description ? `<div class="embed-description">${parseMarkdown(emb.description, msg)}</div>` : '';
         
         let fieldsHtml = '';
-        if (emb.fields && emb.fields.length > 0) {
+        if (Array.isArray(emb.fields) && emb.fields.length > 0) {
         fieldsHtml = '<div class="embed-fields">';
         emb.fields.forEach(f => {
             const inlineClass = f.inline ? ' inline' : '';
@@ -135,10 +166,11 @@ function renderMessage(msg) {
         }
 
         let footerHtml = '';
-        if (emb.footer) {
+        if (emb.footer && typeof emb.footer === 'object') {
+        const footerIcon = safeHttpUrl(emb.footer.icon_url, ['cdn.discordapp.com', 'media.discordapp.net']);
         footerHtml = `
             <div class="embed-footer">
-            ${emb.footer.icon_url ? `<img src="${escapeHTML(emb.footer.icon_url)}" class="embed-footer-icon"/>` : ''}
+            ${footerIcon ? `<img src="${escapeHTML(footerIcon)}" class="embed-footer-icon" alt=""/>` : ''}
             <span>${escapeHTML(emb.footer.text)}</span>
             </div>`;
         }
@@ -160,10 +192,10 @@ function renderMessage(msg) {
     return `
     <div class="message-group">
         <div class="message-avatar">
-        <img src="${escapeHTML(msg.author.avatar)}" alt="" data-avatar-fallback/>
+        <img src="${escapeHTML(avatarUrl)}" alt="" data-avatar-fallback/>
         </div>
         <div class="message-header">
-        <span class="message-author" style="color: ${msg.author.color && msg.author.color !== '#000000' ? msg.author.color : 'inherit'}">${escapeHTML(msg.author.username)}</span>
+        <span class="message-author" style="color: ${authorColor}">${escapeHTML(author.username || 'Unknown User')}</span>
         ${botTag}
         <span class="message-timestamp">${timeStr}</span>
         </div>
@@ -180,7 +212,9 @@ async function attemptFetch(password = '') {
     passwordScreen.classList.add('hidden');
     errorScreen.classList.add('hidden');
     
-    const res = await fetch(`/api/transcript/${transcriptId}?pwd=${encodeURIComponent(password)}`);
+    const res = await fetch(`/api/transcript/${transcriptId}`, {
+        headers: password ? { Authorization: `Transcript ${password}` } : {},
+    });
     
     if (res.status === 401 || res.status === 403) {
         const errData = await res.json().catch(() => ({}));
@@ -204,16 +238,17 @@ async function attemptFetch(password = '') {
     }
 
     const data = await res.json();
-    
-    tbTitle.textContent = data.ticket_name;
-    chTitle.textContent = `Welcome to #${data.ticket_name}!`;
-    
+    const ticketName = String(data.ticket_name || 'ticket');
+
+    tbTitle.textContent = ticketName;
+    chTitle.textContent = `Welcome to #${ticketName}!`;
+
     let subtitleText = `Created on ${formatTime(data.created_at)}`;
     if (data.closed_by) subtitleText += ` | Closed by ${data.closed_by}`;
     if (data.claimed_by) subtitleText += ` | Claimed by ${data.claimed_by}`;
     tbSubtitle.textContent = subtitleText;
 
-    const messages = data.messages || [];
+    const messages = Array.isArray(data.messages) ? data.messages.slice(0, 10000) : [];
     let htmlContent = '';
     messages.forEach(msg => {
         htmlContent += renderMessage(msg);

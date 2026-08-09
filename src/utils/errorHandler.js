@@ -38,7 +38,7 @@ export async function addIncident(severity, module, message, meta = {}) {
         }
     }
 }
-export async function getIncidents({ severity, startDate, endDate } = {}) {
+export async function getIncidents({ severity, startDate, endDate, limit = 100 } = {}) {
     if (Date.now() < incidentsUnavailableUntil) return [];
     const supabase = await getSupabase();
     if (!supabase) return [];
@@ -55,7 +55,8 @@ export async function getIncidents({ severity, startDate, endDate } = {}) {
     if (severity && severity !== 'all') {
         query = query.eq('severity', severity);
     }
-    const { data, error } = await query.order('timestamp', { ascending: false });
+    const safeLimit = Math.min(200, Math.max(1, Number.parseInt(limit, 10) || 100));
+    const { data, error } = await query.order('timestamp', { ascending: false }).limit(safeLimit);
     if (error) {
         if (error.code === 'PGRST205' || error.code === '42P01') {
             incidentsUnavailableUntil = Date.now() + 5 * 60 * 1000;

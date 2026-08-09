@@ -11,8 +11,12 @@ export {};
       nav_signin: 'Sign in',
       nav_logout: 'Logout',
       // Landing Hero
+      hero_badge: 'Source-available Discord management',
       hero_title: 'Your Discord Server,\nPowered by NexBucket',
-      hero_subtitle: 'An all-in-one Discord bot with tickets, economy, moderation, music, auto-roles and much more — fully configurable from a beautiful web dashboard.',
+      hero_subtitle: 'An all-in-one Discord bot with tickets, payments, moderation, Minecraft status, auto-roles and much more — fully configurable from a beautiful web dashboard.',
+      hero_highlight_dashboard: 'Secure Discord OAuth2 dashboard',
+      hero_highlight_modules: 'Production-ready server modules',
+      hero_highlight_control: 'Per-server permissions and controls',
       hero_btn_add: 'Add to Discord',
       hero_btn_login: 'Open Dashboard',
       // Landing Features
@@ -20,7 +24,7 @@ export {};
       feat_subtitle: 'Built-in powerful modules to supercharge your Discord server.',
       feat_ticket_title: 'Ticket System',
       feat_ticket_desc: 'Advanced support ticket management with categories, auto-close, transcripts, and staff claims.',
-      feat_economy_title: 'Economy & Banking',
+      feat_economy_title: 'Payments & Banking',
       feat_economy_desc: 'VietQR, PayOS, and Card2K payment integration. Generate QR codes for real-money donations.',
       feat_mod_title: 'Moderation',
       feat_mod_desc: 'Anti-spam, anti-raid, anti-link, rogue bot kicker, banned words filter, and full audit logs.',
@@ -104,8 +108,12 @@ export {};
       nav_signin: 'Đăng nhập',
       nav_logout: 'Đăng xuất',
       // Landing Hero
+      hero_badge: 'Quản lý Discord công khai mã nguồn',
       hero_title: 'Máy chủ Discord của bạn,\nĐược hỗ trợ bởi NexBucket',
-      hero_subtitle: 'Bot Discord tất-cả-trong-một với hệ thống ticket, kinh tế, kiểm duyệt, âm nhạc, auto-role và nhiều hơn nữa — cấu hình toàn bộ qua trang quản trị web đẹp mắt.',
+      hero_subtitle: 'Bot Discord tất-cả-trong-một với ticket, thanh toán, kiểm duyệt, trạng thái Minecraft, auto-role và nhiều hơn nữa — cấu hình toàn bộ qua trang quản trị web.',
+      hero_highlight_dashboard: 'Dashboard Discord OAuth2 bảo mật',
+      hero_highlight_modules: 'Module máy chủ sẵn sàng vận hành',
+      hero_highlight_control: 'Phân quyền và điều khiển theo máy chủ',
       hero_btn_add: 'Thêm vào Discord',
       hero_btn_login: 'Mở bảng điều khiển',
       // Landing Features
@@ -113,7 +121,7 @@ export {};
       feat_subtitle: 'Các module mạnh mẽ tích hợp sẵn giúp nâng cấp máy chủ Discord của bạn.',
       feat_ticket_title: 'Hệ thống Ticket',
       feat_ticket_desc: 'Quản lý ticket hỗ trợ nâng cao với danh mục, tự đóng, bản ghi, và nhận việc cho staff.',
-      feat_economy_title: 'Kinh tế & Ngân hàng',
+      feat_economy_title: 'Thanh toán & Ngân hàng',
       feat_economy_desc: 'Tích hợp thanh toán VietQR, PayOS và Card2K. Tạo mã QR để nhận donate bằng tiền thật.',
       feat_mod_title: 'Kiểm duyệt',
       feat_mod_desc: 'Chống spam, chống raid, chống link, auto-kick bot lạ, lọc từ cấm, và nhật ký kiểm toán.',
@@ -201,6 +209,11 @@ export {};
 
   let currentLang = getLang();
 
+  const flagMarkup = {
+    en: '<svg class="language-flag" viewBox="0 0 60 30" aria-hidden="true"><path fill="#012169" d="M0 0h60v30H0z"/><path stroke="#fff" stroke-width="6" d="m0 0 60 30m0-30L0 30"/><path stroke="#c8102e" stroke-width="3.5" d="m0 0 60 30m0-30L0 30"/><path stroke="#fff" stroke-width="10" d="M30 0v30M0 15h60"/><path stroke="#c8102e" stroke-width="6" d="M30 0v30M0 15h60"/></svg><span class="language-code">EN</span>',
+    vi: '<svg class="language-flag" viewBox="0 0 900 600" aria-hidden="true"><path fill="#da251d" d="M0 0h900v600H0z"/><path fill="#ff0" d="m450 115 44 135h142l-115 83 44 135-115-83-115 83 44-135-115-83h142z"/></svg><span class="language-code">VI</span>',
+  };
+
   function t(key) {
     return translations[currentLang]?.[key] ?? translations['en']?.[key] ?? key;
   }
@@ -229,11 +242,13 @@ export {};
       const val = t(key);
       if (val) el.placeholder = val;
     });
-    // Update html lang attribute
     document.documentElement.lang = currentLang;
-    // Update lang toggle button
     const langBtn = document.getElementById('langToggle');
-    if (langBtn) langBtn.textContent = currentLang === 'vi' ? '🇻🇳' : '🇬🇧';
+    if (langBtn) {
+      langBtn.innerHTML = flagMarkup[currentLang];
+      langBtn.setAttribute('aria-label', currentLang === 'vi' ? 'Switch to English' : 'Chuyển sang tiếng Việt');
+      langBtn.title = currentLang === 'vi' ? 'English' : 'Tiếng Việt';
+    }
   }
 
   // Expose globally

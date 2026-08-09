@@ -206,6 +206,8 @@ CREATE TABLE IF NOT EXISTS ticket_transcripts (
   expires_at TIMESTAMPTZ NOT NULL DEFAULT NOW() + INTERVAL '30 days'
 );
 CREATE INDEX IF NOT EXISTS idx_ticket_transcripts_expires ON ticket_transcripts (expires_at);
+CREATE INDEX IF NOT EXISTS idx_ticket_transcripts_guild_created
+  ON ticket_transcripts (guild_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS security_logs (
   id BIGSERIAL PRIMARY KEY,

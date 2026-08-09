@@ -1,0 +1,193 @@
+import path from 'node:path';
+import { readFile, readdir } from 'node:fs/promises';
+import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
+
+const require = createRequire(import.meta.url);
+const MinecraftFont = require('./mc-banner/minecraft-font.js');
+const BannerRenderer = require('./mc-banner/banner-renderer.js');
+const MinecraftStatusClient = require('./mc-banner/minecraft-status-client.js');
+const { parseHostPort } = require('./mc-banner/host-port.js');
+const { parseMotd } = require('./mc-banner/motd-formatter.js');
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const DEFAULT_ASSET_DIR = path.resolve(__dirname, '..', '..', 'MCServerBanner', 'node-assets');
+const ASSETS_DIR = path.resolve(__dirname, '..', '..', 'assets');
+const FALLBACK_IMAGE_PATH = path.join(ASSETS_DIR, 'unknown_server.png');
+const BANNERS_DIR = path.join(ASSETS_DIR, 'banners');
+const WIDTH = 1530;
+const cache = new Map();
+const pending = new Map();
+let enginePromise = null;
+let bannerFilesPromise = null;
+let fallbackImagePromise = null;
+let activeRenders = 0;
+
+function stringHash(value) {
+  let hash = 2166136261;
+  for (const char of String(value)) {
+    hash ^= char.codePointAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+async function getFallbackImage() {
+  fallbackImagePromise ||= readFile(FALLBACK_IMAGE_PATH);
+  return fallbackImagePromise;
+}
+
+async function getBackground(server) {
+  bannerFilesPromise ||= readdir(BANNERS_DIR)
+    .then(files => files.filter(file => /\.(png|jpe?g|webp)$/i.test(file)).sort())
+    .catch(() => []);
+  const files = await bannerFilesPromise;
+  if (files.length === 0) return 'dirt';
+  const index = stringHash(`${server.ip}:${server.port || 25565}`) % files.length;
+  return readFile(path.join(BANNERS_DIR, files[index]));
+}
+
+function readInt(name, fallback, min, max) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === '') return fallback;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < min || value > max) {
+    throw new Error(`${name} must be an integer between ${min} and ${max}`);
+  }
+  return value;
+}
+
+function readBool(name, fallback) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === '') return fallback;
+  if (/^(1|true|yes|on)$/i.test(raw)) return true;
+  if (/^(0|false|no|off)$/i.test(raw)) return false;
+  throw new Error(`${name} must be true or false`);
+}
+
+function getConfig() {
+  return {
+    assetDir: path.resolve(process.env.MC_BANNER_ASSET_DIR || DEFAULT_ASSET_DIR),
+    cacheMs: readInt('MC_BANNER_CACHE_SECONDS', 300, 0, 86400) * 1000,
+    maxCacheEntries: readInt('MC_BANNER_MAX_CACHE_ENTRIES', 300, 1, 10000),
+    connectTimeout: readInt('MC_BANNER_CONNECT_TIMEOUT_MS', 4000, 250, 30000),
+    readTimeout: readInt('MC_BANNER_READ_TIMEOUT_MS', 5000, 250, 30000),
+    protocol: readInt('MC_BANNER_PROTOCOL', -1, -1, 2147483647),
+    maxConcurrentRenders: readInt('MC_BANNER_MAX_CONCURRENT_RENDERS', 1, 1, 16),
+    allowPrivateHosts: readBool('MC_BANNER_ALLOW_PRIVATE_HOSTS', false),
+    stripPrivateGlyphs: readBool('MC_BANNER_STRIP_PRIVATE_GLYPHS', true),
+  };
+}
+
+async function getEngine() {
+  if (!enginePromise) {
+    const pendingEngine = (async () => {
+      const config = getConfig();
+      const statusClient = new MinecraftStatusClient(
+        config.connectTimeout,
+        config.readTimeout,
+        config.protocol,
+        config.allowPrivateHosts,
+      );
+      try {
+        const font = await MinecraftFont.load(path.join(config.assetDir, 'assets', 'minecraft'));
+        return { config, renderer: new BannerRenderer(font, config.assetDir), statusClient };
+      } catch (error) {
+        console.error('[Minecraft Banner] Assets unavailable, using fallback image:', error.message || error);
+        return { config, renderer: null, statusClient };
+      }
+    })();
+    enginePromise = pendingEngine;
+    pendingEngine.catch(() => {
+      if (enginePromise === pendingEngine) enginePromise = null;
+    });
+  }
+  return enginePromise;
+}
+
+function cacheKey(server) {
+  return `${String(server.ip).trim().toLowerCase()}:${Number(server.port || 25565)}:${server.name || ''}`;
+}
+
+function pruneCache(maxEntries, now) {
+  for (const [key, entry] of cache) {
+    if (entry.expiresAt <= now) cache.delete(key);
+  }
+  while (cache.size >= maxEntries) cache.delete(cache.keys().next().value);
+}
+
+async function renderServer(server) {
+  const { config, renderer, statusClient } = await getEngine();
+  const target = parseHostPort(server.ip, Number(server.port || 25565));
+  let status;
+  try {
+    status = await statusClient.query(target.host, target.port);
+  } catch (error) {
+    status = MinecraftStatusClient.offline(error.message || String(error));
+  }
+  const motd = status.online
+    ? parseMotd(status.descriptionJson, { maximumLines: 2, stripPrivateGlyphs: config.stripPrivateGlyphs })
+    : [[{ text: "Can't connect to server", color: '#ff5555' }]];
+  const fallbackImage = await getFallbackImage();
+  const background = await getBackground(server);
+  let png;
+  try {
+    png = renderer
+      ? await renderer.render({
+          width: WIDTH,
+          title: server.name || target.display,
+          motd,
+          players: status.online ? `${status.onlinePlayers}/${status.maxPlayers}` : '?/?',
+          ping: status.online ? status.latencyMillis : -1,
+          watermark: `${status.versionName} • ${new Date().toISOString()}`,
+          favicon: status.online && status.favicon ? status.favicon : fallbackImage,
+          backgroundUrl: background,
+          allowRemoteBackgrounds: false,
+          allowPrivateHosts: config.allowPrivateHosts,
+          backgroundTimeoutMillis: 5000,
+        })
+      : await getMinecraftBannerFallback();
+  } catch (error) {
+    error.status = status;
+    throw error;
+  }
+  return { png, status, target };
+}
+
+export async function renderMinecraftBanner(server, refresh = false) {
+  const engine = await getEngine();
+  const key = cacheKey(server);
+  const now = Date.now();
+  const cached = cache.get(key);
+  if (!refresh && cached && cached.expiresAt > now) return { ...cached.value, cacheHit: true };
+  if (pending.has(key)) return pending.get(key);
+  if (activeRenders >= engine.config.maxConcurrentRenders) {
+    const error = new Error('Minecraft banner renderer is busy');
+    error.code = 'MC_BANNER_BUSY';
+    throw error;
+  }
+  const task = (async () => {
+    activeRenders++;
+    try {
+      const value = await renderServer(server);
+      if (engine.config.cacheMs > 0) {
+        pruneCache(engine.config.maxCacheEntries, now);
+        cache.set(key, { value, expiresAt: now + engine.config.cacheMs });
+      }
+      return { ...value, cacheHit: false };
+    } finally {
+      activeRenders--;
+      pending.delete(key);
+    }
+  })();
+  pending.set(key, task);
+  return task;
+}
+
+export async function getMinecraftBannerFallback() {
+  return getFallbackImage();
+}
+
+export function clearMinecraftBannerCache() {
+  cache.clear();
+}

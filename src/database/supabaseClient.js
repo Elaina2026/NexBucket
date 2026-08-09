@@ -22,6 +22,16 @@ export const supabase = supabaseUrl && supabaseKey ? createClient(supabaseUrl, s
   auth: { persistSession: false },
   global: { fetch: customFetch }
 }) : null;
+
+export function isSupabaseUnavailable(error) {
+  const text = String(error?.message || error || '').toLowerCase();
+  return error?.code === 'TIMEOUT'
+    || error?.status === 504
+    || text.includes('database connection timed out')
+    || text.includes('database might be paused')
+    || text.includes('fetch failed')
+    || text.includes('connect timeout');
+}
 export async function initDatabase() {
   if (!supabase) {
     console.warn('⚠️ [Database] SUPABASE_URL or SUPABASE_KEY is missing in .env. Bot might not function properly without a database.');
@@ -48,7 +58,7 @@ export async function initDatabase() {
       } catch (err) {
         console.error('[Database Ping] Failed to ping database:', err.message);
       }
-    }, 1 * 60 * 1000); 
+    }, 10 * 60 * 1000);
   } catch (error) {
     console.error('❌ [Database] Connection failed:', error.message);
   }

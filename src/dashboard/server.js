@@ -14,7 +14,7 @@ dotenv.config({ override: true });
 import ConfigManager from '../ticket/configManager.js';
 import { getWelcomeConfig } from '../welcome/welcomeManager.js';
 import { getJtcSettings, normalizeJtcConfig, setJtcSettingsCache } from '../utils/jtcManager.js';
-import { getIncidents, getIncidentSummary } from '../utils/errorHandler.js';
+import { getIncidents } from '../utils/errorHandler.js';
 import { getAllServicesStatus, getOverallStatus } from '../utils/uptimeTracker.js';
 import { getBankConfig } from '../banking/bankManager.js';
 import { getCardConfig, normalizeCardDomain } from '../banking/cardConfig.js';
@@ -24,11 +24,42 @@ import { getModConfig } from '../moderation/moderationManager.js';
 import { applyCardResult } from '../banking/cardResult.js';
 import { supabase } from '../database/supabaseClient.js';
 import { encryptToken, decryptToken, generateCsrfToken, sanitizePayload } from '../utils/securityUtils.js';
-import { parseCookies, pickKey } from './dashboardUtils.js';
+import {
+    cookieHeader,
+    isAllowedImageUrl,
+    isSecureDashboardUrl,
+    parseCookies,
+    pickKey,
+    safeEqualString,
+} from './dashboardUtils.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 function isSnowflake(value) {
     return typeof value === 'string' && /^\d{17,20}$/.test(value);
+}
+
+function isSessionId(value) {
+    return typeof value === 'string'
+        && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+function isDatabaseUnavailable(error) {
+    const text = String(error?.message || error || '').toLowerCase();
+    return error?.code === 'TIMEOUT'
+        || error?.status === 504
+        || text.includes('database connection timed out')
+        || text.includes('database might be paused')
+        || text.includes('fetch failed')
+        || text.includes('connect timeout');
+}
+
+function sendDatabaseUnavailable(res, error) {
+    console.error('[Dashboard] Supabase unavailable:', error?.message || error);
+    return res.status(503).json({
+        error: 'Database temporarily unavailable. Supabase may be paused or waking up. Try again in a few seconds.',
+        code: 'DATABASE_UNAVAILABLE',
+        retryAfter: 15,
+    });
 }
 
 async function getGuildMember(guild, userId) {
@@ -42,7 +73,12 @@ export function startDashboard(client) {
     const app = express();
     app.set('trust proxy', 1);
     const port = process.env.DASHBOARD_PORT || 3000;
-    const dashboardOrigin = process.env.DASHBOARD_URL || `http://localhost:${port}`;
+    const dashboardOrigin = new URL(process.env.DASHBOARD_URL || `http://localhost:${port}`).origin;
+    const secureCookies = isSecureDashboardUrl(dashboardOrigin);
+    const sendInternalError = (res, error, context) => {
+        console.error(`[Dashboard] ${context}:`, error);
+        return res.status(500).json({ error: 'Internal Server Error' });
+    };
     // Mẫu CPU trước đó, dùng để tính % theo chênh lệch ở /api/admin/system.
     let lastCpuSample = process.cpuUsage();
     let lastCpuSampleAt = Date.now();
@@ -77,13 +113,14 @@ export function startDashboard(client) {
             "script-src 'self' https://static.cloudflareinsights.com",
             "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
             "font-src 'self' https://fonts.gstatic.com",
-            "img-src 'self' data: https://cdn.discordapp.com https://img.vietqr.io https://*.supabase.co",
+            "img-src 'self' data: https://cdn.discordapp.com https://media.discordapp.net https://img.vietqr.io https://*.supabase.co",
             "connect-src 'self' https://cloudflareinsights.com",
+            "object-src 'none'",
             "frame-ancestors 'none'",
-            "base-uri 'self'",
+            "base-uri 'none'",
             "form-action 'self'",
         ].join('; '));
-        res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+        if (secureCookies) res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
         res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
         res.removeHeader('X-Powered-By');
         next();
@@ -91,7 +128,7 @@ export function startDashboard(client) {
     const allowedOrigins = [
         `http://localhost:${port}`,
         `http://127.0.0.1:${port}`,
-        process.env.DASHBOARD_URL
+        dashboardOrigin
     ].filter(Boolean);
     app.use(cors({
         origin: function(origin, callback) {
@@ -108,6 +145,15 @@ export function startDashboard(client) {
     app.use(express.urlencoded({ extended: true, limit: '1mb' }));
     app.use('/api', apiLimiter);
     app.use('/api/auth', authLimiter);
+    app.use((req, res, next) => {
+        if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)
+            || req.path.startsWith('/api/webhooks/')) return next();
+        const origin = typeof req.headers.origin === 'string' ? req.headers.origin : '';
+        if (!origin || !allowedOrigins.includes(origin)) {
+            return res.status(403).json({ error: 'Invalid request origin' });
+        }
+        next();
+    });
     const sourcePublicPath = path.join(__dirname, 'public');
     const builtPublicPath = path.join(__dirname, '..', '..', 'dist', 'dashboard', 'public');
     app.use(express.static(builtPublicPath, { maxAge: 0, etag: true }));
@@ -212,8 +258,7 @@ export function startDashboard(client) {
                 }
             });
         } catch (err) {
-            console.error('[Admin API] System Error:', err);
-            res.status(500).json({ error: err.message });
+            sendInternalError(res, err, 'Admin system request failed');
         }
     });
 
@@ -254,42 +299,47 @@ export function startDashboard(client) {
             req.auth = auth;
             next();
         } catch (err) {
-            res.status(500).json({ error: err.message });
+            sendInternalError(res, err, 'Admin authorization failed');
         }
     }
     const ALLOWED_PROXY_DOMAINS = ['cdn.koya.gg', 'cdn.discordapp.com', 'media.discordapp.net', 'img.vietqr.io'];
     app.get('/api/proxy-image', async (req, res) => {
         const imageUrl = typeof req.query.url === 'string' ? req.query.url : '';
         if (!imageUrl) return res.status(400).send('Missing url parameter');
-        try {
-            const urlObj = new URL(imageUrl);
-            if (!ALLOWED_PROXY_DOMAINS.some(d => urlObj.hostname === d || urlObj.hostname.endsWith('.' + d))) {
-                return res.status(403).send('Domain not allowed');
-            }
-        } catch { return res.status(400).send('Invalid URL'); }
+        if (!isAllowedImageUrl(imageUrl, ALLOWED_PROXY_DOMAINS)) {
+            return res.status(403).send('Image URL is not allowed');
+        }
         try {
             const response = await axios.get(imageUrl, {
                 responseType: 'stream',
                 timeout: 10000,
                 maxContentLength: 10 * 1024 * 1024,
+                maxBodyLength: 10 * 1024 * 1024,
+                maxRedirects: 0,
+                validateStatus: status => status === 200,
                 headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    'User-Agent': 'NexBucket/1.0',
+                    Accept: 'image/png,image/jpeg,image/webp,image/gif,image/*;q=0.8',
                 }
             });
-            const contentType = response.headers['content-type'];
-            if (contentType) res.set('Content-Type', String(contentType));
+            const contentType = String(response.headers['content-type'] || '').split(';', 1)[0].trim().toLowerCase();
+            if (!['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(contentType)) {
+                response.data.destroy();
+                return res.status(415).send('Unsupported image type');
+            }
+            res.set('Content-Type', contentType);
             res.set('Cache-Control', 'public, max-age=86400');
+            response.data.on('error', () => res.destroy());
             response.data.pipe(res);
-        } catch (error) {
-            res.status(500).send('Failed to fetch image');
+        } catch {
+            res.status(502).send('Failed to fetch image');
         }
     });
     app.get('/api/auth/login', (req, res) => {
         const clientId = process.env.CLIENT_ID;
         const redirectUri = encodeURIComponent(`${dashboardOrigin}/api/auth/callback`);
         const state = generateCsrfToken();
-        res.cookie ? res.cookie('oauth_state', state, { httpOnly: true, maxAge: 600000 }) :
-            res.setHeader('Set-Cookie', `oauth_state=${state}; HttpOnly; Path=/; Max-Age=600`);
+        res.setHeader('Set-Cookie', cookieHeader('oauth_state', state, { maxAge: 600, secure: secureCookies }));
         const oauthUrl = `https://discord.com/api/oauth2/authorize?client_id=${clientId}&redirect_uri=${redirectUri}&response_type=code&scope=identify%20guilds&state=${state}`;
         res.redirect(oauthUrl);
     });
@@ -297,9 +347,10 @@ export function startDashboard(client) {
         try {
             const { code, state } = req.query;
             const cookies = parseCookies(req);
-            if (!code || !state || state !== cookies.oauth_state) {
+            if (!code || !state || !safeEqualString(state, cookies.oauth_state)) {
                 return res.status(400).send('❌ Authentication Failed: Invalid state parameter (CSRF protection trigger).');
             }
+            res.setHeader('Set-Cookie', cookieHeader('oauth_state', '', { maxAge: 0, secure: secureCookies }));
             const clientId = process.env.CLIENT_ID;
             const clientSecret = process.env.CLIENT_SECRET || process.env.DISCORD_CLIENT_SECRET;
             const redirectUri = `${dashboardOrigin}/api/auth/callback`;
@@ -338,7 +389,7 @@ export function startDashboard(client) {
                 updated_at: new Date().toISOString()
             });
             if (sessionError) throw sessionError;
-            res.setHeader('Set-Cookie', `session_id=${sessionId}; HttpOnly; Path=/; Max-Age=604800; SameSite=Lax`);
+            res.append('Set-Cookie', cookieHeader('session_id', sessionId, { maxAge: 604800, secure: secureCookies }));
             res.redirect('/');
         } catch (err) {
             console.error('[Dashboard Auth Callback Error]:', err.response?.data || err.message);
@@ -348,7 +399,7 @@ export function startDashboard(client) {
     async function getAuthenticatedUser(req) {
         const cookies = parseCookies(req);
         const sessionId = cookies.session_id;
-        if (!sessionId || !supabase) return null;
+        if (!isSessionId(sessionId) || !supabase) return null;
         let { data: session, error } = await supabase
             .from('user_sessions')
             .select('*')
@@ -443,20 +494,20 @@ export function startDashboard(client) {
                 guilds: manageableGuilds
             });
         } catch (err) {
-            res.status(500).json({ error: err.message });
+            sendInternalError(res, err, 'API request failed');
         }
     });
     app.post('/api/auth/logout', async (req, res) => {
         try {
             const cookies = parseCookies(req);
-            if (cookies.session_id && supabase) {
+            if (isSessionId(cookies.session_id) && supabase) {
                 const { error } = await supabase.from('user_sessions').delete().eq('session_id', cookies.session_id);
                 if (error) throw error;
             }
-            res.setHeader('Set-Cookie', 'session_id=; HttpOnly; Path=/; Max-Age=0');
+            res.setHeader('Set-Cookie', cookieHeader('session_id', '', { maxAge: 0, secure: secureCookies }));
             res.json({ success: true });
         } catch (err) {
-            res.status(500).json({ error: err.message });
+            sendInternalError(res, err, 'API request failed');
         }
     });
     app.get('/api/guilds/:guildId/data', async (req, res) => {
@@ -482,7 +533,7 @@ export function startDashboard(client) {
             const iconUrl = guild.iconURL({ size: 128 }) || null;
             res.json({ channels, roles, bannerUrl, iconUrl, name: guild.name, memberCount: guild.memberCount });
         } catch (err) {
-            res.status(500).json({ error: err.message });
+            sendInternalError(res, err, 'API request failed');
         }
     });
     app.get('/api/config/:guildId', async (req, res) => {
@@ -502,7 +553,7 @@ export function startDashboard(client) {
             const cardConfig = await getCardConfig(guildId);
             const statsConfig = await getStatsConfigForGuild(guildId);
             const modConfig = await getModConfig(guildId);
-            const settings = await getAllSections(guildId);
+            const settings = await getAllSections(guildId, true);
             const minecraftServers = Array.isArray(settings.minecraft?.servers) ? settings.minecraft.servers : [];
             const guild = client.guilds.cache.get(guildId);
             const configVersion = Number(settings.version || 0);
@@ -551,8 +602,9 @@ export function startDashboard(client) {
                 serverBanner,
             });
         } catch (err) {
+            if (isDatabaseUnavailable(err)) return sendDatabaseUnavailable(res, err);
             console.error('[GET /api/config] 500 Error:', err);
-            res.status(500).json({ error: err.message });
+            sendInternalError(res, err, 'API request failed');
         }
     });
     app.post('/api/config/:guildId', async (req, res) => {
@@ -571,15 +623,16 @@ export function startDashboard(client) {
                 return res.status(400).json({ error: 'Invalid configVersion' });
             }
             const autoroleId = String(pickKey(cleanBody, 'autoroleId', 'autorole_id') || '');
-            const ticketConfig = pickKey(cleanBody, 'ticketConfig', 'ticket_config') || {};
-            const welcomeConfig = pickKey(cleanBody, 'welcomeConfig', 'welcome_config') || {};
-            const jtcConfig = pickKey(cleanBody, 'jtcConfig', 'jtc_config') || {};
-            const modConfig = pickKey(cleanBody, 'modConfig', 'mod_config') || {};
-            const bankConfig = pickKey(cleanBody, 'bankConfig', 'bank_config') || {};
-            const cardConfig = pickKey(cleanBody, 'cardConfig', 'card_config') || {};
-            const statsConfig = pickKey(cleanBody, 'statsConfig', 'stats_config') || {};
-            const statusConfig = pickKey(cleanBody, 'statusConfig', 'status_config') || {};
-            const existingSettings = await getAllSections(guildId);
+            const asObject = (value) => value && typeof value === 'object' && !Array.isArray(value) ? value : Object.create(null);
+            const ticketConfig = asObject(pickKey(cleanBody, 'ticketConfig', 'ticket_config'));
+            const welcomeConfig = asObject(pickKey(cleanBody, 'welcomeConfig', 'welcome_config'));
+            const jtcConfig = asObject(pickKey(cleanBody, 'jtcConfig', 'jtc_config'));
+            const modConfig = asObject(pickKey(cleanBody, 'modConfig', 'mod_config'));
+            const bankConfig = asObject(pickKey(cleanBody, 'bankConfig', 'bank_config'));
+            const cardConfig = asObject(pickKey(cleanBody, 'cardConfig', 'card_config'));
+            const statsConfig = asObject(pickKey(cleanBody, 'statsConfig', 'stats_config'));
+            const statusConfig = asObject(pickKey(cleanBody, 'statusConfig', 'status_config'));
+            const existingSettings = await getAllSections(guildId, true);
             const existingBank = await getBankConfig(guildId);
             const preserveSecret = (incoming, encrypted) => {
                 const value = incoming === undefined || incoming === null ? '' : String(incoming).trim();
@@ -593,6 +646,7 @@ export function startDashboard(client) {
                 return res.status(400).json({ error: 'Saved Card2K key cannot be decrypted. Enter it again.' });
             }
             const servers = Array.isArray(statusConfig.servers) ? statusConfig.servers : [];
+            if (servers.length > 100) return res.status(400).json({ error: 'Too many Minecraft servers' });
 
             const snowflake = /^\d{17,20}$/;
             const guild = client.guilds.cache.get(guildId);
@@ -614,7 +668,7 @@ export function startDashboard(client) {
             if (!Number.isInteger(jtcBitrate) || jtcBitrate < 8000 || jtcBitrate > (guild?.maximumBitrate || 96000)) return res.status(400).json({ error: 'Invalid JTC bitrate for this server' });
             if (typeof jtcConfig.defaultLocked !== 'boolean') return res.status(400).json({ error: 'Invalid JTC lock setting' });
             for (const server of servers) {
-                if (!validChannel(server.channelId) || typeof server.ip !== 'string' || !server.ip.trim()) return res.status(400).json({ error: 'Invalid Minecraft server' });
+                if (!validChannel(server.channelId) || typeof server.ip !== 'string' || !server.ip.trim() || server.ip.trim().length > 253) return res.status(400).json({ error: 'Invalid Minecraft server' });
                 const port = Number(server.port || 25565);
                 if (!Number.isInteger(port) || port < 1 || port > 65535) return res.status(400).json({ error: 'Invalid Minecraft port' });
             }
@@ -676,7 +730,7 @@ export function startDashboard(client) {
             res.json({ success: true, configVersion: Number(nextVersion), message: 'Configuration saved to Supabase successfully!' });
         } catch (err) {
             console.error('[Dashboard Config Save Error]:', err);
-            res.status(500).json({ error: err.message });
+            sendInternalError(res, err, 'API request failed');
         }
     });
 
@@ -684,83 +738,106 @@ export function startDashboard(client) {
     app.post('/api/webhooks/payos', async (req, res) => {
         try {
             const payload = req.body;
-            if (!payload || !payload.data) return res.status(400).json({ error: 'Invalid payload' });
-            const { orderCode, amount, description, accountNumber, reference, transactionDateTime, code } = payload.data;
-            if (code !== '00') {
-                console.log('[PayOS Webhook] Transaction not successful:', code);
-                return res.json({ success: true });
+            if (!payload || typeof payload !== 'object' || !payload.data || typeof payload.data !== 'object') {
+                return res.status(400).json({ error: 'Invalid payload' });
             }
-            if (supabase) {
-                // Đọc từ `bank_transactions` — đây mới là bảng mà chatFeatures.js ghi vào khi
-                // tạo link thanh toán. Trước đây webhook đọc `payos_transactions`, một bảng
-                // KHÔNG file nào ghi vào, nên nó luôn rỗng và thông báo thanh toán không bao giờ gửi.
-                const { data: txn, error: txnError } = await supabase.from('bank_transactions')
-                    .select('guild_id, channel_id, user_id')
-                    .eq('order_code', orderCode)
-                    .maybeSingle();
-                if (txnError) throw txnError;
-                if (txn) {
-                    const bankConfig = await import('../banking/bankManager.js').then(m => m.getBankConfig(txn.guild_id));
+            const { orderCode, amount, description, reference, transactionDateTime, code } = payload.data;
+            const normalizedOrderCode = Number(orderCode);
+            const normalizedAmount = Number(amount);
+            if (!Number.isSafeInteger(normalizedOrderCode) || normalizedOrderCode <= 0
+                || !Number.isSafeInteger(normalizedAmount) || normalizedAmount <= 0
+                || typeof code !== 'string' || code.length > 20) {
+                return res.status(400).json({ error: 'Invalid payment data' });
+            }
+            if (code !== '00') return res.json({ success: true });
+            if (!supabase) return res.status(503).json({ error: 'Database unavailable' });
 
-                    try {
-                        const PayOS = (await import('@payos/node')).default;
-                        const payos = new PayOS(bankConfig.payosClientId, bankConfig.payosApiKey, bankConfig.payosChecksumKey);
-                        payos.verifyPaymentWebhookData(payload);
-                    } catch (err) {
-                        console.error('[PayOS Webhook] Signature verification failed:', err.message);
-                        return res.status(401).json({ error: 'Invalid Signature - Unauthorized' });
-                    }
+            const { data: txn, error: txnError } = await supabase.from('bank_transactions')
+                .select('guild_id, channel_id, user_id, amount, status')
+                .eq('order_code', normalizedOrderCode)
+                .maybeSingle();
+            if (txnError) throw txnError;
+            if (!txn) return res.status(404).json({ error: 'Transaction not found' });
 
-                    const notifChannelId = bankConfig?.notificationChannelId;
-                    if (notifChannelId) {
-                        const channel = await client.channels.fetch(notifChannelId).catch(() => null);
-                        if (channel) {
-                            const { EmbedBuilder } = await import('../utils/embed.js');
-                            const embed = new EmbedBuilder()
-                                .setColor('#43b581')
-                                .setTitle('✅ PayOS Payment Received')
-                                .addFields(
-                                    { name: 'Order Code', value: `#${orderCode}`, inline: true },
-                                    { name: 'Amount', value: `${amount?.toLocaleString('vi-VN')} VND`, inline: true },
-                                    { name: 'Reference', value: reference || 'N/A', inline: true },
-                                    { name: 'Description', value: description || 'N/A' },
-                                )
-                                .setTimestamp(transactionDateTime ? new Date(transactionDateTime) : new Date())
-                                .setFooter({ text: 'PayOS Webhook' });
-                            if (txn.user_id) embed.addFields({ name: 'User', value: `<@${txn.user_id}>`, inline: true });
-                            await channel.send({ embeds: [embed] });
-                        }
-                    }
-                    const { error: paidError } = await supabase.from('bank_transactions').update({ status: 'paid', paid_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq('order_code', orderCode);
-                    if (paidError) throw paidError;
+            const bankConfig = await getBankConfig(txn.guild_id);
+            try {
+                const PayOS = (await import('@payos/node')).default;
+                const payos = new PayOS(bankConfig.payosClientId, bankConfig.payosApiKey, bankConfig.payosChecksumKey);
+                payos.verifyPaymentWebhookData(payload);
+            } catch (err) {
+                console.error('[PayOS Webhook] Signature verification failed:', err.message);
+                return res.status(401).json({ error: 'Invalid Signature - Unauthorized' });
+            }
+            if (Number(txn.amount) !== normalizedAmount) {
+                console.warn(`[PayOS Webhook] Amount mismatch for order ${normalizedOrderCode}`);
+                return res.status(400).json({ error: 'Payment amount mismatch' });
+            }
+            if (String(txn.status).toLowerCase() === 'paid') return res.json({ success: true });
+
+            const paidAt = new Date().toISOString();
+            const { data: updated, error: paidError } = await supabase.from('bank_transactions')
+                .update({ status: 'paid', paid_at: paidAt, updated_at: paidAt })
+                .eq('order_code', normalizedOrderCode)
+                .neq('status', 'paid')
+                .select('order_code')
+                .maybeSingle();
+            if (paidError) throw paidError;
+            if (!updated) return res.json({ success: true });
+
+            const notifChannelId = bankConfig?.notificationChannelId;
+            if (notifChannelId) {
+                const channel = await client.channels.fetch(notifChannelId).catch(() => null);
+                if (channel) {
+                    const { EmbedBuilder } = await import('../utils/embed.js');
+                    const parsedTimestamp = transactionDateTime ? new Date(transactionDateTime) : new Date();
+                    const embed = new EmbedBuilder()
+                        .setColor('#43b581')
+                        .setTitle('✅ PayOS Payment Received')
+                        .addFields(
+                            { name: 'Order Code', value: `#${normalizedOrderCode}`, inline: true },
+                            { name: 'Amount', value: `${normalizedAmount.toLocaleString('vi-VN')} VND`, inline: true },
+                            { name: 'Reference', value: String(reference || 'N/A').slice(0, 1024), inline: true },
+                            { name: 'Description', value: String(description || 'N/A').slice(0, 1024) },
+                        )
+                        .setTimestamp(Number.isNaN(parsedTimestamp.getTime()) ? new Date() : parsedTimestamp)
+                        .setFooter({ text: 'PayOS Webhook' });
+                    if (isSnowflake(txn.user_id)) embed.addFields({ name: 'User', value: `<@${txn.user_id}>`, inline: true });
+                    await channel.send({ embeds: [embed] });
                 }
             }
             res.json({ success: true });
         } catch (err) {
             console.error('[PayOS Webhook Error]:', err);
-            res.status(500).json({ error: err.message });
+            sendInternalError(res, err, 'API request failed');
         }
     });
 
     // ===== WEBHOOK: Card2K Callback =====
-    app.all('/api/webhooks/card2k', async (req, res) => {
+    app.post('/api/webhooks/card2k', async (req, res) => {
         // KHÔNG log req.query/req.body: chúng chứa `code` và `serial` — thông tin có giá trị tiền.
         const wlog = (...args) => { if (process.env.DEBUG_WEBHOOKS === '1') console.log('[Card2K]', ...args); };
         try {
             const payload = { ...req.query, ...req.body };
-            const { status, message, request_id, declared_value, value, amount, code, serial, telco, trans_id, callback_sign } = payload;
+            const { status, message, request_id, declared_value, value, code, serial, telco, trans_id, callback_sign } = payload;
+            const normalizedRequestId = typeof request_id === 'string' ? request_id.trim() : '';
+            const normalizedSignature = typeof callback_sign === 'string' ? callback_sign.trim().toLowerCase() : '';
+            const normalizedCode = typeof code === 'string' ? code : '';
+            const normalizedSerial = typeof serial === 'string' ? serial : '';
 
-            if (!request_id || !callback_sign) {
-                console.warn('[Card2K Webhook] Missing request_id or callback_sign');
+            if (!/^[A-Za-z0-9_-]{1,128}$/.test(normalizedRequestId)
+                || !/^[0-9a-f]{32}$/.test(normalizedSignature)
+                || normalizedCode.length > 128
+                || normalizedSerial.length > 128) {
+                console.warn('[Card2K Webhook] Invalid callback metadata');
                 return res.status(400).json({ error: 'Invalid payload' });
             }
 
             if (supabase) {
-                wlog('lookup request_id=', request_id);
-                const { data: txn, error: txnError } = await supabase.from('card_transactions').select('guild_id, channel_id, message_id, status').eq('request_id', request_id).maybeSingle();
+                wlog('lookup request_id=', normalizedRequestId);
+                const { data: txn, error: txnError } = await supabase.from('card_transactions').select('guild_id, channel_id, message_id, status').eq('request_id', normalizedRequestId).maybeSingle();
 
                 if (txnError || !txn) {
-                    console.warn(`[Card2K Webhook] Transaction not found: request_id=${request_id}`);
+                    console.warn(`[Card2K Webhook] Transaction not found: request_id=${normalizedRequestId}`);
                     return res.status(404).json({ error: 'Transaction not found' });
                 }
 
@@ -768,12 +845,12 @@ export function startDashboard(client) {
 
                 if (cardCfg.configured) {
                     const partnerKey = cardCfg.partnerKey;
-                    const signString = partnerKey + (code || '') + (serial || '');
+                    const signString = partnerKey + normalizedCode + normalizedSerial;
                     const computedSignature = crypto.createHash('md5').update(signString).digest('hex');
 
-                    // Không log chữ ký: md5(partnerKey‖code‖serial) có thể bị brute-force offline để lộ partnerKey.
-                    if (computedSignature !== callback_sign) {
-                        console.warn(`[Card2K Webhook] Signature mismatch for request_id=${request_id}`);
+                    // MD5 là định dạng bắt buộc của provider; so sánh timing-safe để tránh rò thêm tín hiệu.
+                    if (!safeEqualString(computedSignature, normalizedSignature)) {
+                        console.warn(`[Card2K Webhook] Signature mismatch for request_id=${normalizedRequestId}`);
                         return res.status(401).json({ error: 'Invalid Signature - Unauthorized' });
                     }
                     wlog('signature ok, status=', status, 'telco=', telco, 'trans_id=', trans_id);
@@ -781,7 +858,12 @@ export function startDashboard(client) {
                     // Chốt kết quả bằng hàm dùng chung với poller, để hai đường
                     // (callback đẩy về / bot chủ động hỏi) không bao giờ lệch logic.
                     const outcome = await applyCardResult(client, {
-                        request_id, status, message, trans_id, value, declared_value,
+                        request_id: normalizedRequestId,
+                        status,
+                        message: String(message || '').slice(0, 1000),
+                        trans_id: String(trans_id || '').slice(0, 128),
+                        value,
+                        declared_value,
                     }, 'Webhook');
                     wlog('apply result:', outcome.applied ? 'applied' : `skipped (${outcome.reason})`);
                 } else {
@@ -791,7 +873,7 @@ export function startDashboard(client) {
             res.json({ success: true });
         } catch (err) {
             console.error('[Card2K Webhook Error]:', err);
-            res.status(500).json({ error: err.message });
+            sendInternalError(res, err, 'API request failed');
         }
     });
 
@@ -819,18 +901,61 @@ export function startDashboard(client) {
                 timestamp: new Date().toISOString(),
             });
         } catch (err) {
-            res.status(500).json({ status: 'Down', error: err.message });
+            console.error('[Health API] Status check failed:', err);
+            res.status(503).json({ status: 'Down' });
         }
     });
     app.get('/api/incidents', async (req, res) => {
         try {
+            const auth = await getAuthenticatedUser(req);
+            if (!auth || auth.session.user_id !== process.env.BOT_OWNER_ID) {
+                return res.status(403).json({ error: 'Forbidden: Admin access only' });
+            }
             const { severity, startDate, endDate } = req.query;
+            const allowedSeverities = new Set(['all', 'error', 'warning', 'info']);
+            if (severity && !allowedSeverities.has(severity)) {
+                return res.status(400).json({ error: 'Invalid severity' });
+            }
+            const parseDateFilter = (value) => {
+                if (!value) return undefined;
+                const date = new Date(String(value));
+                return Number.isNaN(date.getTime()) ? null : date.toISOString();
+            };
+            const parsedStart = parseDateFilter(startDate);
+            const parsedEnd = parseDateFilter(endDate);
+            if (parsedStart === null || parsedEnd === null) {
+                return res.status(400).json({ error: 'Invalid date filter' });
+            }
+            const incidents = await getIncidents({ severity, startDate: parsedStart, endDate: parsedEnd, limit: 100 });
             res.json({
-                summary: await getIncidentSummary({ severity, startDate, endDate }),
-                incidents: await getIncidents({ severity, startDate, endDate }),
+                summary: {
+                    total: incidents.length,
+                    errors: incidents.filter(item => item.severity === 'error').length,
+                    warnings: incidents.filter(item => item.severity === 'warning').length,
+                    info: incidents.filter(item => item.severity === 'info').length,
+                },
+                incidents,
             });
         } catch (err) {
-            res.status(500).json({ error: err.message });
+            sendInternalError(res, err, 'API request failed');
+        }
+    });
+    app.get('/api/activities', async (req, res) => {
+        try {
+            const auth = await getAuthenticatedUser(req);
+            if (!auth || auth.session.user_id !== process.env.BOT_OWNER_ID) {
+                return res.status(403).json({ error: 'Forbidden: Admin access only' });
+            }
+            if (!supabase) return res.json([]);
+            const { data, error } = await supabase
+                .from('bot_activities')
+                .select('timestamp, guild_name, user_id, action, details')
+                .order('timestamp', { ascending: false })
+                .limit(100);
+            if (error) throw error;
+            res.json(data || []);
+        } catch (err) {
+            sendInternalError(res, err, 'API request failed');
         }
     });
     app.get('/api/services', async (req, res) => {
@@ -840,7 +965,7 @@ export function startDashboard(client) {
                 services: await getAllServicesStatus(),
             });
         } catch (err) {
-            res.status(500).json({ error: err.message });
+            sendInternalError(res, err, 'API request failed');
         }
     });
     app.get('/api/admin/bot-info', requireAdmin, (req, res) => {
@@ -879,7 +1004,7 @@ export function startDashboard(client) {
                 timestamp: new Date().toISOString(),
             });
         } catch (err) {
-            res.status(500).json({ error: err.message });
+            sendInternalError(res, err, 'API request failed');
         }
     });
     app.get('/api/admin/growth', requireAdmin, async (req, res) => {
@@ -893,7 +1018,7 @@ export function startDashboard(client) {
             if (error) throw error;
             res.json(data || []);
         } catch (err) {
-            res.status(500).json({ error: err.message });
+            sendInternalError(res, err, 'API request failed');
         }
     });
     app.get('/api/admin/sessions', requireAdmin, async (req, res) => {
@@ -907,12 +1032,13 @@ export function startDashboard(client) {
             if (error) throw error;
             res.json(data || []);
         } catch (err) {
-            res.status(500).json({ error: err.message });
+            sendInternalError(res, err, 'API request failed');
         }
     });
     app.post('/api/admin/sessions/:id/revoke', requireAdmin, async (req, res) => {
         try {
             if (!supabase) return res.status(500).json({ error: 'No database' });
+            if (!isSessionId(req.params.id)) return res.status(400).json({ error: 'Invalid session ID' });
             const { error } = await supabase.from('user_sessions').delete().eq('session_id', req.params.id);
             if (error) throw error;
             const forwardedFor = req.headers['x-forwarded-for'];
@@ -920,7 +1046,7 @@ export function startDashboard(client) {
             logSecurityEvent('SESSION_REVOKE', ip, req.headers['user-agent'], `Revoked session: ${req.params.id}`);
             res.json({ success: true });
         } catch (err) {
-            res.status(500).json({ error: err.message });
+            sendInternalError(res, err, 'API request failed');
         }
     });
     app.get('/api/admin/security-log', requireAdmin, async (req, res) => {
@@ -934,7 +1060,7 @@ export function startDashboard(client) {
             if (error) throw error;
             res.json(data || []);
         } catch (err) {
-            res.status(500).json({ error: err.message });
+            sendInternalError(res, err, 'API request failed');
         }
     });
     async function saveGrowthSnapshot() {
@@ -969,16 +1095,26 @@ export function startDashboard(client) {
                 return res.status(403).json({ error: 'Forbidden' });
             }
             if (!supabase) return res.status(500).json({ error: 'Database not configured' });
-            const { data, error } = await supabase
+            const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1);
+            const pageSize = Math.min(100, Math.max(1, Number.parseInt(req.query.limit, 10) || 50));
+            const from = (page - 1) * pageSize;
+            const { data, error, count } = await supabase
                 .from('ticket_transcripts')
-                .select('id, ticket_name, created_at, creator_id, closed_by, claimed_by')
+                .select('id, ticket_name, created_at, creator_id, closed_by, claimed_by', { count: 'exact' })
                 .eq('guild_id', guildId)
-                .order('created_at', { ascending: false });
+                .order('created_at', { ascending: false })
+                .range(from, from + pageSize - 1);
             if (error) throw error;
-            res.json(data || []);
+            res.json({
+                items: data || [],
+                page,
+                pageSize,
+                total: count || 0,
+                totalPages: Math.max(1, Math.ceil((count || 0) / pageSize)),
+            });
         } catch (err) {
             console.error('[API /transcripts] Error:', err);
-            res.status(500).json({ error: err.message });
+            sendInternalError(res, err, 'API request failed');
         }
     });
 
@@ -986,7 +1122,8 @@ export function startDashboard(client) {
         try {
             if (!supabase) return res.status(500).json({ error: 'Supabase not configured' });
             const { id } = req.params;
-            const { pwd } = req.query;
+            const authHeader = typeof req.headers.authorization === 'string' ? req.headers.authorization : '';
+            const transcriptPassword = authHeader.startsWith('Transcript ') ? authHeader.slice(11) : '';
 
             const { data, error } = await supabase
                 .from('ticket_transcripts')
@@ -1008,7 +1145,7 @@ export function startDashboard(client) {
                 // ignore auth errors
             }
 
-            if (!hasAdminBypass && data.password && data.password !== pwd) {
+            if (!hasAdminBypass && data.password && !safeEqualString(data.password, transcriptPassword)) {
                 return res.status(401).json({
                     error: 'Incorrect password or you do not have permission to access.',
                     meta: {

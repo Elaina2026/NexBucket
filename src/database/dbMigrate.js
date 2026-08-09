@@ -39,35 +39,38 @@ export async function runAutoMigrations() {
       )
     `);
 
-    const schemaSql = await fs.readFile(path.join(__dirname, 'schema.sql'), 'utf8');
-    await client.query(schemaSql);
-
     const files = (await fs.readdir(path.join(__dirname, 'migrations')))
       .filter(file => /^\d+_[a-z0-9_-]+\.sql$/i.test(file))
       .sort();
     const { rows } = await client.query('SELECT version FROM schema_migrations');
     const applied = new Set(rows.map(row => row.version));
 
-    let count = 0;
-    for (const file of files) {
-      const version = file.slice(0, -4);
-      if (applied.has(version)) continue;
+    const pendingFiles = files.filter(file => !applied.has(file.slice(0, -4)));
+    if (pendingFiles.length === 0) {
+      console.log('✅ [DB Migration] Schema up-to-date.');
+    } else {
+      const schemaSql = await fs.readFile(path.join(__dirname, 'schema.sql'), 'utf8');
+      await client.query(schemaSql);
 
-      const sql = await fs.readFile(path.join(__dirname, 'migrations', file), 'utf8');
-      await client.query('BEGIN');
-      try {
-        await client.query(sql);
-        await client.query('INSERT INTO schema_migrations (version) VALUES ($1)', [version]);
-        await client.query('COMMIT');
-        count++;
-        console.log(`  ✅ Applied migration: ${file}`);
-      } catch (error) {
-        await client.query('ROLLBACK');
-        throw error;
+      let count = 0;
+      for (const file of pendingFiles) {
+        const version = file.slice(0, -4);
+        const sql = await fs.readFile(path.join(__dirname, 'migrations', file), 'utf8');
+        await client.query('BEGIN');
+        try {
+          await client.query(sql);
+          await client.query('INSERT INTO schema_migrations (version) VALUES ($1)', [version]);
+          await client.query('COMMIT');
+          count++;
+          console.log(`  ✅ Applied migration: ${file}`);
+        } catch (error) {
+          await client.query('ROLLBACK');
+          throw error;
+        }
       }
-    }
 
-    console.log(count ? `✅ [DB Migration] Applied ${count} migration(s).` : '✅ [DB Migration] Schema up-to-date.');
+      console.log(`✅ [DB Migration] Applied ${count} migration(s).`);
+    }
   } catch (error) {
     console.error('❌ [DB Migration] Failed:', error.message);
     throw error;

@@ -6,10 +6,16 @@ import path from 'path';
 import ms from 'ms';
 import { commands as deployCommands } from '../ticket/deploy-commands.js';
 import { supabase } from '../database/supabaseClient.js';
-async function getReminders() {
+async function getReminders(now = Date.now()) {
   if (!supabase) return [];
   try {
-    const { data } = await supabase.from('reminders').select('*').eq('done', false);
+    const { data } = await supabase
+      .from('reminders')
+      .select('id, user_id, message, end_time, created_at, done')
+      .eq('done', false)
+      .lte('end_time', now)
+      .order('end_time', { ascending: true })
+      .limit(100);
     if (!data) return [];
     return data.map(r => ({
       id: r.id,
@@ -36,8 +42,8 @@ async function markReminderDone(id) {
   await supabase.from('reminders').update({ done: true }).eq('id', id);
 }
 export async function checkReminders(client) {
-  const data = await getReminders();
   const now = Date.now();
+  const data = await getReminders(now);
   for (let i = 0; i < data.length; i++) {
     const r = data[i];
     if (!r.done && now >= r.endTime) {
@@ -60,7 +66,6 @@ export async function checkReminders(client) {
 }
 import { saveBotRoles, isBotOwner, getBotRoles } from './permissionManager.js';
 import { addToBlacklist, removeFromBlacklist } from './blacklistManager.js';
-import { restoreBackup } from './backupManager.js';
 async function applyBotRolesOverwrites(channel, guildId, perms) {
   const roles = getBotRoles(guildId);
   if (!roles) return;
@@ -197,7 +202,7 @@ export async function handleUtilCommand(interaction) {
       .addFields(
         {
           name: '🎫 Ticket Commands',
-          value: '`/setup-ticket` - Set up the ticket system\n`/ticket-send` - Send the ticket panel\n`/ticket-add-staff` - Add user to a ticket\n`/ticket-remove-staff` - Remove user from a ticket\n`/ticket-add-staff-all` - Add user to all tickets',
+          value: '`/ticket-edit` - Configure and send the ticket panel\n`/ticket-add-staff` - Add a user or role to a ticket\n`/ticket-add-staff-all` - Add staff roles to all open tickets',
           inline: false
         },
         {
@@ -207,7 +212,7 @@ export async function handleUtilCommand(interaction) {
         },
         {
           name: '🛡️ Moderation Commands',
-          value: '`/ban`, `/unban`, `/tempban` - Ban management\n`/kick`, `/timeout`, `/removetimeout` - Kick & Timeout\n`/mute`, `/unmute`, `/hardmute` - Mute management\n`/warn`, `/warnings`, `/clearwarns` - Warning system',
+          value: '`/ban`, `/unban`, `/tempban`, `/banlist` - Ban management\n`/kick`, `/timeout`, `/removetimeout` - Kick & Timeout\n`/mute`, `/unmute`, `/hardmute` - Mute management\n`/warn` - Warning system with automatic threshold bans',
           inline: false
         },
         {
@@ -659,7 +664,7 @@ export async function handleBotGuideSelect(interaction) {
   switch (value) {
     case 'guide_ticket':
       title = '🎫 Ticket Management Guide';
-      description = `**1. Setup Ticket:**\nUse \`/setup-ticket\` to create a panel. Users click it to open a private support channel.\n\n**2. Add Staff:**\n\`/ticket-add-staff @role\` (Add role to view ticket)\n\`/ticket-add-staff-all\` (Add staff roles to all open tickets)\n\n**3. Manage Tickets:**\n**Claim** button: Claim the ticket.\n**Close** button: Close ticket (optional transcript saving).`;
+      description = `**1. Setup Ticket:**\nUse \`/ticket-edit\` to configure and send a panel. Users click it to open a private support channel.\n\n**2. Add Staff:**\n\`/ticket-add-staff\` (Add a user or role to a ticket)\n\`/ticket-add-staff-all\` (Add staff roles to all open tickets)\n\n**3. Manage Tickets:**\n**Claim** button: Claim the ticket.\n**Close** button: Close ticket (optional transcript saving).`;
       break;
     case 'guide_mod':
       title = '🛡️ Moderation Guide';
@@ -712,11 +717,11 @@ export async function handleRestoreCommand(message) {
     await message.channel.awaitMessages({ filter, max: 1, time: 10000, errors: ['time'] });
     const progressMsg = await message.reply('⏳ Restoring server from backup... This might take a while.');
     try {
-      const { restoreBackup, backupServer } = await import('./backupManager.js');
+      const { restoreBackup, createBackup } = await import('./backupManager.js');
       const { clearServerRaidStatus } = await import('../moderation/antiRaid.js');
       await restoreBackup(message.client, message.guild.id, message.channel.id);
       clearServerRaidStatus(message.guild.id);
-      await backupServer(message.client, message.guild.id);
+      await createBackup(message.client, message.guild.id);
       await progressMsg.edit('✅ **Server restoration complete!** Auto Backup has been resumed.').catch(() => {});
     } catch (err) {
       console.error(err);

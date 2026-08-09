@@ -1,30 +1,30 @@
 import { EmbedBuilder } from '../utils/embed.js';
 import dns from 'node:dns';
 import { AttachmentBuilder, MessageFlags } from 'discord.js';
-import { generateBanner } from './bannerGenerator.js';
-import util from 'minecraft-server-util';
 import { supabase } from '../database/supabaseClient.js';
 import { getAllSections, saveSection } from '../database/guildSettings.js';
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-function getRandomBanner() {
-    const bannersDir = path.join(__dirname, '..', '..', 'assets', 'banners');
-    try {
-        if (!fs.existsSync(bannersDir)) return path.join(__dirname, '..', '..', 'assets', 'unknown_server.png');
-        const files = fs.readdirSync(bannersDir).filter(file => /\.(png|jpe?g)$/i.test(file));
-        if (files.length === 0) return path.join(__dirname, '..', '..', 'assets', 'unknown_server.png');
-        return path.join(bannersDir, files[Math.floor(Math.random() * files.length)]);
-    } catch {
-        return path.join(__dirname, '..', '..', 'assets', 'unknown_server.png');
-    }
-}
+import { getMinecraftBannerFallback, renderMinecraftBanner } from './minecraftBanner.js';
 
 dns.setServers(['8.8.8.8', '1.1.1.1', '8.8.4.4', '1.0.0.1']);
 const BOT_OWNER_ID = process.env.BOT_OWNER_ID || '';
+const SERVER_SNAPSHOT_MS = Math.max(30000, Number(process.env.MINECRAFT_CONFIG_CACHE_MS) || 5 * 60 * 1000);
+let allServersSnapshot = null;
+const guildWrites = new Map();
+
+export function invalidateMinecraftServersCache() {
+    allServersSnapshot = null;
+}
+
+async function serializeGuildWrite(guildId, operation) {
+    const previous = guildWrites.get(guildId) || Promise.resolve();
+    const next = previous.catch(() => {}).then(operation);
+    guildWrites.set(guildId, next);
+    try {
+        return await next;
+    } finally {
+        if (guildWrites.get(guildId) === next) guildWrites.delete(guildId);
+    }
+}
 
 function normalizeServer(server, guildId) {
     return {
@@ -45,11 +45,17 @@ export async function getServers(guildId = null) {
             const settings = await getAllSections(guildId);
             return (settings.minecraft?.servers || []).map(server => normalizeServer(server, guildId));
         }
+        const now = Date.now();
+        if (allServersSnapshot && allServersSnapshot.expiresAt > now) {
+            return structuredClone(allServersSnapshot.servers);
+        }
         const { data, error } = await supabase.from('guild_settings').select('guild_id, minecraft');
         if (error) throw error;
-        return (data || []).flatMap(row =>
+        const servers = (data || []).flatMap(row =>
             (row.minecraft?.servers || []).map(server => normalizeServer(server, row.guild_id))
         );
+        allServersSnapshot = { servers: structuredClone(servers), expiresAt: now + SERVER_SNAPSHOT_MS };
+        return servers;
     } catch (error) {
         console.error('[Status] Failed to load Minecraft config:', error.message || error);
         return [];
@@ -68,6 +74,7 @@ async function saveGuildServers(guildId, servers) {
             };
         }),
     });
+    invalidateMinecraftServersCache();
 }
 
 export async function saveServers(servers) {
@@ -79,29 +86,41 @@ export async function saveServers(servers) {
         grouped.get(normalized.guildId).push(normalized);
     }
     for (const [guildId, updates] of grouped) {
-        const current = await getServers(guildId);
-        const byChannel = new Map(current.map(server => [server.channelId, server]));
-        for (const server of updates) byChannel.set(server.channelId, server);
-        await saveGuildServers(guildId, [...byChannel.values()]);
+        await serializeGuildWrite(guildId, async () => {
+            const current = await getServers(guildId);
+            const byChannel = new Map(current.map(server => [server.channelId, server]));
+            for (const server of updates) byChannel.set(server.channelId, server);
+            await saveGuildServers(guildId, [...byChannel.values()]);
+        });
     }
 }
 
 export async function addServer(server) {
     const normalized = normalizeServer(server, server.guildId);
-    const current = await getServers(normalized.guildId);
-    if (current.some(item => item.channelId === normalized.channelId)) {
-        throw new Error('Channel is already tracking a Minecraft server');
-    }
-    await saveGuildServers(normalized.guildId, [...current, normalized]);
-    return normalized;
+    return serializeGuildWrite(normalized.guildId, async () => {
+        const current = await getServers(normalized.guildId);
+        if (current.some(item => item.channelId === normalized.channelId)) {
+            throw new Error('Channel is already tracking a Minecraft server');
+        }
+        await saveGuildServers(normalized.guildId, [...current, normalized]);
+        return normalized;
+    });
 }
 
 export async function removeServer(channelId, guildId = null) {
-    const servers = await getServers(guildId);
+    if (guildId) {
+        return serializeGuildWrite(guildId, async () => {
+            const servers = await getServers(guildId);
+            const existing = servers.find(server => server.channelId === channelId);
+            if (!existing) return null;
+            await saveGuildServers(guildId, servers.filter(server => server.channelId !== channelId));
+            return existing;
+        });
+    }
+    const servers = await getServers();
     const existing = servers.find(server => server.channelId === channelId);
     if (!existing) return null;
-    await saveGuildServers(existing.guildId, servers.filter(server => server.channelId !== channelId));
-    return existing;
+    return removeServer(channelId, existing.guildId);
 }
 
 export async function getBlacklist() {
@@ -123,33 +142,107 @@ export async function saveBlacklist(list) {
     }
 }
 
+// Geolocation cache — avoids hitting ip-api.com on every status update cycle
+const geoCache = new Map();
+const GEO_CACHE_TTL = 3600000; // 1 hour
+
+function countryCodeToFlag(countryCode) {
+    const code = String(countryCode || '').toUpperCase();
+    if (!/^[A-Z]{2}$/.test(code)) return '🌍';
+    return String.fromCodePoint(...[...code].map(char => 127397 + char.charCodeAt(0)));
+}
+
+async function getGeoInfo(ip) {
+    if (/^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|127\.|localhost)/i.test(ip)) {
+        return { location: '🏠 Local Network', isp: 'N/A' };
+    }
+    const cached = geoCache.get(ip);
+    if (cached && Date.now() - cached.timestamp < GEO_CACHE_TTL) {
+        return cached.data;
+    }
+    try {
+        const res = await fetch(`http://ip-api.com/json/${ip}?fields=country,countryCode,city,isp,status`, {
+            signal: AbortSignal.timeout(5000),
+        });
+        const json = await res.json();
+        if (json.status === 'success') {
+            const data = {
+                location: `${countryCodeToFlag(json.countryCode)} ${json.city || 'Unknown'}, ${json.country || 'Unknown'}`,
+                isp: json.isp || 'Unknown',
+            };
+            geoCache.set(ip, { data, timestamp: Date.now() });
+            return data;
+        }
+    } catch {}
+    return { location: '🌍 Unknown', isp: 'Unknown' };
+}
+
 export async function updateServerStatus(server, client) {
     try {
         const guild = client.guilds.cache.get(server.guildId);
         if (!guild) return;
         const channel = guild.channels.cache.get(server.channelId);
         if (!channel) return;
-        let statusData = null;
-        let online = false;
+
+        const serverConfig = server;
+        const ip = server.ip;
+        const port = server.port;
+        const target = `${ip}:${port}`;
+
+        let banner;
         try {
-            statusData = await util.status(server.ip, server.port, { timeout: 5000 });
-            online = true;
-        } catch {}
-            const bannerBuffer = await generateBanner({
-            backgroundUrl: getRandomBanner(),
-            serverName: server.name || server.ip,
-            target: `${server.ip}:${server.port}`,
-            ip: server.ip,
-            port: server.port,
-            data: statusData,
-            isOnline: online,
-        });
-        const attachment = new AttachmentBuilder(bannerBuffer, { name: 'server-status.png' });
-        const embed = new EmbedBuilder()
-            .setColor(online ? '#2ecc71' : '#e74c3c')
-            .setTitle(online ? `🟢 ${server.ip}:${server.port}` : `🔴 ${server.ip}:${server.port}`)
-            .setImage('attachment://server-status.png')
-            .setTimestamp();
+            banner = await renderMinecraftBanner(server);
+        } catch (error) {
+            if (error.code === 'MC_BANNER_BUSY') return;
+            console.error(`[Status] Banner failed for ${target}; using fallback image:`, error.message || error);
+            const fallbackStatus = error.status || { online: false, error: error.message || 'Banner renderer failed' };
+            banner = { png: await getMinecraftBannerFallback(), status: fallbackStatus };
+        }
+        const data = banner.status;
+        const attachment = new AttachmentBuilder(banner.png, { name: 'server-status.png' });
+
+        let embed;
+
+        if (!data.online) {
+            const errorDetail = data.error || `Could not connect to the server ${target}`;
+            embed = new EmbedBuilder()
+                .setColor('#e74c3c')
+                .setTitle(`❌ Offline — ${serverConfig.name || target}`)
+                .setDescription(
+                    `**Connection:** \`${target}\`\n` +
+                    `**Error details:** \`${errorDetail}\`\n` +
+                    `**Troubleshooting:**\n` +
+                    `• Ensure the server is online and port is forwarded.\n` +
+                    `• Verify that the IP/domain and port are correct.`
+                )
+                .setImage('attachment://server-status.png')
+                .setTimestamp();
+        } else {
+            const onlinePlayers = data.onlinePlayers || 0;
+            const maxPlayers = data.maxPlayers || 0;
+            const percent = maxPlayers > 0 ? Math.round((onlinePlayers / maxPlayers) * 100) : 0;
+            const version = data.versionName || 'Unknown';
+            const latencyText = `${data.latencyMillis}ms`;
+
+            const geo = await getGeoInfo(ip);
+            const location = geo.location;
+            const isp = geo.isp;
+
+            embed = new EmbedBuilder()
+                .setColor('#2ecc71')
+                .setTitle(`✅ Online — ${serverConfig.name || target}`)
+                .setDescription(
+                    `**Connection:** \`${ip}:${port}\`\n` +
+                    `**Latency:** ${latencyText}\n` +
+                    `**Players:** \`${onlinePlayers}/${maxPlayers}\` (${percent}%)\n` +
+                    `**Version:** \`${version}\`\n` +
+                    `**Location:** ${location}\n` +
+                    `**ISP:** ${isp}`
+                )
+                .setImage('attachment://server-status.png')
+                .setTimestamp();
+        }
+
         let message = null;
         if (server.messageId && server.messageId !== 'pending') {
             message = await channel.messages.fetch(server.messageId).catch(() => null);
@@ -174,19 +267,64 @@ export async function updateAllStatus(client) {
 export async function handleMcServer(interaction) {
     const ip = interaction.options.getString('ip');
     const port = interaction.options.getInteger('port') || 25565;
+    const target = `${ip}:${port}`;
     await interaction.deferReply();
+
     try {
-        const result = await util.status(ip, port, { timeout: 5000 });
-        const embed = new EmbedBuilder()
-            .setColor('#2ecc71')
-            .setTitle(`🟢 ${ip}:${port}`)
-            .addFields(
-                { name: 'Players', value: `${result.players.online}/${result.players.max}`, inline: true },
-                { name: 'Version', value: result.version?.name || 'Unknown', inline: true },
-            );
-        await interaction.editReply({ embeds: [embed] });
-    } catch {
-        await interaction.editReply({ content: `🔴 Cannot connect to ${ip}:${port}` });
+        let banner;
+        try {
+            banner = await renderMinecraftBanner({ ip, port, name: ip });
+        } catch (error) {
+            console.error(`[Status] Banner failed for ${target}; using fallback image:`, error.message || error);
+            const fallbackStatus = error.status || { online: false, error: error.message || 'Banner renderer failed' };
+            banner = { png: await getMinecraftBannerFallback(), status: fallbackStatus };
+        }
+
+        const data = banner.status;
+        const attachment = new AttachmentBuilder(banner.png, { name: 'server-status.png' });
+        let embed;
+
+        if (!data.online) {
+            const errorDetail = data.error || `Could not connect to the server ${target}`;
+            embed = new EmbedBuilder()
+                .setColor('#e74c3c')
+                .setTitle(`❌ Offline — ${target}`)
+                .setDescription(
+                    `**Connection:** \`${target}\`\n` +
+                    `**Error details:** \`${errorDetail}\`\n` +
+                    `**Troubleshooting:**\n` +
+                    `• Ensure the server is online and port is forwarded.\n` +
+                    `• Verify that the IP/domain and port are correct.`
+                )
+                .setImage('attachment://server-status.png')
+                .setTimestamp();
+        } else {
+            const onlinePlayers = data.onlinePlayers || 0;
+            const maxPlayers = data.maxPlayers || 0;
+            const percent = maxPlayers > 0 ? Math.round((onlinePlayers / maxPlayers) * 100) : 0;
+            const version = data.versionName || 'Unknown';
+            const latencyText = `${data.latencyMillis}ms`;
+            const { location, isp } = await getGeoInfo(ip);
+
+            embed = new EmbedBuilder()
+                .setColor('#2ecc71')
+                .setTitle(`✅ Online — ${target}`)
+                .setDescription(
+                    `**Connection:** \`${target}\`\n` +
+                    `**Latency:** ${latencyText}\n` +
+                    `**Players:** \`${onlinePlayers}/${maxPlayers}\` (${percent}%)\n` +
+                    `**Version:** \`${version}\`\n` +
+                    `**Location:** ${location}\n` +
+                    `**ISP:** ${isp}`
+                )
+                .setImage('attachment://server-status.png')
+                .setTimestamp();
+        }
+
+        await interaction.editReply({ embeds: [embed], files: [attachment] });
+    } catch (error) {
+        console.error(`[Status] mcserver check failed for ${target}:`, error.message || error);
+        await interaction.editReply({ content: `🔴 Cannot connect to ${target}` });
     }
 }
 

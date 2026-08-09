@@ -1,3 +1,5 @@
+import crypto from 'node:crypto';
+
 export function pickKey(obj, ...keys) {
   for (const key of keys) {
     const value = obj?.[key];
@@ -35,4 +37,43 @@ export function parseCookies(req) {
 
 export function errorMessage(error) {
   return error instanceof Error ? error.message : String(error);
+}
+
+export function isSecureDashboardUrl(value) {
+  try {
+    return new URL(value).protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+export function cookieHeader(name, value, { maxAge, secure = false } = {}) {
+  const parts = [
+    `${name}=${encodeURIComponent(value)}`,
+    'HttpOnly',
+    'Path=/',
+    'SameSite=Lax',
+  ];
+  if (Number.isSafeInteger(maxAge)) parts.push(`Max-Age=${maxAge}`);
+  if (secure) parts.push('Secure');
+  return parts.join('; ');
+}
+
+export function safeEqualString(left, right) {
+  const leftBuffer = Buffer.from(String(left ?? ''));
+  const rightBuffer = Buffer.from(String(right ?? ''));
+  return leftBuffer.length === rightBuffer.length
+    && crypto.timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+export function isAllowedImageUrl(value, allowedDomains) {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:'
+      && !url.username
+      && !url.password
+      && allowedDomains.some(domain => url.hostname === domain || url.hostname.endsWith(`.${domain}`));
+  } catch {
+    return false;
+  }
 }

@@ -59,16 +59,17 @@ export function sanitizeString(str) {
     if (typeof str !== 'string') return str;
     return str.trim();
 }
-export function sanitizePayload(obj) {
+export function sanitizePayload(obj, depth = 0) {
+    if (depth > 12) return null;
     if (obj === null || obj === undefined) return obj;
-    if (typeof obj === 'string') return sanitizeString(obj);
-    if (Array.isArray(obj)) return obj.map(sanitizePayload);
+    if (typeof obj === 'string') return sanitizeString(obj).slice(0, 10000);
+    if (Array.isArray(obj)) return obj.slice(0, 500).map(value => sanitizePayload(value, depth + 1));
     if (typeof obj === 'object') {
-        const sanitized = {};
-        for (const [key, value] of Object.entries(obj)) {
+        const sanitized = Object.create(null);
+        for (const [key, value] of Object.entries(obj).slice(0, 500)) {
             if (key === '__proto__' || key === 'constructor' || key === 'prototype') continue;
-            const cleanKey = sanitizeString(key);
-            sanitized[cleanKey] = sanitizePayload(value);
+            const cleanKey = sanitizeString(key).slice(0, 100);
+            sanitized[cleanKey] = sanitizePayload(value, depth + 1);
         }
         return sanitized;
     }

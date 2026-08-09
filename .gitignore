@@ -9,6 +9,7 @@ node_modules/
 # Runtime data
 data/
 assets/emoji_cache/
+MCServerBanner/node-assets/
 *.log
 logs/
 

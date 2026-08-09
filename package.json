@@ -6,12 +6,13 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "test": "node --test src/dashboard/*.test.js src/banking/*.test.js src/utils/*.test.js",
+    "test": "node --test src/**/*.test.js",
+    "assets:prepare": "node scripts/prepare-mc-banner-assets.cjs",
     "start": "node index.js",
     "dev": "node --watch index.js"
   },
   "dependencies": {
-    "@napi-rs/canvas": "^1.0.0",
+    "@napi-rs/canvas": "^1.0.3",
     "@payos/node": "^1.0.10",
     "@supabase/supabase-js": "^2.110.0",
     "axios": "^1.18.0",
@@ -21,11 +22,11 @@
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "express-rate-limit": "^8.6.0",
-    "minecraft-server-util": "^5.4.4",
     "ms": "^2.1.3",
     "pg": "^8.22.0",
     "sharp": "^0.35.3",
-    "uuid": "^14.0.1"
+    "uuid": "^14.0.1",
+    "yauzl": "^3.4.0"
   },
   "overrides": {
     "discord-html-transcripts": {
@@ -33,6 +34,6 @@
     }
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=24.0.0"
   }
 }

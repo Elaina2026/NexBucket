@@ -13,6 +13,7 @@ const POLL_INTERVAL_MS = 10 * 1000;     // nhịp quét: 10 giây
 const GRACE_PERIOD_MS = 5 * 1000;       // để callback có cơ hội về trước
 const BATCH_SIZE = 15;                  // giới hạn số lần gọi API mỗi vòng
 const REQUEST_GAP_MS = 300;             // giãn cách để không dội API của họ
+const EMPTY_BACKOFF_MAX_MS = 2 * 60 * 1000;
 
 // Giãn dần theo tuổi giao dịch: thẻ vừa gửi thì hỏi liên tục cho người dùng thấy
 // kết quả ngay, thẻ càng cũ (nhiều khả năng Card2K đang xử lý tay) thì hỏi thưa dần.
@@ -27,6 +28,18 @@ const BACKOFF_TIERS = [
 // request_id -> thời điểm hỏi Card2K gần nhất. Chỉ chứa giao dịch đang treo nên
 // kích thước luôn nhỏ; dòng nào chốt xong sẽ bị xoá khỏi map.
 const lastCheckedAt = new Map();
+let emptyPolls = 0;
+let nextDatabasePollAt = 0;
+
+export function getEmptyPollDelay(emptyCount) {
+    if (!Number.isSafeInteger(emptyCount) || emptyCount <= 0) return POLL_INTERVAL_MS;
+    return Math.min(POLL_INTERVAL_MS * (2 ** Math.min(emptyCount, 4)), EMPTY_BACKOFF_MAX_MS);
+}
+
+export function wakeCardStatusPoller() {
+    emptyPolls = 0;
+    nextDatabasePollAt = 0;
+}
 
 function shouldCheckNow(requestId, ageMs, now) {
     const tier = BACKOFF_TIERS.find(t => ageMs < t.maxAge);
@@ -74,6 +87,7 @@ async function pollPendingCards(client) {
     if (!supabase) return;
 
     const now = Date.now();
+    if (now < nextDatabasePollAt) return;
     const { data: pending, error } = await supabase
         .from('card_transactions')
         .select('request_id, guild_id, telco, amount, code, serial, status, created_at')
@@ -84,9 +98,17 @@ async function pollPendingCards(client) {
 
     if (error) {
         console.error('[Card2K Poller] Failed to load pending transactions:', error.message);
+        nextDatabasePollAt = now + POLL_INTERVAL_MS;
         return;
     }
-    if (!pending || pending.length === 0) return;
+    if (!pending || pending.length === 0) {
+        emptyPolls++;
+        nextDatabasePollAt = now + getEmptyPollDelay(emptyPolls);
+        lastCheckedAt.clear();
+        return;
+    }
+    emptyPolls = 0;
+    nextDatabasePollAt = now + POLL_INTERVAL_MS;
 
     // Dọn các request_id không còn treo (đã chốt hoặc quá hạn) khỏi bộ nhớ.
     const stillPending = new Set(pending.map(t => t.request_id));

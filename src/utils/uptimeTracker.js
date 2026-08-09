@@ -1,6 +1,7 @@
-const HISTORY_SLOTS = 30; 
-const CHECK_INTERVAL = 10 * 60 * 1000; 
-const CLEANUP_INTERVAL = 24 * 60 * 60 * 1000; 
+const HISTORY_SLOTS = 30;
+const CHECK_INTERVAL = 10 * 60 * 1000;
+const CLEANUP_INTERVAL = 24 * 60 * 60 * 1000;
+const HISTORY_CACHE_MS = 25 * 1000;
 const SERVICES = {
     'bot-core': { name: 'Discord Bot Core', description: 'WebSocket connection, command handling, and event processing.' },
     'database': { name: 'Database (Supabase)', description: 'PostgreSQL database for storing configurations and user data.' },
@@ -12,6 +13,9 @@ const SERVICES = {
     'jtc': { name: 'Join-To-Create Voice', description: 'Automatic temporary voice channel creation and management.' },
 };
 let supabaseClient = null;
+let historyCache = null;
+let historyPending = null;
+
 async function getSupabase() {
     if (supabaseClient) return supabaseClient;
     try {
@@ -20,181 +24,159 @@ async function getSupabase() {
         return supabase;
     } catch { return null; }
 }
-let lastUptimeAlertTime = 0;
-async function recordCheck(serviceId, status) {
+
+async function recordChecks(statuses) {
     const supabase = await getSupabase();
     if (!supabase) return;
-    const { error } = await supabase.from('uptime_checks').insert([{
-        timestamp: new Date().toISOString(),
+    const timestamp = new Date().toISOString();
+    const rows = Object.entries(statuses).map(([serviceId, status]) => ({
+        timestamp,
         service_id: serviceId,
-        status: status
-    }]);
-    if (error) {
-        console.error(`[UptimeTracker DB Error] ${error.message || 'fetch failed'}`);
+        status,
+    }));
+    const { error } = await supabase.from('uptime_checks').insert(rows);
+    if (error) console.error(`[UptimeTracker DB Error] ${error.message || 'fetch failed'}`);
+    else historyCache = null;
+}
+
+async function loadRecentHistory() {
+    const now = Date.now();
+    if (historyCache && historyCache.expiresAt > now) return historyCache.rows;
+    if (historyPending) return historyPending;
+    historyPending = (async () => {
+        const supabase = await getSupabase();
+        if (!supabase) return [];
+        const cutoff = new Date(now - HISTORY_SLOTS * 3600000).toISOString();
+        const { data, error } = await supabase
+            .from('uptime_checks')
+            .select('service_id, status, timestamp')
+            .gte('timestamp', cutoff)
+            .order('timestamp', { ascending: true });
+        if (error) return [];
+        historyCache = { rows: data || [], expiresAt: Date.now() + HISTORY_CACHE_MS };
+        return historyCache.rows;
+    })();
+    try {
+        return await historyPending;
+    } finally {
+        historyPending = null;
     }
 }
-async function getRecentChecks(serviceId, hours = HISTORY_SLOTS) {
-    const supabase = await getSupabase();
-    if (!supabase) return [];
-    const cutoff = new Date(Date.now() - hours * 3600000).toISOString();
-    const { data, error } = await supabase
-        .from('uptime_checks')
-        .select('*')
-        .eq('service_id', serviceId)
-        .gte('timestamp', cutoff)
-        .order('timestamp', { ascending: true });
-    if (error) return [];
-    return data;
+
+export function groupChecksByService(rows) {
+    const grouped = new Map(Object.keys(SERVICES).map(id => [id, []]));
+    for (const row of rows || []) {
+        if (grouped.has(row.service_id)) grouped.get(row.service_id).push(row);
+    }
+    return grouped;
 }
-async function getUptimeBars(serviceId, rawHistory) {
+
+function getUptimeBars(rawHistory) {
     const bars = [];
     const now = Date.now();
     for (let i = HISTORY_SLOTS - 1; i >= 0; i--) {
         const hourStart = now - (i + 1) * 3600000;
         const hourEnd = now - i * 3600000;
         const checksInHour = rawHistory.filter(c => {
-            const t = new Date(c.timestamp).getTime();
-            return t >= hourStart && t < hourEnd;
+            const time = new Date(c.timestamp).getTime();
+            return time >= hourStart && time < hourEnd;
         });
         if (checksInHour.length === 0) {
             bars.push({ hour: new Date(hourStart).toISOString(), status: 'unknown' });
-        } else {
-            const downCount = checksInHour.filter(c => c.status === 'down').length;
-            const degradedCount = checksInHour.filter(c => c.status === 'degraded').length;
-            if (downCount > checksInHour.length / 2) {
-                bars.push({ hour: new Date(hourStart).toISOString(), status: 'down' });
-            } else if (downCount > 0 || degradedCount > 0) {
-                bars.push({ hour: new Date(hourStart).toISOString(), status: 'degraded' });
-            } else {
-                bars.push({ hour: new Date(hourStart).toISOString(), status: 'up' });
-            }
+            continue;
         }
+        const downCount = checksInHour.filter(c => c.status === 'down').length;
+        const degradedCount = checksInHour.filter(c => c.status === 'degraded').length;
+        bars.push({
+            hour: new Date(hourStart).toISOString(),
+            status: downCount > checksInHour.length / 2
+                ? 'down'
+                : (downCount > 0 || degradedCount > 0 ? 'degraded' : 'up'),
+        });
     }
     return bars;
 }
+
 async function cleanupOldData() {
     const supabase = await getSupabase();
     if (!supabase) return;
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 3600000).toISOString();
-    const { error: err1 } = await supabase.from('uptime_checks').delete().lt('timestamp', sevenDaysAgo);
-    if (err1) console.error('[DB Cleanup Error] uptime_checks:', err1);
-    else console.log('[DB Cleanup] Cleaned up old uptime checks');
-    const { error: err2 } = await supabase.from('incidents').delete().lt('timestamp', sevenDaysAgo);
-    if (err2) console.error('[DB Cleanup Error] incidents:', err2);
-    else console.log('[DB Cleanup] Cleaned up old incidents');
+    const { error: uptimeError } = await supabase.from('uptime_checks').delete().lt('timestamp', sevenDaysAgo);
+    if (uptimeError) console.error('[DB Cleanup Error] uptime_checks:', uptimeError);
+    const { error: incidentError } = await supabase.from('incidents').delete().lt('timestamp', sevenDaysAgo);
+    if (incidentError) console.error('[DB Cleanup Error] incidents:', incidentError);
+    historyCache = null;
 }
-async function runHealthChecks(client) {
-    const wsPing = client.ws.ping;
-    if (!client.isReady()) {
-        await recordCheck('bot-core', 'down');
-    } else if (wsPing > 500) {
-        await recordCheck('bot-core', 'degraded');
-    } else {
-        await recordCheck('bot-core', 'up');
-    }
+
+async function moduleLoads(path) {
     try {
-        const { supabase } = await import('../database/supabaseClient.js');
-        if (!supabase) {
-            await recordCheck('database', 'down');
-        } else {
+        await import(path);
+        return 'up';
+    } catch {
+        return 'down';
+    }
+}
+
+async function runHealthChecks(client) {
+    const statuses = {
+        'bot-core': !client.isReady() ? 'down' : (client.ws.ping > 500 ? 'degraded' : 'up'),
+        moderation: client.isReady() ? 'up' : 'down',
+    };
+    try {
+        const supabase = await getSupabase();
+        if (!supabase) statuses.database = 'down';
+        else {
             const { error } = await supabase.from('guild_settings').select('guild_id').limit(1);
-            await recordCheck('database', error ? 'degraded' : 'up');
+            statuses.database = error ? 'degraded' : 'up';
         }
     } catch {
-        await recordCheck('database', 'down');
+        statuses.database = 'down';
     }
-    try {
-        await import('../ticket/configManager.js');
-        await recordCheck('tickets', 'up');
-    } catch {
-        await recordCheck('tickets', 'down');
-    }
-    try {
-        await import('../welcome/welcomeManager.js');
-        await recordCheck('welcome', 'up');
-    } catch {
-        await recordCheck('welcome', 'down');
-    }
-    await recordCheck('moderation', client.isReady() ? 'up' : 'down');
-    try {
-        await import('../status/statusManager.js');
-        await recordCheck('status', 'up');
-    } catch {
-        await recordCheck('status', 'down');
-    }
-    try {
-        await import('../banking/bankManager.js');
-        await recordCheck('banking', 'up');
-    } catch {
-        await recordCheck('banking', 'down');
-    }
-    try {
-        await import('../utils/jtcManager.js');
-        await recordCheck('jtc', 'up');
-    } catch {
-        await recordCheck('jtc', 'down');
-    }
+    const modules = await Promise.all([
+        moduleLoads('../ticket/configManager.js'),
+        moduleLoads('../welcome/welcomeManager.js'),
+        moduleLoads('../status/statusManager.js'),
+        moduleLoads('../banking/bankManager.js'),
+        moduleLoads('../utils/jtcManager.js'),
+    ]);
+    [statuses.tickets, statuses.welcome, statuses.status, statuses.banking, statuses.jtc] = modules;
+    await recordChecks(statuses);
 }
-let activeClient = null;
+
 export function startUptimeTracker(client) {
     if (!process.env.SUPABASE_URL) {
         console.warn('⚠️ [UptimeTracker] No Supabase URL. Dashboard will not show incidents.');
         return;
     }
-    activeClient = client;
     runHealthChecks(client).catch(console.error);
-    setInterval(() => {
-        runHealthChecks(client).catch(console.error);
-    }, CHECK_INTERVAL);
-    setInterval(() => {
-        cleanupOldData().catch(console.error);
-    }, CLEANUP_INTERVAL);
+    setInterval(() => runHealthChecks(client).catch(console.error), CHECK_INTERVAL);
+    setInterval(() => cleanupOldData().catch(console.error), CLEANUP_INTERVAL);
     cleanupOldData().catch(console.error);
     console.log('[UptimeTracker] Monitoring started (DB Backed).');
 }
+
 export async function getAllServicesStatus() {
-    const services = [];
-    for (const [id, meta] of Object.entries(SERVICES)) {
-        const rawHistory = await getRecentChecks(id, HISTORY_SLOTS);
-        let currentStatus = 'unknown';
-        if (rawHistory.length > 0) {
-            currentStatus = rawHistory[rawHistory.length - 1].status;
-        }
-        let uptimePercent = 100;
-        if (rawHistory.length > 0) {
-            const upCount = rawHistory.filter(c => c.status === 'up').length;
-            uptimePercent = +((upCount / rawHistory.length) * 100).toFixed(2);
-        }
-        const bars = await getUptimeBars(id, rawHistory);
-        services.push({
+    const grouped = groupChecksByService(await loadRecentHistory());
+    return Object.entries(SERVICES).map(([id, meta]) => {
+        const rawHistory = grouped.get(id) || [];
+        const currentStatus = rawHistory.at(-1)?.status || 'unknown';
+        const upCount = rawHistory.filter(c => c.status === 'up').length;
+        return {
             id,
             name: meta.name,
             description: meta.description,
             status: currentStatus,
-            uptimePercent,
-            bars,
-        });
-    }
-    return services;
+            uptimePercent: rawHistory.length ? +((upCount / rawHistory.length) * 100).toFixed(2) : 100,
+            bars: getUptimeBars(rawHistory),
+        };
+    });
 }
+
 export async function getOverallStatus() {
-    const supabase = await getSupabase();
-    if (!supabase) return 'Checking...';
-    const { data } = await supabase
-        .from('uptime_checks')
-        .select('service_id, status')
-        .order('timestamp', { ascending: false })
-        .limit(20); 
-    if (!data || data.length === 0) return 'Checking...';
-    const latestStatuses = {};
-    for (const row of data) {
-        if (!latestStatuses[row.service_id]) {
-            latestStatuses[row.service_id] = row.status;
-        }
-    }
-    const statuses = Object.values(latestStatuses);
-    if (statuses.some(s => s === 'down')) return 'Partial Outage';
-    if (statuses.some(s => s === 'degraded')) return 'Degraded Performance';
-    if (statuses.length === 0 || statuses.every(s => s === 'unknown')) return 'Checking...';
+    const grouped = groupChecksByService(await loadRecentHistory());
+    const statuses = [...grouped.values()].map(rows => rows.at(-1)?.status).filter(Boolean);
+    if (statuses.some(status => status === 'down')) return 'Partial Outage';
+    if (statuses.some(status => status === 'degraded')) return 'Degraded Performance';
+    if (statuses.length === 0 || statuses.every(status => status === 'unknown')) return 'Checking...';
     return 'All Systems Operational';
 }

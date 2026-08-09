@@ -3,13 +3,32 @@ import { ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags } from 'disc
 import { supabase } from '../database/supabaseClient.js';
 import { parseDuration } from '../moderation/moderationManager.js';
 let lastFetchErrorTime = 0;
-async function getGiveaways() {
+function mapGiveaway(g) {
+  return {
+    messageId: g.message_id,
+    channelId: g.channel_id,
+    guildId: g.guild_id,
+    prize: g.prize,
+    winnersCount: g.winners_count,
+    endTime: parseInt(g.end_time),
+    hostId: g.host_id,
+    ended: g.ended,
+    durationStr: g.duration_str || 'Unknown',
+    participants: g.entries || []
+  };
+}
+async function getGiveaways({ guildId, messageId, ended, endAtMost, limit = 100 } = {}) {
   if (!supabase) return [];
   try {
-    const { data, error } = await supabase.from('giveaways').select('*');
+    let query = supabase.from('giveaways').select('*');
+    if (guildId) query = query.eq('guild_id', guildId);
+    if (messageId) query = query.eq('message_id', messageId);
+    if (typeof ended === 'boolean') query = query.eq('ended', ended);
+    if (endAtMost !== undefined) query = query.lte('end_time', endAtMost);
+    const { data, error } = await query.order('end_time', { ascending: true }).limit(limit);
     if (error) {
       const now = Date.now();
-      if (now - lastFetchErrorTime > 300000) { 
+      if (now - lastFetchErrorTime > 300000) {
         const isTimeout = error.code === 'TIMEOUT' || /timed out|fetch failed|paused/i.test(error.message || '');
         const msg = `[GiveawayManager] Supabase ${isTimeout ? 'temporarily unreachable' : 'fetch error'}: ${error.message || 'Unknown error'}. Retrying next cycle.`;
         console.error(msg);
@@ -17,21 +36,13 @@ async function getGiveaways() {
       }
       return [];
     }
-    return data.map(g => ({
-      messageId: g.message_id,
-      channelId: g.channel_id,
-      guildId: g.guild_id,
-      prize: g.prize,
-      winnersCount: g.winners_count,
-      endTime: parseInt(g.end_time),
-      hostId: g.host_id,
-      ended: g.ended,
-      durationStr: g.duration_str || 'Unknown', 
-      participants: g.entries || []
-    }));
-  } catch (err) {
+    return (data || []).map(mapGiveaway);
+  } catch {
     return [];
   }
+}
+async function getGiveaway(messageId) {
+  return (await getGiveaways({ messageId, limit: 1 }))[0] || null;
 }
 async function saveGiveaway(gw) {
   if (!supabase) return;
@@ -102,8 +113,7 @@ function buildGiveawayComponents(msgId, ended) {
 export async function handleGiveawayAutocomplete(interaction) {
   const focusedValue = interaction.options.getFocused();
   const subcommand = interaction.options.getSubcommand();
-  let giveaways = await getGiveaways();
-  giveaways = giveaways.filter(g => g.guildId === interaction.guild.id);
+  const giveaways = await getGiveaways({ guildId: interaction.guild.id });
   let filtered = [];
   if (subcommand === 'edit' || subcommand === 'end') {
     filtered = giveaways.filter(g => !g.ended);
@@ -131,27 +141,26 @@ function pickWinners(participants, count) {
 // bị công bố hai lần, nên cần khoá trong tiến trình + ghi `ended` TRƯỚC khi công bố.
 const endingNow = new Set();
 export async function checkGiveaways(client) {
-  const data = await getGiveaways();
   const now = Date.now();
   const ONE_WEEK = 7 * 24 * 60 * 60 * 1000;
-  for (let i = 0; i < data.length; i++) {
-    const gw = data[i];
-    if (!gw.ended && now >= gw.endTime) {
-      if (endingNow.has(gw.messageId)) continue;
-      endingNow.add(gw.messageId);
-      try {
-        gw.ended = true;
-        await saveGiveaway(gw);
-        await endGiveaway(client, gw);
-      } catch (err) {
-        console.error('[GiveawayManager] Error ending giveaway:', err);
-      } finally {
-        endingNow.delete(gw.messageId);
-      }
-    } else if (gw.ended && (now - gw.endTime > ONE_WEEK)) {
-      await deleteGiveaway(gw.messageId);
+  const [due, expired] = await Promise.all([
+    getGiveaways({ ended: false, endAtMost: now }),
+    getGiveaways({ ended: true, endAtMost: now - ONE_WEEK }),
+  ]);
+  for (const gw of due) {
+    if (endingNow.has(gw.messageId)) continue;
+    endingNow.add(gw.messageId);
+    try {
+      gw.ended = true;
+      await saveGiveaway(gw);
+      await endGiveaway(client, gw);
+    } catch (err) {
+      console.error('[GiveawayManager] Error ending giveaway:', err);
+    } finally {
+      endingNow.delete(gw.messageId);
     }
   }
+  await Promise.all(expired.map(gw => deleteGiveaway(gw.messageId)));
 }
 async function endGiveaway(client, gw) {
   try {
@@ -216,8 +225,7 @@ async function handleStart(interaction) {
 }
 export async function handleGiveawayEdit(interaction) {
   const msgId = interaction.options.getString('message_id');
-  const data = await getGiveaways();
-  const gw = data.find(g => g.messageId === msgId);
+  const gw = await getGiveaway(msgId);
   if (!gw) return interaction.reply({ content: '❌ Giveaway not found or already ended.', flags: MessageFlags.Ephemeral });
   if (gw.ended) return interaction.reply({ content: '❌ Cannot edit an ended giveaway.', flags: MessageFlags.Ephemeral });
   const newPrize = interaction.options.getString('prize');
@@ -246,8 +254,7 @@ export async function handleGiveawayEdit(interaction) {
 }
 export async function handleGiveawayEnd(interaction) {
   const msgId = interaction.options.getString('message_id');
-  const data = await getGiveaways();
-  const gw = data.find(g => g.messageId === msgId);
+  const gw = await getGiveaway(msgId);
   if (!gw) return interaction.reply({ content: '❌ Giveaway not found.', flags: MessageFlags.Ephemeral });
   if (gw.ended) return interaction.reply({ content: '❌ This giveaway has already ended.', flags: MessageFlags.Ephemeral });
   gw.endTime = Date.now();
@@ -257,8 +264,7 @@ export async function handleGiveawayEnd(interaction) {
 }
 export async function handleGiveawayReroll(interaction) {
   const msgId = interaction.options.getString('message_id');
-  const data = await getGiveaways();
-  const gw = data.find(g => g.messageId === msgId);
+  const gw = await getGiveaway(msgId);
   if (!gw) return interaction.reply({ content: '❌ Giveaway not found.', flags: MessageFlags.Ephemeral });
   if (!gw.ended) return interaction.reply({ content: '❌ Cannot reroll an active giveaway.', flags: MessageFlags.Ephemeral });
   const winners = pickWinners(gw.participants, gw.winnersCount);
@@ -271,10 +277,8 @@ export async function handleGiveawayButton(interaction) {
   if (customId.startsWith('g_enter_')) {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     const msgId = customId.split('g_enter_')[1];
-    const data = await getGiveaways();
-    const gwIndex = data.findIndex(g => g.messageId === msgId);
-    if (gwIndex === -1) return interaction.editReply({ content: '❌ This giveaway no longer exists or has been deleted.' });
-    const gw = data[gwIndex];
+    const gw = await getGiveaway(msgId);
+    if (!gw) return interaction.editReply({ content: '❌ This giveaway no longer exists or has been deleted.' });
     if (gw.ended) return interaction.editReply({ content: '❌ This giveaway has already ended!' });
     const userId = interaction.user.id;
     if (gw.participants.includes(userId)) {
@@ -306,8 +310,7 @@ export async function handleGiveawayButton(interaction) {
       msgId = parts[3];
       page = parseInt(parts[4]) + 1;
     }
-    const data = await getGiveaways();
-    const gw = data.find(g => g.messageId === msgId);
+    const gw = await getGiveaway(msgId);
     if (!gw) {
       return interaction.editReply({ content: '❌ This giveaway no longer exists.', embeds: [], components: [] });
     }

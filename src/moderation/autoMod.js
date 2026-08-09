@@ -1,5 +1,5 @@
 import { EmbedBuilder, PermissionFlagsBits } from 'discord.js';
-import { getModData, saveModData } from './moderationManager.js';
+import { getModData, saveModData, shouldAutoBanForWarnings } from './moderationManager.js';
 export async function handleAutoMod(message) {
   if (!message.guild || !message.member || message.author.bot) return false;
   const modConfig = await getModData(message.guild.id);
@@ -25,8 +25,20 @@ export async function handleAutoMod(message) {
             const modData = await getModData(message.guild.id);
             if (!modData.warnings) modData.warnings = {};
             if (!modData.warnings[message.author.id]) modData.warnings[message.author.id] = [];
+            const previousWarnCount = modData.warnings[message.author.id].length;
             modData.warnings[message.author.id].push({ reason, timestamp: Date.now(), moderator: 'Auto Mod' });
             await saveModData(message.guild.id, modData);
+            const warnCount = modData.warnings[message.author.id].length;
+            if (shouldAutoBanForWarnings(warnCount, modData.warnThreshold, previousWarnCount)) {
+              if (message.member.bannable) {
+                await message.author.send(
+                  `You reached ${warnCount} warnings and were banned from **${message.guild.name}**.\nReason: ${reason}`
+                ).catch(() => {});
+                await message.member.ban({ reason: `Automatic ban after ${warnCount} warnings: ${reason}` });
+              } else {
+                console.warn(`[AutoMod] Warning threshold reached for ${message.author.id}, but the member is not bannable.`);
+              }
+            }
           }
           else if (punishment === 'timeout10') {
             await message.member.timeout(10 * 60 * 1000, reason);

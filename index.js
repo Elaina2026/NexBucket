@@ -18,7 +18,7 @@ import { handleAddStaff, handleAddStaffAll } from './src/ticket/commands/ticketM
 import { handleBotWhitelistCommand } from './src/utils/botWhitelistCommand.js';
 import { checkAndAutoWhitelist } from './src/utils/botWhitelistManager.js';
 import { startDashboard } from './src/dashboard/server.js';
-import { handleModerationCommand, handleModerationMessage, checkModExpirations, handleAntiLink } from './src/moderation/moderationManager.js';
+import { handleModerationCommand, handleModerationMessage, checkModExpirations, handleAntiLink, getModConfig } from './src/moderation/moderationManager.js';
 import { loadBlacklist, isUserBlacklisted } from './src/utils/blacklistManager.js';
 import { loadBotRoles, isBotAdmin } from './src/utils/permissionManager.js';
 import { handleAntiSpam } from './src/moderation/antiSpam.js';
@@ -71,10 +71,18 @@ client.once('clientReady', async () => {
   logActivity(null, null, client.user.id, 'BOT_ONLINE', `Bot has successfully started and is connected to ${client.guilds.cache.size} servers.`);
   const UPDATE_INTERVAL = parseInt(process.env.UPDATE_INTERVAL) || 60000;
   console.log(`⏰ Updating status every ${UPDATE_INTERVAL / 1000}s`);
-  await updateAllStatus(client).catch(console.error);
-  setInterval(async () => {
-    await updateAllStatus(client).catch(console.error);
-  }, UPDATE_INTERVAL);
+  let statusUpdateRunning = false;
+  const runStatusUpdate = async () => {
+    if (statusUpdateRunning) return;
+    statusUpdateRunning = true;
+    try {
+      await updateAllStatus(client);
+    } finally {
+      statusUpdateRunning = false;
+    }
+  };
+  await runStatusUpdate().catch(console.error);
+  setInterval(() => runStatusUpdate().catch(console.error), UPDATE_INTERVAL);
   setInterval(async () => {
     await checkModExpirations(client);
   }, 60000);
@@ -345,6 +353,8 @@ client.on('guildDelete', async (guild) => {
 client.on('guildMemberAdd', async (member) => {
   try {
     if (member.user.bot) {
+      const modConfig = await getModConfig(member.guild.id);
+      if (modConfig.antiBotKick === false) return;
       const isWhitelisted = await checkAndAutoWhitelist(member.guild.id, member.user);
       if (isWhitelisted) {
         console.log(`[Anti-Bot] Allowed whitelisted bot: ${member.user.tag}`);
