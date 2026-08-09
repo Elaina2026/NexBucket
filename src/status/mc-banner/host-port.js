@@ -18,6 +18,9 @@ function choosePort(explicit, embedded) {
 
 function parseHostPort(raw, explicitPort = null) {
   const value = String(raw ?? "").trim();
+  const normalizedExplicitPort = explicitPort == null || explicitPort === ""
+    ? null
+    : parsePort(String(explicitPort));
   if (value.startsWith("[") && value.includes("]")) {
     const close = value.indexOf("]");
     const host = value.slice(1, close);
@@ -27,7 +30,7 @@ function parseHostPort(raw, explicitPort = null) {
       embedded = parsePort(value.slice(close + 2));
     }
     const normalized = normalizeHost(host);
-    const port = choosePort(explicitPort, embedded);
+    const port = choosePort(normalizedExplicitPort, embedded);
     return { host: normalized, port, display: port === 25565 ? normalized : `[${normalized}]:${port}` };
   }
 
@@ -36,13 +39,13 @@ function parseHostPort(raw, explicitPort = null) {
     const possiblePort = value.slice(colon + 1);
     if (/^\d+$/.test(possiblePort)) {
       const normalized = normalizeHost(value.slice(0, colon));
-      const port = choosePort(explicitPort, parsePort(possiblePort));
+      const port = choosePort(normalizedExplicitPort, parsePort(possiblePort));
       return { host: normalized, port, display: port === 25565 ? normalized : `${normalized}:${port}` };
     }
   }
 
   const normalized = normalizeHost(value);
-  const port = choosePort(explicitPort, null);
+  const port = choosePort(normalizedExplicitPort, null);
   return { host: normalized, port, display: port === 25565 ? normalized : `${normalized}:${port}` };
 }
 

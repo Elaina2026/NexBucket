@@ -120,7 +120,7 @@ export async function restoreBackup(client, guildId, commandChannelId = null) {
     if (!existing) {
       await guild.roles.create({
         name: roleData.name,
-        color: roleData.color,
+        colors: { primaryColor: roleData.color },
         hoist: roleData.hoist,
         permissions: BigInt(roleData.permissions),
         mentionable: roleData.mentionable,

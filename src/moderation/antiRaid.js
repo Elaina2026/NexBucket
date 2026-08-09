@@ -102,7 +102,7 @@ async function executePunishment(guild, user, reason) {
     if (!mutedRole) {
       mutedRole = await guild.roles.create({
         name: 'Muted',
-        color: 0x808080,
+        colors: { primaryColor: 0x808080 },
         reason: 'Auto created by Anti-Raid'
       }).catch(() => null);
       if (mutedRole) {

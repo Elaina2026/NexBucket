@@ -3,7 +3,12 @@ import dns from 'node:dns';
 import { AttachmentBuilder, MessageFlags } from 'discord.js';
 import { supabase } from '../database/supabaseClient.js';
 import { getAllSections, saveSection } from '../database/guildSettings.js';
-import { getMinecraftBannerFallback, renderMinecraftBanner } from './minecraftBanner.js';
+import {
+    getMinecraftBannerFallback,
+    parseMinecraftAddress,
+    parseTrackedMinecraftAddress,
+    renderMinecraftBanner,
+} from './minecraftBanner.js';
 
 dns.setServers(['8.8.8.8', '1.1.1.1', '8.8.4.4', '1.0.0.1']);
 const BOT_OWNER_ID = process.env.BOT_OWNER_ID || '';
@@ -26,16 +31,32 @@ async function serializeGuildWrite(guildId, operation) {
     }
 }
 
-function normalizeServer(server, guildId) {
+export function normalizeTrackedServer(server, guildId) {
+    const target = parseTrackedMinecraftAddress(server.ip, server.port ?? null, true);
     return {
         id: String(server.channelId || server.id),
         channelId: String(server.channelId || server.id),
         guildId: String(server.guildId || guildId),
-        ip: String(server.ip || '').trim(),
-        port: Number(server.port || 25565),
+        ip: target.host,
+        port: target.port,
         messageId: String(server.messageId || 'pending'),
-        name: String(server.name || server.ip || '').trim(),
+        name: target.display,
     };
+}
+
+export function normalizeServerList(servers, guildId) {
+    const valid = [];
+    for (const server of Array.isArray(servers) ? servers : []) {
+        try {
+            valid.push(normalizeTrackedServer(server, guildId));
+        } catch (error) {
+            console.error(
+                `[Status] Skipping invalid Minecraft config for guild ${guildId || 'unknown'}:`,
+                error.message || error,
+            );
+        }
+    }
+    return valid;
 }
 
 export async function getServers(guildId = null) {
@@ -43,7 +64,7 @@ export async function getServers(guildId = null) {
     try {
         if (guildId) {
             const settings = await getAllSections(guildId);
-            return (settings.minecraft?.servers || []).map(server => normalizeServer(server, guildId));
+            return normalizeServerList(settings.minecraft?.servers, guildId);
         }
         const now = Date.now();
         if (allServersSnapshot && allServersSnapshot.expiresAt > now) {
@@ -52,7 +73,7 @@ export async function getServers(guildId = null) {
         const { data, error } = await supabase.from('guild_settings').select('guild_id, minecraft');
         if (error) throw error;
         const servers = (data || []).flatMap(row =>
-            (row.minecraft?.servers || []).map(server => normalizeServer(server, row.guild_id))
+            normalizeServerList(row.minecraft?.servers, row.guild_id)
         );
         allServersSnapshot = { servers: structuredClone(servers), expiresAt: now + SERVER_SNAPSHOT_MS };
         return servers;
@@ -65,7 +86,7 @@ export async function getServers(guildId = null) {
 async function saveGuildServers(guildId, servers) {
     await saveSection(guildId, 'minecraft', {
         servers: servers.map(server => {
-            const normalized = normalizeServer(server, guildId);
+            const normalized = normalizeTrackedServer(server, guildId);
             return {
                 channelId: normalized.channelId,
                 ip: normalized.ip,
@@ -80,7 +101,7 @@ async function saveGuildServers(guildId, servers) {
 export async function saveServers(servers) {
     const grouped = new Map();
     for (const server of servers) {
-        const normalized = normalizeServer(server, server.guildId);
+        const normalized = normalizeTrackedServer(server, server.guildId);
         if (!normalized.guildId || !normalized.channelId || !normalized.ip) continue;
         if (!grouped.has(normalized.guildId)) grouped.set(normalized.guildId, []);
         grouped.get(normalized.guildId).push(normalized);
@@ -96,7 +117,7 @@ export async function saveServers(servers) {
 }
 
 export async function addServer(server) {
-    const normalized = normalizeServer(server, server.guildId);
+    const normalized = normalizeTrackedServer(server, server.guildId);
     return serializeGuildWrite(normalized.guildId, async () => {
         const current = await getServers(normalized.guildId);
         if (current.some(item => item.channelId === normalized.channelId)) {
@@ -265,15 +286,24 @@ export async function updateAllStatus(client) {
 }
 
 export async function handleMcServer(interaction) {
-    const ip = interaction.options.getString('ip');
-    const port = interaction.options.getInteger('port') || 25565;
-    const target = `${ip}:${port}`;
+    const rawIp = interaction.options.getString('ip');
+    const explicitPort = interaction.options.getInteger('port');
     await interaction.deferReply();
 
+    let parsedTarget;
+    try {
+        parsedTarget = parseMinecraftAddress(rawIp, explicitPort);
+    } catch (error) {
+        return interaction.editReply({ content: `🔴 Invalid Minecraft address: ${error.message}` });
+    }
+
+    const ip = parsedTarget.host;
+    const port = parsedTarget.port;
+    const target = parsedTarget.display;
     try {
         let banner;
         try {
-            banner = await renderMinecraftBanner({ ip, port, name: ip });
+            banner = await renderMinecraftBanner({ ip, port, name: target });
         } catch (error) {
             console.error(`[Status] Banner failed for ${target}; using fallback image:`, error.message || error);
             const fallbackStatus = error.status || { online: false, error: error.message || 'Banner renderer failed' };

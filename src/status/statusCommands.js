@@ -1,5 +1,6 @@
 import { SlashCommandBuilder, PermissionFlagsBits, MessageFlags } from 'discord.js';
 import { addServer, getServers, removeServer, updateAllStatus } from './statusManager.js';
+import { parseMinecraftAddress } from './minecraftBanner.js';
 export const statusCommandData = new SlashCommandBuilder()
   .setName('status')
   .setDescription('Manage Minecraft server status tracking')
@@ -39,9 +40,18 @@ export async function handleStatusCommand(interaction) {
   const subcommand = interaction.options.getSubcommand();
   const guildId = interaction.guildId;
   if (subcommand === 'add') {
-    const ip = interaction.options.getString('ip');
+    const rawIp = interaction.options.getString('ip');
     const channel = interaction.options.getChannel('channel');
-    const port = interaction.options.getInteger('port') || 25565;
+    let target;
+    try {
+      target = parseMinecraftAddress(rawIp, interaction.options.getInteger('port'));
+    } catch (error) {
+      return interaction.reply({
+        content: `❌ Invalid Minecraft address: ${error.message}`,
+        flags: MessageFlags.Ephemeral
+      });
+    }
+    const { host: ip, port } = target;
     const servers = await getServers(guildId);
     const existing = servers.find(s => s.channelId === channel.id);
     if (existing) {
@@ -58,9 +68,9 @@ export async function handleStatusCommand(interaction) {
         port,
         messageId: 'pending',
       });
-      await interaction.reply({ 
-        content: `✅ Successfully added Minecraft server **${ip}:${port}**!\nThe live status banner will appear in <#${channel.id}> shortly.`, 
-        flags: MessageFlags.Ephemeral 
+      await interaction.reply({
+        content: `✅ Successfully added Minecraft server **${target.display}**!\nThe live status banner will appear in <#${channel.id}> shortly.`,
+        flags: MessageFlags.Ephemeral
       });
       updateAllStatus(interaction.client).catch(console.error);
     } catch (err) {

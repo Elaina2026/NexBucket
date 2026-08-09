@@ -247,7 +247,6 @@ class MinecraftFont {
             const glyphWidth = hasPixels ? (maxX - minX + 1) : 0;
             const advance = hasPixels ? (glyphWidth + 1) : (ch === ' ' ? 4 : 0);
 
-            // Pre-create individual glyph canvas for efficient tinting/drawing
             let glyphCanvas = null;
             if (hasPixels) {
               glyphCanvas = createCanvas(cellW, cellH);

@@ -1,8 +1,16 @@
 import { SlashCommandBuilder, PermissionFlagsBits, MessageFlags, EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder } from 'discord.js';
 export const data = new SlashCommandBuilder()
-  .setName('ticket-edit')
-  .setDescription('Comprehensive editor for the Ticket System')
-  .setDefaultMemberPermissions(PermissionFlagsBits.Administrator);
+  .setName('ticket')
+  .setDescription('Manage the Ticket System')
+  .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+  .addSubcommandGroup(group => group
+    .setName('send')
+    .setDescription('Configure and send ticket panels')
+    .addSubcommand(subcommand => subcommand
+      .setName('panel')
+      .setDescription('Configure and send the ticket panel')
+    )
+  );
 export async function execute(interaction) {
   const embed = new EmbedBuilder()
     .setColor('#5865F2')

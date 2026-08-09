@@ -1,4 +1,4 @@
-import { REST, Routes, SlashCommandBuilder, PermissionFlagsBits, ChannelType } from 'discord.js';
+import { REST, Routes, SlashCommandBuilder, PermissionFlagsBits } from 'discord.js';
 import 'dotenv/config';
 import { moderationCommands } from '../moderation/commands.js';
 import { utilCommands } from '../utils/commands.js';
@@ -10,6 +10,7 @@ import { data as cardSetupCommand } from '../banking/commands/cardSetup.js';
 import { configSlashCommand } from '../utils/configCommand.js';
 import { statusCommandData } from '../status/statusCommands.js';
 import { botWhitelistCommandData } from '../utils/botWhitelistCommand.js';
+import { data as ticketCommand } from './commands/ticketEdit.js';
 export const commands = [
   new SlashCommandBuilder()
     .setName('mcserver')
@@ -20,11 +21,7 @@ export const commands = [
         .setRequired(true)
     )
     .toJSON(),
-  new SlashCommandBuilder()
-    .setName('ticket-edit')
-    .setDescription('Comprehensive editor for the Ticket System')
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-    .toJSON(),
+  ticketCommand.toJSON(),
   new SlashCommandBuilder()
     .setName('ticket-add-staff')
     .setDescription('Invite a specific staff member to the current ticket')

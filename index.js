@@ -61,7 +61,7 @@ client.once('clientReady', async () => {
   console.log('═══════════════════════════════════════════');
   await loadBlacklist();
   await loadBotRoles();
-  client.user.setActivity('/help • NexBucket Development', { type: ActivityType.Watching });
+  client.user.setActivity('/help • NexStudio Development', { type: ActivityType.Watching });
   setupAntiRaid(client);
   await runAutoMigrations();
   await initDatabase();
@@ -125,7 +125,7 @@ client.on('interactionCreate', async (interaction) => {
         await handleMcServer(interaction);
         return;
       }
-      if (commandName === 'ticket-edit') {
+      if (commandName === 'ticket') {
         return await handleTicketEdit(interaction);
       }
       if (commandName === 'status') {
@@ -373,8 +373,6 @@ client.on('guildMemberAdd', async (member) => {
           }
         }
       }
-      // Bot không nằm trong whitelist nhưng không xác định được người mời:
-      // không kick, nhưng cũng không chào mừng như thành viên thường.
       return;
     }
     await handleGuildMemberAdd(member);

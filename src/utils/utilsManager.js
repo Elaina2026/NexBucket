@@ -112,22 +112,22 @@ export async function handleUtilCommand(interaction) {
       let ownerRole = guild.roles.cache.find(r => r.name === 'Bot Owner');
       if (!ownerRole) {
         ownerRole = await guild.roles.create({ name: 'Bot Owner', reason: 'Auto setup Bot Owner' });
-        await ownerRole.setColor('#ff0000');
+        await ownerRole.setColors({ primaryColor: '#ff0000' });
       }
       let adminRole = guild.roles.cache.find(r => r.name === 'Bot Admin');
       if (!adminRole) {
         adminRole = await guild.roles.create({ name: 'Bot Admin', reason: 'Auto setup Bot Admin' });
-        await adminRole.setColor('#ff9900');
+        await adminRole.setColors({ primaryColor: '#ff9900' });
       }
       let devRole = guild.roles.cache.find(r => r.name === 'Bot Dev');
       if (!devRole) {
         devRole = await guild.roles.create({ name: 'Bot Dev', reason: 'Auto setup Bot Dev' });
-        await devRole.setColor('#33cc33');
+        await devRole.setColors({ primaryColor: '#33cc33' });
       }
       let partnerRole = guild.roles.cache.find(r => r.name === 'Bot Partner');
       if (!partnerRole) {
         partnerRole = await guild.roles.create({ name: 'Bot Partner', reason: 'Auto setup Bot Partner' });
-        await partnerRole.setColor('#9b59b6');
+        await partnerRole.setColors({ primaryColor: '#9b59b6' });
       }
       await saveBotRoles(guild.id, ownerRole.id, adminRole.id, devRole.id);
       const embed = new EmbedBuilder()
@@ -202,7 +202,7 @@ export async function handleUtilCommand(interaction) {
       .addFields(
         {
           name: '🎫 Ticket Commands',
-          value: '`/ticket-edit` - Configure and send the ticket panel\n`/ticket-add-staff` - Add a user or role to a ticket\n`/ticket-add-staff-all` - Add staff roles to all open tickets',
+          value: '`/ticket send panel` - Configure and send the ticket panel\n`/ticket-add-staff` - Add a user or role to a ticket\n`/ticket-add-staff-all` - Add staff roles to all open tickets',
           inline: false
         },
         {
@@ -664,7 +664,7 @@ export async function handleBotGuideSelect(interaction) {
   switch (value) {
     case 'guide_ticket':
       title = '🎫 Ticket Management Guide';
-      description = `**1. Setup Ticket:**\nUse \`/ticket-edit\` to configure and send a panel. Users click it to open a private support channel.\n\n**2. Add Staff:**\n\`/ticket-add-staff\` (Add a user or role to a ticket)\n\`/ticket-add-staff-all\` (Add staff roles to all open tickets)\n\n**3. Manage Tickets:**\n**Claim** button: Claim the ticket.\n**Close** button: Close ticket (optional transcript saving).`;
+      description = `**1. Setup Ticket:**\nUse \`/ticket send panel\` to configure and send a panel. Users click it to open a private support channel.\n\n**2. Add Staff:**\n\`/ticket-add-staff\` (Add a user or role to a ticket)\n\`/ticket-add-staff-all\` (Add staff roles to all open tickets)\n\n**3. Manage Tickets:**\n**Claim** button: Claim the ticket.\n**Close** button: Close ticket (optional transcript saving).`;
       break;
     case 'guide_mod':
       title = '🛡️ Moderation Guide';

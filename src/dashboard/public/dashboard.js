@@ -530,6 +530,45 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('btnAddStatusServer')?.addEventListener('click', () => showAddStatusServerModal());
     renderStatusServers();
   }
+  function formatMinecraftAddress(server) {
+    const host = String(server?.ip || '').trim();
+    const port = Number(server?.port || 25565);
+    if (host.startsWith('[') && host.endsWith(']')) return port === 25565 ? host : `${host}:${port}`;
+    if (host.includes(':') && !host.includes(']')) return port === 25565 ? `[${host}]` : `[${host}]:${port}`;
+    return port === 25565 ? host : `${host}:${port}`;
+  }
+  function parseMinecraftAddressInput(rawIp, rawPort) {
+    const value = String(rawIp || '').trim();
+    if (!value || /\s|[\\/\0]/.test(value)) throw new Error('Invalid Minecraft address');
+    const portText = String(rawPort || '').trim();
+    let host = value;
+    let embeddedPort = null;
+
+    if (value.startsWith('[')) {
+      const match = value.match(/^\[([^\]]+)](?::(\d+))?$/);
+      if (!match) throw new Error('Invalid IPv6 address');
+      host = match[1];
+      embeddedPort = match[2] || null;
+    } else if ((value.match(/:/g) || []).length === 1 && /:\d+$/.test(value)) {
+      const splitAt = value.lastIndexOf(':');
+      host = value.slice(0, splitAt);
+      embeddedPort = value.slice(splitAt + 1);
+    }
+
+    if (!host || host.length > 253) throw new Error('Invalid Minecraft host');
+    const parsePort = raw => {
+      if (!/^\d+$/.test(raw)) throw new Error('Port must be between 1 and 65535');
+      const parsed = Number(raw);
+      if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65535) throw new Error('Port must be between 1 and 65535');
+      return parsed;
+    };
+    const explicitPort = portText ? parsePort(portText) : null;
+    const parsedEmbeddedPort = embeddedPort ? parsePort(embeddedPort) : null;
+    if (explicitPort !== null && parsedEmbeddedPort !== null && explicitPort !== parsedEmbeddedPort) {
+      throw new Error('Port is specified twice with different values');
+    }
+    return { ip: host, port: explicitPort ?? parsedEmbeddedPort ?? 25565 };
+  }
   function renderStatusServers() {
     const list = document.getElementById('statusServersList');
     if (!list) return;
@@ -539,7 +578,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       const item = document.createElement('div');
       item.className = 'ticket-type-item';
       const channelName = guildChannels.find(c => c.id === s.channelId)?.name || s.channelId;
-      item.innerHTML = `<span class="tt-emoji">${I.monitor}</span><div class="tt-info"><div class="tt-label">${esc(s.ip)}:${s.port}</div><div class="tt-desc">Channel: #${esc(channelName)}</div></div><div class="tt-actions"><button type="button" class="tt-remove" data-idx="${i}" title="Remove Server">${I.x}</button></div>`;
+      item.innerHTML = `<span class="tt-emoji">${I.monitor}</span><div class="tt-info"><div class="tt-label">${esc(formatMinecraftAddress(s))}</div><div class="tt-desc">Channel: #${esc(channelName)}</div></div><div class="tt-actions"><button type="button" class="tt-remove" data-idx="${i}" title="Remove Server">${I.x}</button></div>`;
       item.querySelector('.tt-remove').addEventListener('click', () => { statusServers.splice(i, 1); renderStatusServers(); });
       list.appendChild(item);
     });
@@ -547,7 +586,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   function showAddStatusServerModal() {
     let overlay = document.getElementById('modalOverlay');
     if (!overlay) { overlay = document.createElement('div'); overlay.id = 'modalOverlay'; overlay.className = 'modal-overlay'; document.body.appendChild(overlay); }
-    overlay.innerHTML = `<div class="modal"><h3>Add Tracked Server</h3>${makeInput('msIp', 'Server IP', 'play.example.com', '')}${makeInput('msPort', 'Server Port', '25565', '', 'number')}${makeChannelPicker('msChannel', 'Update Channel', '', [0, 5])}<div class="modal-actions"><button class="btn-modal" id="btnCancelModal">Cancel</button><button class="btn-modal primary" id="btnConfirmModal">Add</button></div></div>`;
+    overlay.innerHTML = `<div class="modal"><h3>Add Tracked Server</h3>${makeInput('msIp', 'Server IP', 'play.example.com or play.example.com:25570', '')}${makeInput('msPort', 'Server Port', '25565 (optional)', 'Leave blank when the IP already contains a port.', 'number')}${makeChannelPicker('msChannel', 'Update Channel', '', [0, 5])}<div class="modal-actions"><button class="btn-modal" id="btnCancelModal">Cancel</button><button class="btn-modal primary" id="btnConfirmModal">Add</button></div></div>`;
     overlay.classList.add('show');
     
     const wrap = overlay.querySelector('.picker-wrap[data-picker-id="msChannel"]');
@@ -585,16 +624,21 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     overlay.querySelector('#btnCancelModal').addEventListener('click', () => overlay.classList.remove('show'));
     overlay.querySelector('#btnConfirmModal').addEventListener('click', () => {
-      const ip = document.getElementById('msIp')?.value?.trim();
-      const port = parseInt(document.getElementById('msPort')?.value) || 25565;
+      const rawIp = document.getElementById('msIp')?.value;
+      const rawPort = document.getElementById('msPort')?.value;
       const channelId = getPickerValue('msChannel');
-      if (!ip || !channelId) {
-         showStatus('IP and Channel are required!', 'error');
-         return;
+      if (!rawIp?.trim() || !channelId) {
+        showStatus('IP and Channel are required!', 'error');
+        return;
       }
-      statusServers.push({ ip, port, channelId });
-      renderStatusServers();
-      overlay.classList.remove('show');
+      try {
+        const { ip, port } = parseMinecraftAddressInput(rawIp, rawPort);
+        statusServers.push({ ip, port, channelId });
+        renderStatusServers();
+        overlay.classList.remove('show');
+      } catch (error) {
+        showStatus(error.message, 'error');
+      }
     });
     overlay.addEventListener('click', e => { if (e.target === overlay) overlay.classList.remove('show'); });
   }

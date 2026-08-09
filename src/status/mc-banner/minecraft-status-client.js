@@ -1,5 +1,6 @@
 'use strict';
 
+const dns = require('dns/promises');
 const net = require('net');
 const NetworkGuard = require('./network-guard');
 
@@ -172,48 +173,84 @@ class MinecraftStatusClient {
     this.protocolVersion = protocolVersion;
     this.allowPrivateHosts = allowPrivateHosts;
     this.netConnect = deps.netConnect || net.connect;
-    this.dnsResolver = deps.dnsResolver;
+    this.dnsResolver = deps.dnsResolver || dns;
+  }
+
+  async resolveTarget(host, port, useSrv) {
+    const normalizedHost = NetworkGuard.normalizeHost(host);
+    if (!useSrv || net.isIP(normalizedHost)) {
+      return { host: normalizedHost, port };
+    }
+    try {
+      const records = await this.dnsResolver.resolveSrv(`_minecraft._tcp.${normalizedHost}`);
+      if (!records.length) return { host: normalizedHost, port };
+      const record = [...records].sort((a, b) => a.priority - b.priority || b.weight - a.weight)[0];
+      return { host: NetworkGuard.normalizeHost(record.name), port: record.port };
+    } catch (error) {
+      if (['ENODATA', 'ENOTFOUND', 'ENOTIMP', 'EREFUSED', 'ECONNREFUSED', 'SERVFAIL'].includes(error.code)) {
+        return { host: normalizedHost, port };
+      }
+      throw error;
+    }
+  }
+
+  async connect(address, port) {
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      let timer;
+      const finish = (error, socket) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (error) reject(error);
+        else resolve(socket);
+      };
+      const socket = this.netConnect({ host: address, port }, () => finish(null, socket));
+      socket.once('error', error => finish(error));
+      timer = setTimeout(() => {
+        socket.destroy();
+        finish(new Error('Connect timeout'));
+      }, this.connectTimeoutMillis);
+    });
   }
 
   async query(host, port) {
-    const resolved = await NetworkGuard.resolve(host, this.allowPrivateHosts, this.dnsResolver);
+    const target = await this.resolveTarget(host, port, port === 25565);
+    const resolved = await NetworkGuard.resolve(target.host, this.allowPrivateHosts, this.dnsResolver);
+    const addresses = resolved.addresses || [resolved.address];
+    let lastError;
 
-    const socket = await new Promise((resolve, reject) => {
-      let timer;
-      const s = this.netConnect({ host: resolved.address, port }, () => {
-        clearTimeout(timer);
-        resolve(s);
-      });
-      s.once('error', (err) => {
-        clearTimeout(timer);
-        reject(err);
-      });
-      timer = setTimeout(() => {
-        s.destroy();
-        reject(new Error('Connect timeout'));
-      }, this.connectTimeoutMillis);
-    });
+    for (const address of addresses) {
+      try {
+        return await this.queryAddress(host, address, target.port);
+      } catch (error) {
+        lastError = error;
+      }
+    }
 
+    throw lastError || new Error('Could not connect to Minecraft server');
+  }
+
+  async queryAddress(handshakeHost, address, port) {
+    const socket = await this.connect(address, port);
     socket.setNoDelay(true);
     const reader = new SocketReader(socket, this.readTimeoutMillis);
 
     try {
-      // 1. Send Handshake
       const portBuf = Buffer.alloc(2);
       portBuf.writeUInt16BE(port, 0);
       const handshakePayload = Buffer.concat([
         writeVarInt(0x00),
         writeVarInt(this.protocolVersion),
-        writeString(resolved.handshakeHost),
+        writeString(handshakeHost),
         portBuf,
         writeVarInt(0x01)
       ]);
       writePacket(socket, handshakePayload);
 
-      // 2. Send Status Request
+      const statusStarted = process.hrtime.bigint();
       writePacket(socket, Buffer.from([0x00]));
 
-      // 3. Read Status Response
       const responseLength = await reader.readVarInt();
       if (responseLength <= 0 || responseLength > 2_000_000) {
         throw new Error('Invalid Minecraft status packet length');
@@ -241,27 +278,28 @@ class MinecraftStatusClient {
         throw new Error('Invalid JSON returned by Minecraft server');
       }
 
-      // 4. Send Ping
-      const pingStarted = process.hrtime.bigint();
-      const timeBuf = Buffer.alloc(8);
-      timeBuf.writeBigInt64BE(BigInt(Date.now()), 0);
-      const pingPayload = Buffer.concat([writeVarInt(0x01), timeBuf]);
-      writePacket(socket, pingPayload);
+      const statusElapsedNs = process.hrtime.bigint() - statusStarted;
+      let latencyMillis = Math.max(0, Number(statusElapsedNs / 1_000_000n));
 
-      // 5. Read Pong
-      const pongLength = await reader.readVarInt();
-      if (pongLength > 64) {
-        throw new Error('Invalid pong packet length');
+      try {
+        const pingStarted = process.hrtime.bigint();
+        const timeBuf = Buffer.alloc(8);
+        timeBuf.writeBigInt64BE(BigInt(Date.now()), 0);
+        const pingPayload = Buffer.concat([writeVarInt(0x01), timeBuf]);
+        writePacket(socket, pingPayload);
+        const pongLength = await reader.readVarInt();
+        if (pongLength <= 0 || pongLength > 64) {
+          throw new Error('Invalid pong packet length');
+        }
+        const pongId = await reader.readVarInt();
+        if (pongId !== 0x01) {
+          throw new Error(`Unexpected pong packet id: ${pongId}`);
+        }
+        await reader.readExactly(8);
+        const elapsedNs = process.hrtime.bigint() - pingStarted;
+        latencyMillis = Math.max(0, Number(elapsedNs / 1_000_000n));
+      } catch {
       }
-      const pongId = await reader.readVarInt();
-      if (pongId !== 0x01) {
-        throw new Error(`Unexpected pong packet id: ${pongId}`);
-      }
-      await reader.readExactly(8);
-      const elapsedNs = process.hrtime.bigint() - pingStarted;
-      const latencyMillis = Math.max(0, Number(elapsedNs / 1_000_000n));
-
-      // Extract result fields
       const players = (root.players && typeof root.players === 'object') ? root.players : {};
       const version = (root.version && typeof root.version === 'object') ? root.version : {};
 

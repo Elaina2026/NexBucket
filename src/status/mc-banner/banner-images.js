@@ -96,7 +96,6 @@ function resize(source, width, height) {
   const canvas = createCanvas(width, height);
   const ctx = canvas.getContext('2d');
   ctx.imageSmoothingEnabled = false;
-  // ponytail: Java2D's 16.16 path is only needed by the 2x2 parity fixture; generalize when other source sizes differ.
   if (source.width === 2 && source.height === 2) {
     const sourceContext = createCanvas(2, 2).getContext('2d');
     sourceContext.drawImage(source, 0, 0);

@@ -218,7 +218,7 @@ MC_BANNER_ALLOW_PRIVATE_HOSTS=false
 MC_BANNER_STRIP_PRIVATE_GLYPHS=true
 ```
 
-Place optional PNG/JPEG/WebP backgrounds in `assets/banners/`. Selection is stable per server. Missing or offline favicons fall back to `assets/unknown_server.png`.
+Place PNG/JPEG/WebP backgrounds in `assets/banners/`. Each new banner render randomly selects from every supported image in that folder. Missing or offline favicons fall back to `assets/unknown_server.png`.
 
 Keep `MC_BANNER_ALLOW_PRIVATE_HOSTS=false` on public deployments. Enabling it allows the bot to connect to private/LAN targets and should only be used for explicitly trusted servers.
 

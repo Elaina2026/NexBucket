@@ -1,3 +1,4 @@
+import { randomInt } from 'node:crypto';
 import path from 'node:path';
 import { readFile, readdir } from 'node:fs/promises';
 import { createRequire } from 'node:module';
@@ -23,28 +24,19 @@ let bannerFilesPromise = null;
 let fallbackImagePromise = null;
 let activeRenders = 0;
 
-function stringHash(value) {
-  let hash = 2166136261;
-  for (const char of String(value)) {
-    hash ^= char.codePointAt(0);
-    hash = Math.imul(hash, 16777619);
-  }
-  return hash >>> 0;
-}
-
 async function getFallbackImage() {
   fallbackImagePromise ||= readFile(FALLBACK_IMAGE_PATH);
   return fallbackImagePromise;
 }
 
-async function getBackground(server) {
+async function getBackground() {
   bannerFilesPromise ||= readdir(BANNERS_DIR)
     .then(files => files.filter(file => /\.(png|jpe?g|webp)$/i.test(file)).sort())
     .catch(() => []);
   const files = await bannerFilesPromise;
   if (files.length === 0) return 'dirt';
-  const index = stringHash(`${server.ip}:${server.port || 25565}`) % files.length;
-  return readFile(path.join(BANNERS_DIR, files[index]));
+  const file = files[randomInt(files.length)];
+  return readFile(path.join(BANNERS_DIR, file));
 }
 
 function readInt(name, fallback, min, max) {
@@ -105,8 +97,33 @@ async function getEngine() {
   return enginePromise;
 }
 
+export function parseMinecraftAddress(ip, port = null) {
+  return parseHostPort(ip, port);
+}
+
+export function parseTrackedMinecraftAddress(ip, port = null, recoverTelemetry = false) {
+  const rawIp = String(ip ?? '').trim();
+  try {
+    return parseMinecraftAddress(rawIp, port);
+  } catch (error) {
+    if (Number(port) === 25565 && /Port is specified twice/.test(error.message)) {
+      return parseMinecraftAddress(rawIp);
+    }
+    if (!recoverTelemetry) throw error;
+    const match = rawIp.match(/^(\S+)\s+(\d{1,5})\s+(?:ONLINE|OFFLINE)(?:\s|$)/i);
+    if (!match) throw error;
+    const recovered = parseMinecraftAddress(match[1], match[2]);
+    const configuredPort = port === null || port === undefined || port === '' ? null : Number(port);
+    if (configuredPort !== null && configuredPort !== 25565 && configuredPort !== recovered.port) {
+      throw new TypeError('Legacy Minecraft status port conflicts with configured port');
+    }
+    return recovered;
+  }
+}
+
 function cacheKey(server) {
-  return `${String(server.ip).trim().toLowerCase()}:${Number(server.port || 25565)}:${server.name || ''}`;
+  const target = parseMinecraftAddress(server.ip, server.port);
+  return `${target.host}:${target.port}:${server.name || ''}`;
 }
 
 function pruneCache(maxEntries, now) {
@@ -118,7 +135,7 @@ function pruneCache(maxEntries, now) {
 
 async function renderServer(server) {
   const { config, renderer, statusClient } = await getEngine();
-  const target = parseHostPort(server.ip, Number(server.port || 25565));
+  const target = parseMinecraftAddress(server.ip, server.port);
   let status;
   try {
     status = await statusClient.query(target.host, target.port);
@@ -129,7 +146,7 @@ async function renderServer(server) {
     ? parseMotd(status.descriptionJson, { maximumLines: 2, stripPrivateGlyphs: config.stripPrivateGlyphs })
     : [[{ text: "Can't connect to server", color: '#ff5555' }]];
   const fallbackImage = await getFallbackImage();
-  const background = await getBackground(server);
+  const background = await getBackground();
   let png;
   try {
     png = renderer

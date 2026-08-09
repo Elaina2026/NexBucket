@@ -346,7 +346,7 @@ async function getMutedRole(guild) {
     try {
       role = await guild.roles.create({
         name: 'Muted',
-        color: '#808080',
+        colors: { primaryColor: '#808080' },
         reason: 'Auto-created Muted Role'
       });
       guild.channels.cache.forEach(async (channel) => {

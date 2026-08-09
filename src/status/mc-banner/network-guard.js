@@ -141,7 +141,7 @@ async function resolve(rawHost, allowPrivateHosts = false, dnsResolver = dns) {
       throw new IllegalArgumentError('Private or local addresses are blocked');
     }
   }
-  return { handshakeHost: host, address: addresses[0] };
+  return { handshakeHost: host, address: addresses[0], addresses: [...new Set(addresses)] };
 }
 
 module.exports = {

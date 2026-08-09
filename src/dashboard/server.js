@@ -21,6 +21,7 @@ import { getCardConfig, normalizeCardDomain } from '../banking/cardConfig.js';
 import { getStatsConfigForGuild } from '../status/serverStatsManager.js';
 import { getAllSections, saveSections } from '../database/guildSettings.js';
 import { getModConfig } from '../moderation/moderationManager.js';
+import { parseTrackedMinecraftAddress } from '../status/minecraftBanner.js';
 import { applyCardResult } from '../banking/cardResult.js';
 import { supabase } from '../database/supabaseClient.js';
 import { encryptToken, decryptToken, generateCsrfToken, sanitizePayload } from '../utils/securityUtils.js';
@@ -554,7 +555,23 @@ export function startDashboard(client) {
             const statsConfig = await getStatsConfigForGuild(guildId);
             const modConfig = await getModConfig(guildId);
             const settings = await getAllSections(guildId, true);
-            const minecraftServers = Array.isArray(settings.minecraft?.servers) ? settings.minecraft.servers : [];
+            const minecraftServers = [];
+            for (const server of Array.isArray(settings.minecraft?.servers) ? settings.minecraft.servers : []) {
+                try {
+                    const target = parseTrackedMinecraftAddress(server.ip, server.port ?? null, true);
+                    minecraftServers.push({
+                        channelId: String(server.channelId),
+                        ip: target.host,
+                        port: target.port,
+                        messageId: String(server.messageId || 'pending'),
+                    });
+                } catch (error) {
+                    console.error(
+                        `[Dashboard] Skipping invalid Minecraft config for guild ${guildId}:`,
+                        error.message || error,
+                    );
+                }
+            }
             const guild = client.guilds.cache.get(guildId);
             const configVersion = Number(settings.version || 0);
             const serverBanner = guild?.bannerURL({ size: 1024 }) || '';
@@ -667,10 +684,24 @@ export function startDashboard(client) {
             if (!Number.isInteger(jtcLimit) || jtcLimit < 0 || jtcLimit > 99) return res.status(400).json({ error: 'JTC limit must be between 0 and 99' });
             if (!Number.isInteger(jtcBitrate) || jtcBitrate < 8000 || jtcBitrate > (guild?.maximumBitrate || 96000)) return res.status(400).json({ error: 'Invalid JTC bitrate for this server' });
             if (typeof jtcConfig.defaultLocked !== 'boolean') return res.status(400).json({ error: 'Invalid JTC lock setting' });
+            const normalizedServers = [];
             for (const server of servers) {
-                if (!validChannel(server.channelId) || typeof server.ip !== 'string' || !server.ip.trim() || server.ip.trim().length > 253) return res.status(400).json({ error: 'Invalid Minecraft server' });
-                const port = Number(server.port || 25565);
-                if (!Number.isInteger(port) || port < 1 || port > 65535) return res.status(400).json({ error: 'Invalid Minecraft port' });
+                if (!validChannel(server.channelId) || typeof server.ip !== 'string') {
+                    return res.status(400).json({ error: 'Invalid Minecraft server' });
+                }
+                try {
+                    const target = parseTrackedMinecraftAddress(server.ip, server.port ?? null, false);
+                    normalizedServers.push({
+                        channelId: String(server.channelId),
+                        ip: target.host,
+                        port: target.port,
+                        messageId: String(server.messageId || 'pending'),
+                    });
+                } catch (error) {
+                    return res.status(400).json({
+                        error: `Invalid Minecraft address: ${error.message}`,
+                    });
+                }
             }
 
             const currentBankSection = existingSettings.bank || {};
@@ -698,12 +729,7 @@ export function startDashboard(client) {
                     domain: normalizeCardDomain(cardConfig.domain ?? existingCard.domain),
                 },
                 server_stats: statsConfig,
-                minecraft: { servers: servers.map(server => ({
-                    channelId: String(server.channelId),
-                    ip: server.ip.trim(),
-                    port: Number(server.port || 25565),
-                    messageId: String(server.messageId || 'pending'),
-                })) },
+                minecraft: { servers: normalizedServers },
                 utility: { ...(existingSettings.utility || {}), autoroleId },
             };
             let nextVersion;
@@ -716,15 +742,15 @@ export function startDashboard(client) {
                 throw saveError;
             }
             setJtcSettingsCache(guildId, payload.jtc);
-            for (const server of servers) {
+            for (const server of normalizedServers) {
                 import('../status/statusManager.js').then(({ updateServerStatus }) => updateServerStatus({
                     id: server.channelId,
                     channelId: server.channelId,
                     guildId,
                     ip: server.ip,
-                    port: Number(server.port || 25565),
-                    messageId: server.messageId || 'pending',
-                    name: server.ip,
+                    port: server.port,
+                    messageId: server.messageId,
+                    name: server.port === 25565 ? server.ip : `${server.ip}:${server.port}`,
                 }, client).catch(err => console.error('Immediate status update error:', err))).catch(console.error);
             }
             res.json({ success: true, configVersion: Number(nextVersion), message: 'Configuration saved to Supabase successfully!' });
