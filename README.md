@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Elaina2026/NexBucket/main/assets/unknown_server.png" alt="NexBucket Bot Avatar" width="120" style="border-radius: 50%;">
+</p>
+
 ### NexBucket
 
 <p align="center">
