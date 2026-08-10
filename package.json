@@ -2,6 +2,7 @@
   "name": "nexbucket",
   "version": "1.0.0",
   "description": "NexBucket — Unified Discord Bot (Status + Ticket)",
+  "author": "Elaina2026",
   "license": "CC-BY-NC-4.0",
   "main": "index.js",
   "type": "module",

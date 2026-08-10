@@ -292,6 +292,8 @@ Restore the original `ENCRYPTION_SECRET`. If the key was intentionally rotated, 
 
 ## License and notices
 
+Created and maintained by **Elaina2026**.
+
 NexBucket is licensed under [Creative Commons Attribution-NonCommercial 4.0 International](LICENSE).
 
 The Minecraft banner integration has separate dual-license permission for use in NexBucket and carries upstream attribution. See [NOTICE.md](NOTICE.md). Third-party dependencies and downloaded Mojang assets retain their respective terms and trademarks.
