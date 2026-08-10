@@ -290,6 +290,13 @@ Restore the original `ENCRYPTION_SECRET`. If the key was intentionally rotated, 
 - Check transaction order code, amount and callback signature.
 - Do not enable secret-bearing request logs in production.
 
+## Contributors
+
+- **Elaina2026** (Lead Developer)
+- **Claude** (AI Assistant)
+- **Codex** (AI Assistant)
+- **Gemini** (AI Assistant)
+
 ## License and notices
 
 Created and maintained by **Elaina2026**.
