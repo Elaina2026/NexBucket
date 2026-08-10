@@ -1,8 +1,7 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Elaina2026/NexBucket/main/assets/unknown_server.png" alt="NexBucket Bot Avatar" width="120" style="border-radius: 50%;">
+  <img src="https://cdn.discordapp.com/avatars/1532351525563666533/16ed1c332d9c4f9ee7f029bd86918421.png?size=1024" alt="NexBucket Bot Avatar" width="120" style="border-radius: 50%;">
+  <h1 align="center">NexBucket</h1>
 </p>
-
-### NexBucket
 
 <p align="center">
   <strong>Discord server management, payments, moderation, tickets, Minecraft status, and automation in one Node.js bot.</strong>
