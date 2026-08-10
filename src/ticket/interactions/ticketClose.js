@@ -37,7 +37,7 @@ async function closeTicketDirectly(interaction, staffId) {
         let dmDesc = config.dmMessageOnClose
           ? config.dmMessageOnClose.replace(/{channel}/g, channel.name).replace(/{user}/g, creator.toString())
           : `❤️ Cảm ơn bạn đã tin tưởng và sử dụng dịch vụ của chúng tôi.`;
-          
+
         const dmEmbed = new EmbedBuilder()
           .setColor(0x2b2d31)
           .setTitle('🌸 Ticket của bạn đã hoàn thành')
@@ -48,7 +48,7 @@ async function closeTicketDirectly(interaction, staffId) {
             `🔒 **Password:** ||${transcriptData ? transcriptData.password : 'Failed'}||`
           )
           .setTimestamp();
-          
+
         await creator.send({ embeds: [dmEmbed] });
       } catch (e) {
         console.warn('[ticketClose] Failed to send DM.');
@@ -237,12 +237,12 @@ export async function handleTicketReviewSubmit(interaction) {
         { name: 'Closed by',  value: `<@${staffId}>`, inline: true },
       )
       .setTimestamp();
-      
+
     try {
       let dmDesc = config.dmMessageOnClose
         ? config.dmMessageOnClose.replace(/{channel}/g, channel.name).replace(/{user}/g, user.toString())
         : `❤️ Cảm ơn bạn đã tin tưởng và sử dụng dịch vụ của chúng tôi.`;
-        
+
       const dmEmbed = new EmbedBuilder()
         .setColor(0x2b2d31)
         .setTitle('🌸 Ticket của bạn đã hoàn thành')
@@ -253,7 +253,7 @@ export async function handleTicketReviewSubmit(interaction) {
           `🔒 **Password:** ||${transcriptData ? transcriptData.password : 'Failed'}||`
         )
         .setTimestamp();
-        
+
       await user.send({ embeds: [dmEmbed] });
     } catch (e) {
       console.warn('[ticketClose] Failed to send DM.');

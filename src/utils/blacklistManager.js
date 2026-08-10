@@ -41,6 +41,6 @@ export async function removeFromBlacklist(userId) {
   }
 }
 export function isUserBlacklisted(userId) {
-  if (!isCacheLoaded) return false; 
+  if (!isCacheLoaded) return false;
   return blacklistCache.has(userId);
 }

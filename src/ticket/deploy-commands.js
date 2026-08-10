@@ -25,7 +25,7 @@ export const commands = [
   new SlashCommandBuilder()
     .setName('ticket-add-staff')
     .setDescription('Invite a specific staff member to the current ticket')
-    .addUserOption(option => 
+    .addUserOption(option =>
       option.setName('staff')
         .setDescription('Staff member to grant access')
         .setRequired(true)

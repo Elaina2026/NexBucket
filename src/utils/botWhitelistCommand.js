@@ -5,17 +5,17 @@ export const botWhitelistCommandData = new SlashCommandBuilder()
   .setName('bot-whitelist')
   .setDescription('Manage the Anti-Bot whitelist to allow specific bots to join')
   .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-  .addSubcommand(sub => 
+  .addSubcommand(sub =>
     sub.setName('add')
       .setDescription('Add a bot to the whitelist')
       .addStringOption(opt => opt.setName('bot_id').setDescription('The User ID of the bot').setRequired(true))
   )
-  .addSubcommand(sub => 
+  .addSubcommand(sub =>
     sub.setName('remove')
       .setDescription('Remove a bot from the whitelist')
       .addStringOption(opt => opt.setName('bot_id').setDescription('The User ID of the bot').setRequired(true))
   )
-  .addSubcommand(sub => 
+  .addSubcommand(sub =>
     sub.setName('list')
       .setDescription('List all whitelisted bots')
   )
@@ -34,7 +34,7 @@ export async function handleBotWhitelistCommand(interaction) {
     } else {
       await interaction.reply({ content: `❌ Failed to add bot \`${botId}\` to the whitelist.`, flags: MessageFlags.Ephemeral });
     }
-  } 
+  }
   else if (subcommand === 'remove') {
     const botId = interaction.options.getString('bot_id');
     const success = await removeBotFromWhitelist(guildId, botId);

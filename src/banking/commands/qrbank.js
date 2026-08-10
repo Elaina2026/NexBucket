@@ -115,7 +115,7 @@ export async function handleQrBankModal(interaction) {
                 { name: '📢 Notification Channel', value: notificationChannelId ? `<#${notificationChannelId}>` : 'Not configured', inline: false }
             )
             .setFooter({ text: 'Use command +qr <amount> to generate a PayOS payment link' });
-        await interaction.reply({ embeds: [embed], flags: 64 }); 
+        await interaction.reply({ embeds: [embed], flags: 64 });
     }
     if (interaction.customId === 'payos_setup_modal') {
         const payosClientId = interaction.fields.getTextInputValue('payosClientId').trim();

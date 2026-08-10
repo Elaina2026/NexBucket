@@ -5,7 +5,7 @@ import { getSection, saveSection } from '../database/guildSettings.js';
 
 import ms from 'ms';
 import { getBotRoles, isBotDev, isBotOwner } from '../utils/permissionManager.js';
-/** Chuyển chuỗi thời lượng thành mili-giây. ms@2 NÉM LỖI với null/chuỗi rác nên phải bọc lại. */
+
 export function parseDuration(str) {
   if (!str || typeof str !== 'string') return null;
   try {
@@ -18,11 +18,11 @@ export const DEFAULT_MOD_CONFIG = {
   enablePrefixCommands: true, modPrefix: '!', warnThreshold: 3, modLogChannel: '',
   badWordsFilterEnabled: false, badWords: '', badWordsPunishment: 'warn',
 };
-/**
- * Cài đặt automod của guild. Nguồn dữ liệu duy nhất là `guild_settings.moderation` —
- * cũng chính là nơi dashboard ghi vào, nên Discord và dashboard luôn thấy cùng giá trị.
- * Bảng `moderation` chỉ giữ TRẠNG THÁI theo người dùng (warnings/tempbans/hardmutes/mutes).
- */
+
+
+
+
+
 export async function getModConfig(guildId) {
   if (!guildId) return { ...DEFAULT_MOD_CONFIG };
   try {
@@ -454,7 +454,7 @@ async function handleHardmute(interaction) {
   if (!role) return interaction.reply({ content: '❌ Failed to find or create the `Muted` role.', flags: MessageFlags.Ephemeral });
   const modData = await getModData(interaction.guild.id);
   const previousRoles = member.roles.cache
-    .filter(r => r.id !== interaction.guild.id && r.id !== role.id) 
+    .filter(r => r.id !== interaction.guild.id && r.id !== role.id)
     .map(r => r.id);
   modData.hardmutes[user.id] = {
     unmute_time: durationMs ? Date.now() + durationMs : null,
@@ -569,8 +569,8 @@ export async function handleAntiLink(message) {
   if (!message.member) return;
   if (message.author.id === message.client.user.id) return;
   if (!message.guild) return;
-  // Tôn trọng công tắc antiLink. Trước đây cờ này được lưu nhưng không code nào đọc,
-  // nên tắt trên dashboard hay bằng !automod đều không có tác dụng.
+
+
   const modConfig = await getModConfig(message.guild.id);
   if (modConfig.antiLink === false) return;
   if (!message.author.bot && message.member.permissions.has(PermissionFlagsBits.ManageMessages)) {
@@ -691,7 +691,7 @@ export async function handleModerationMessage(message) {
       case 'tempban': await handleTempban(interactionAdapter); break;
       case 'kick': await handleKick(interactionAdapter); break;
       case 'timeout': await handleTimeout(interactionAdapter); break;
-      case 'removetimeout': 
+      case 'removetimeout':
       case 'untimeout': await handleRemoveTimeout(interactionAdapter); break;
       case 'mute': await handleMute(interactionAdapter); break;
       case 'unmute': await handleUnmute(interactionAdapter); break;

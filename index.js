@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import dns from 'node:dns';
-dns.setDefaultResultOrder('ipv4first'); 
+dns.setDefaultResultOrder('ipv4first');
 import { Client, GatewayIntentBits, Partials, ActivityType } from 'discord.js';
 import { initDatabase } from './src/database/supabaseClient.js';
 import {
@@ -115,10 +115,10 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.isChatInputCommand()) {
       const { commandName } = interaction;
       logActivity(
-        interaction.guildId, 
-        interaction.guild?.name, 
-        interaction.user.id, 
-        'COMMAND_USE', 
+        interaction.guildId,
+        interaction.guild?.name,
+        interaction.user.id,
+        'COMMAND_USE',
         `Used command: /${commandName}`
       );
       if (commandName === 'mcserver') {
@@ -310,8 +310,8 @@ client.on('messageCreate', async (message) => {
   }
   const isModerationHandled = await handleModerationMessage(message);
   if (isModerationHandled) return;
-  const isChannelCommand = 
-    content.startsWith('!lock') || content.startsWith('?lock') || 
+  const isChannelCommand =
+    content.startsWith('!lock') || content.startsWith('?lock') ||
     content.startsWith('!unlock') || content.startsWith('?unlock') ||
     content.startsWith('!hide') || content.startsWith('?hide') ||
     content.startsWith('!unhide') || content.startsWith('?unhide') ||

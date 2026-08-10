@@ -20,9 +20,9 @@ function buildTicketConfirmEmbed(user, ticketInfo, config) {
     .setFooter({ text: `Ticket by: ${user.tag}` })
     .setTimestamp();
   if (config.embedAuthorName) {
-    embed.setAuthor({ 
-      name: config.embedAuthorName, 
-      url: config.embedAuthorUrl || null 
+    embed.setAuthor({
+      name: config.embedAuthorName,
+      url: config.embedAuthorUrl || null
     });
   }
   return embed;
@@ -45,7 +45,7 @@ export async function handleTicketSelect(interaction) {
   }
   let nextNumber = (config.ticketCounter || 0) + 1;
   config.ticketCounter = nextNumber;
-  await ConfigManager.saveConfig(guildId, config); 
+  await ConfigManager.saveConfig(guildId, config);
   const channelName = `${prefix}-${String(nextNumber).padStart(4, '0')}`;
   const staffRoleIds = getStaffRoleIds(config);
   const permissionOverwrites = [

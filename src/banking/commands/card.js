@@ -62,13 +62,13 @@ export async function handleCardCommand(message) {
         return message.reply(`❌ Card2K chưa sẵn sàng (${config.status}). Admin hãy dùng \`/setup-card\`.`);
     }
     const { partnerId, partnerKey, domain } = config;
-    const requestId = uuidv4().replace(/-/g, ''); 
+    const requestId = uuidv4().replace(/-/g, '');
     const command = 'charging';
     const signString = partnerKey + code + serial;
     const sign = crypto.createHash('md5').update(signString).digest('hex');
     const url = `https://${domain}/chargingws/v2`;
-    // Ghi giao dịch TRƯỚC khi gọi API. status 0 = "đang gửi" (Card2K không trả về 0),
-    // để callback quay về sớm vẫn tìm thấy row thay vì trả 404 và mất thông báo vĩnh viễn.
+
+
     if (supabase) {
         const { error: preErr } = await supabase.from('card_transactions').insert([{
             request_id: requestId,
@@ -87,12 +87,12 @@ export async function handleCardCommand(message) {
         }
         wakeCardStatusPoller();
     }
-    // Chỉ ghi khi webhook CHƯA chốt giao dịch (status vẫn là 0),
-    // tránh ghi đè kết quả thật nếu callback về trước khi hàm này chạy.
+
+
     const finalize = async (fields) => {
         if (!supabase) return;
-        // updated_at phải ghi tường minh: DEFAULT NOW() chỉ áp dụng lúc INSERT,
-        // không có trigger nào tự cập nhật khi UPDATE.
+
+
         const { error } = await supabase.from('card_transactions')
             .update({ ...fields, updated_at: new Date().toISOString() })
             .eq('request_id', requestId)
@@ -127,8 +127,8 @@ export async function handleCardCommand(message) {
                 .setDescription(`Your card has been submitted and is pending verification.\n\n**Provider:** ${telco}\n**Amount:** ${amount} VND\n**Serial:** ${serial}\n**Request ID:** \`${requestId}\``)
                 .setFooter({ text: 'We will notify you once processed. Please keep your card until then.' });
             const replyMsg = await message.reply({ embeds: [embed] });
-            // Ghi vị trí tin nhắn trước khi chốt status, để webhook có chỗ sửa embed.
-            // Không lọc theo status: luôn cần lưu dù webhook đã chốt xong.
+
+
             if (supabase && replyMsg) {
                 const { error: locErr } = await supabase.from('card_transactions')
                     .update({ channel_id: replyMsg.channelId, message_id: replyMsg.id })

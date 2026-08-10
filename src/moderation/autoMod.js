@@ -20,8 +20,8 @@ export async function handleAutoMod(message) {
         try {
           if (punishment === 'warn') {
             await message.channel.send(`⚠️ ${message.author.toString()}, please do not use banned words!`).then(m => setTimeout(() => m.delete().catch(()=>null), 5000));
-            // getModData trả về khoá `warnings`, không phải `warns` —
-            // dùng sai tên khiến cảnh cáo tự động chưa bao giờ được ghi lại.
+
+
             const modData = await getModData(message.guild.id);
             if (!modData.warnings) modData.warnings = {};
             if (!modData.warnings[message.author.id]) modData.warnings[message.author.id] = [];
@@ -74,7 +74,7 @@ export async function handleAutoMod(message) {
             await logChannel.send({ embeds: [embed] }).catch(() => {});
           }
         }
-        return true; 
+        return true;
       }
     }
   }

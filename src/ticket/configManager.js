@@ -39,7 +39,7 @@ class ConfigManager {
 
   static async getAllConfigs() {
     try {
-      // ponytail: full-table scan via supabase; add pagination when guilds > 1000
+
       const { supabase } = await import('../database/supabaseClient.js');
       if (!supabase) return {};
       const { data, error } = await supabase

@@ -1,10 +1,10 @@
 import { supabase } from './supabaseClient.js';
 
-/**
- * guild_settings helper — single source of truth for per-guild config.
- * Each module owns one JSONB section. Updates are section-scoped:
- * saving 'ticket' never touches 'welcome'.
- */
+
+
+
+
+
 
 const VALID_SECTIONS = [
   'ticket', 'welcome', 'jtc', 'moderation', 'bank',
@@ -55,9 +55,9 @@ function validateSection(section, value) {
   }
 }
 
-/**
- * Get one section for a guild. Returns plain object (never null).
- */
+
+
+
 export async function getSection(guildId, section, fresh = false) {
   requireDatabase();
   validateGuildId(guildId);
@@ -66,9 +66,9 @@ export async function getSection(guildId, section, fresh = false) {
   return clone(row[section] ?? {});
 }
 
-/**
- * Get all sections for a guild. Returns full row or defaults.
- */
+
+
+
 export async function getAllSections(guildId, fresh = false) {
   requireDatabase();
   validateGuildId(guildId);
@@ -94,16 +94,16 @@ export async function getAllSections(guildId, fresh = false) {
   }
 }
 
-/**
- * Save one section with optimistic version check.
- * Returns new version number. Throws on conflict (code 40001).
- */
+
+
+
+
 export async function saveSection(guildId, section, value, expectedVersion = null) {
   requireDatabase();
   validateGuildId(guildId);
   validateSection(section, value);
 
-  // Upsert with optional version check via RPC
+
   if (expectedVersion !== null) {
     const { data, error } = await supabase.rpc('save_guild_section', {
       p_guild_id: guildId,
@@ -113,10 +113,10 @@ export async function saveSection(guildId, section, value, expectedVersion = nul
     });
     if (error) throw error;
     invalidateGuildSettingsCache(guildId);
-    return data; // new version
+    return data;
   }
 
-  // Simple upsert without version check (bot-side saves)
+
   const { data, error } = await supabase
     .from('guild_settings')
     .upsert({
@@ -133,10 +133,10 @@ export async function saveSection(guildId, section, value, expectedVersion = nul
   return data.version;
 }
 
-/**
- * Save multiple sections atomically (dashboard save).
- * Uses RPC for version-checked atomic write.
- */
+
+
+
+
 export async function saveSections(guildId, sections, expectedVersion) {
   requireDatabase();
   validateGuildId(guildId);
@@ -150,12 +150,12 @@ export async function saveSections(guildId, sections, expectedVersion) {
   });
   if (error) throw error;
   invalidateGuildSettingsCache(guildId);
-  return data; // new version
+  return data;
 }
 
-/**
- * Get version for a guild (for optimistic concurrency).
- */
+
+
+
 export async function getVersion(guildId) {
   requireDatabase();
   validateGuildId(guildId);

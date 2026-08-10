@@ -7,7 +7,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     else document.documentElement.setAttribute('data-theme', 'light');
     localStorage.setItem('nex-theme', isLight ? 'dark' : 'light');
   });
-  // Generate floating particles for hero
+
   const particleContainer = document.getElementById('heroParticles');
   if (particleContainer) {
     for (let i = 0; i < 30; i++) {
@@ -21,7 +21,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       particleContainer.appendChild(p);
     }
   }
-  let currentGuildId = null, guildsData = [];
+  let currentGuildId = null, currentGuild = null, currentUser = null, guildsData = [];
   let configVersion = 0;
   let guildChannels = [], guildRoles = [];
   function parseRoute() {
@@ -101,6 +101,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
   function renderLoggedOut() { btnLogin?.classList.remove('hidden'); userBadge?.classList.add('hidden'); loggedOutView?.classList.remove('hidden'); loggedInView?.classList.add('hidden'); }
   function renderLoggedIn(data) {
+    currentUser = data.user;
     btnLogin?.classList.add('hidden'); userBadge?.classList.remove('hidden'); loggedOutView?.classList.add('hidden'); loggedInView?.classList.remove('hidden');
     document.getElementById('userName').textContent = data.user.username;
     const av = document.getElementById('userAvatar');
@@ -134,6 +135,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
   async function openDashboard(guild, initialSection = 'general', updateUrl = true) {
     currentGuildId = guild.id;
+    currentGuild = guild;
     serverPickerView.classList.add('hidden');
     dashboardLayout.classList.remove('hidden');
     if (updateUrl) pushRoute(guild.id, initialSection);
@@ -199,20 +201,28 @@ document.addEventListener('DOMContentLoaded', async () => {
     const opts = options.map(o => `<option value="${o.value}">${o.label}</option>`).join('');
     return `<div class="form-group"><label class="field-label">${label}</label><select id="${id}" class="select-input">${opts}</select>${hint ? `<span class="field-hint">${hint}</span>` : ''}</div>`;
   }
-  function makeBannerPicker(id, label) {
+  function makeBannerPicker(id, label, mode) {
     const urls = [
       'https://cdn.koya.gg/gallery/l/9tQ5kUy.png', 'https://cdn.koya.gg/gallery/l/es49qwK.png', 'https://cdn.koya.gg/gallery/l/PZb54xG.png',
       'https://cdn.koya.gg/gallery/l/e7wNTbc.png', 'https://cdn.koya.gg/gallery/l/epBvRPS.png', 'https://cdn.koya.gg/gallery/l/e32QKfw.png',
       'https://cdn.koya.gg/gallery/l/UBITUg8.png', 'https://cdn.koya.gg/gallery/l/jh0brcw.png', 'https://cdn.koya.gg/gallery/l/6mWYs87.png',
       'https://cdn.koya.gg/gallery/l/y06fE4T.png', 'https://cdn.koya.gg/gallery/l/vbOPkZ4.png', 'https://cdn.koya.gg/gallery/l/W26rNNb.png'
     ];
-    const thumbs = urls.map(u => `<img class="banner-thumb" src="/api/proxy-image?url=${encodeURIComponent(u)}" title="Click to use" data-banner-target="${id}" data-banner-url="${u}" />`).join('');
+    const thumbs = urls.map(u => `<img class="banner-thumb" src="/api/proxy-image?url=${encodeURIComponent(u)}" title="Click to use" data-banner-target="${id}" data-banner-mode="${mode}" data-banner-url="${u}" />`).join('');
     return `<div class="form-group">
       <label class="field-label">${label}</label>
-      <div class="banner-preview-wrap">
-        <img id="${id}_preview" class="banner-preview" src="/api/proxy-image?url=${encodeURIComponent('https://cdn.koya.gg/gallery/l/9tQ5kUy.png')}" data-banner-preview/>
+      <div class="discord-preview" data-discord-preview="${mode}">
+        <img class="discord-preview-avatar" src="/api/bot-avatar" alt="NexBucket"/>
+        <div class="discord-preview-body">
+          <div class="discord-preview-author">NexBucket <span>APP</span></div>
+          <div class="discord-preview-message" data-preview-message="${mode}"></div>
+          <div class="banner-preview-wrap">
+            <img id="${id}_preview" class="banner-preview" alt="${mode} banner preview" data-banner-preview="${mode}"/>
+            <div class="banner-preview-status" data-preview-status="${mode}">Loading preview...</div>
+          </div>
+        </div>
       </div>
-      <input type="text" id="${id}" class="text-input" placeholder="https://..." data-banner-input="${id}"/>
+      <input type="text" id="${id}" class="text-input" placeholder="https://..." data-banner-input="${id}" data-banner-mode="${mode}"/>
       <details class="banner-gallery-details">
         <summary>Choose from gallery (Suggested backgrounds)</summary>
         <div class="banner-gallery-grid">
@@ -221,30 +231,84 @@ document.addEventListener('DOMContentLoaded', async () => {
       </details>
     </div>`;
   }
-  // CSP script-src 'self' chan moi thuoc tinh su kien inline (onclick/oninput/onerror),
-  // nen phai gan listener bang JS. Su kien 'error' khong bubble => khong the uy quyen,
-  // phai gan truc tiep sau moi lan buildAllSections() thay doi innerHTML.
-  const BANNER_FALLBACK = '/api/proxy-image?url=' + encodeURIComponent('https://cdn.koya.gg/gallery/l/9tQ5kUy.png');
-  function wireBannerPickers() {
-    document.querySelectorAll('img[data-banner-preview]').forEach(img => {
-      img.onerror = () => { img.src = BANNER_FALLBACK; };
-    });
-    document.querySelectorAll('input[data-banner-input]').forEach(input => {
-      input.addEventListener('input', () => {
-        const preview = document.getElementById(input.dataset.bannerInput + '_preview');
-        if (preview) preview.src = input.value ? '/api/proxy-image?url=' + encodeURIComponent(input.value) : BANNER_FALLBACK;
-      });
-    });
+  const previewState = new Map();
+  function previewFields(mode) {
+    return mode === 'welcome'
+      ? { message: 'welcomeMessageContent', title: 'welcome_text', background: 'welcome_bg' }
+      : { message: 'goodbyeMessageContent', title: 'goodbye_text', background: 'goodbye_bg' };
   }
-  // Gan MOT LAN len #configForm (phan tu on dinh, chi innerHTML bi thay the).
-  // Gan ben trong buildAllSections() se chong listener moi lan render lai.
+  function previewMessage(mode) {
+    const fields = previewFields(mode);
+    const template = getVal(fields.message) || (mode === 'welcome' ? 'Welcome {user} to **{server}**!' : '{user} has left **{server}**.');
+    const username = currentUser?.username || 'User';
+    const serverName = currentGuild?.name || 'Server';
+    const escaped = esc(template)
+      .replace(/\{user\}/g, `<span class="discord-mention">@${esc(username)}</span>`)
+      .replace(/\{server\}/g, esc(serverName));
+    return escaped.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br>');
+  }
+  function scheduleBannerPreview(mode, immediate = false) {
+    const current = previewState.get(mode) || {};
+    clearTimeout(current.timer);
+    current.timer = setTimeout(() => updateBannerPreview(mode), immediate ? 0 : 350);
+    previewState.set(mode, current);
+    const message = document.querySelector(`[data-preview-message="${mode}"]`);
+    if (message) message.innerHTML = previewMessage(mode);
+  }
+  async function updateBannerPreview(mode) {
+    if (!currentGuildId) return;
+    const fields = previewFields(mode);
+    const image = document.getElementById(fields.background + '_preview');
+    const status = document.querySelector(`[data-preview-status="${mode}"]`);
+    if (!image || !status) return;
+    const current = previewState.get(mode) || {};
+    current.controller?.abort();
+    current.controller = new AbortController();
+    previewState.set(mode, current);
+    status.textContent = 'Rendering preview...';
+    status.classList.remove('hidden');
+    try {
+      const response = await fetch(`/api/guilds/${currentGuildId}/welcome-preview`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode,
+          message: getVal(fields.message),
+          title: getVal(fields.title),
+          background: getVal(fields.background),
+        }),
+        signal: current.controller.signal,
+      });
+      if (!response.ok) {
+        const result = await response.json().catch(() => ({}));
+        throw new Error(result.error || 'Preview failed');
+      }
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      if (current.objectUrl) URL.revokeObjectURL(current.objectUrl);
+      current.objectUrl = objectUrl;
+      image.src = objectUrl;
+      status.classList.add('hidden');
+    } catch (error) {
+      if (error.name === 'AbortError') return;
+      status.textContent = error.message;
+      status.classList.remove('hidden');
+    }
+  }
+  function wireBannerPickers() {
+    for (const mode of ['welcome', 'goodbye']) {
+      const fields = previewFields(mode);
+      for (const id of Object.values(fields)) {
+        document.getElementById(id)?.addEventListener('input', () => scheduleBannerPreview(mode));
+      }
+    }
+  }
   document.getElementById('configForm')?.addEventListener('click', (e) => {
     const thumb = e.target.closest('.banner-thumb[data-banner-url]');
     if (thumb) {
       const input = document.getElementById(thumb.dataset.bannerTarget);
-      const preview = document.getElementById(thumb.dataset.bannerTarget + '_preview');
       if (input) input.value = thumb.dataset.bannerUrl;
-      if (preview) preview.src = '/api/proxy-image?url=' + encodeURIComponent(thumb.dataset.bannerUrl);
+      scheduleBannerPreview(thumb.dataset.bannerMode, true);
       return;
     }
     const guideBtn = e.target.closest('[data-guide]');
@@ -260,7 +324,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       <hr class="divider"/>
       <div class="subsection-title">${I.monitor} Banner Image</div>
       ${makeInput('welcome_text', 'Banner Title Text', 'WELCOME', 'Large text overlaid on the welcome banner image.')}
-      ${makeBannerPicker('welcome_bg', 'Banner Background URL')}
+      ${makeBannerPicker('welcome_bg', 'Banner Background URL', 'welcome')}
     </div></div>`;
     form.innerHTML += `<div class="content-section" id="sec-goodbye"><div class="section-card"><div class="section-card-title">${I.door} Goodbye Messages</div>
       ${makeChannelPicker('goodbyeChannel', 'Goodbye Channel', 'Channel where goodbye messages are sent.', [0, 5])}
@@ -268,7 +332,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       <hr class="divider"/>
       <div class="subsection-title">${I.monitor} Banner Image</div>
       ${makeInput('goodbye_text', 'Banner Title Text', 'GOOD BYE', 'Large text overlaid on the goodbye banner image.')}
-      ${makeBannerPicker('goodbye_bg', 'Banner Background URL')}
+      ${makeBannerPicker('goodbye_bg', 'Banner Background URL', 'goodbye')}
     </div></div>`;
     form.innerHTML += `<div class="content-section" id="sec-ticket"><div class="section-card"><div class="section-card-title">${I.ticket} Ticket Support System</div>
       <div class="subsection-title">${I.gear} System Channels & Roles</div>
@@ -588,7 +652,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (!overlay) { overlay = document.createElement('div'); overlay.id = 'modalOverlay'; overlay.className = 'modal-overlay'; document.body.appendChild(overlay); }
     overlay.innerHTML = `<div class="modal"><h3>Add Tracked Server</h3>${makeInput('msIp', 'Server IP', 'play.example.com or play.example.com:25570', '')}${makeInput('msPort', 'Server Port', '25565 (optional)', 'Leave blank when the IP already contains a port.', 'number')}${makeChannelPicker('msChannel', 'Update Channel', '', [0, 5])}<div class="modal-actions"><button class="btn-modal" id="btnCancelModal">Cancel</button><button class="btn-modal primary" id="btnConfirmModal">Add</button></div></div>`;
     overlay.classList.add('show');
-    
+
     const wrap = overlay.querySelector('.picker-wrap[data-picker-id="msChannel"]');
     const dropdown = wrap?.querySelector('.picker-dropdown');
     const selectBtn = wrap?.querySelector('.picker-display');
@@ -643,12 +707,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     overlay.addEventListener('click', e => { if (e.target === overlay) overlay.classList.remove('show'); });
   }
 
-  // Expose globally for onclick
+
   window.showGuideModal = function(type) {
     const t = window.NexI18n ? window.NexI18n.t.bind(window.NexI18n) : (k) => k;
     let overlay = document.getElementById('modalOverlay');
     if (!overlay) { overlay = document.createElement('div'); overlay.id = 'modalOverlay'; overlay.className = 'modal-overlay'; document.body.appendChild(overlay); }
-    
+
     const baseUrl = window.location.origin;
     const isPayos = type === 'payos';
     const title = t(isPayos ? 'guide_title_payos' : 'guide_title_card2k');
@@ -701,12 +765,12 @@ document.addEventListener('DOMContentLoaded', async () => {
       setVal('welcomeMessageContent', c.welcomeConfig?.welcomeMessageContent);
       setVal('welcome_text', c.welcomeConfig?.welcomeText);
       setVal('welcome_bg', c.welcomeConfig?.welcomeBg);
-      if (c.welcomeConfig?.welcomeBg) { const img = document.getElementById('welcome_bg_preview'); if (img) img.src = '/api/proxy-image?url=' + encodeURIComponent(c.welcomeConfig.welcomeBg); }
       setPickerValue('goodbyeChannel', c.welcomeConfig?.goodbyeChannel);
       setVal('goodbyeMessageContent', c.welcomeConfig?.goodbyeMessageContent);
       setVal('goodbye_text', c.welcomeConfig?.goodbyeText);
       setVal('goodbye_bg', c.welcomeConfig?.goodbyeBg);
-      if (c.welcomeConfig?.goodbyeBg) { const img = document.getElementById('goodbye_bg_preview'); if (img) img.src = '/api/proxy-image?url=' + encodeURIComponent(c.welcomeConfig.goodbyeBg); }
+      scheduleBannerPreview('welcome', true);
+      scheduleBannerPreview('goodbye', true);
       const tc = c.ticketConfig || {};
       setPickerValue('ticketCategoryId', tc.categoryId);
       setMultiPickerValues('ticketStaffRoleIds', tc.staffRoleIds || (tc.staffRoleId ? [tc.staffRoleId] : []));
@@ -768,7 +832,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         cardStatus.textContent = cc.cardConfigured ? 'Đã cấu hình' : `Chưa sẵn sàng: ${cc.status || 'missing'}`;
         cardStatus.className = `perm-badge ${cc.cardConfigured ? 'badge-owner' : 'badge-manage_server'}`;
       }
-      // Server không bao giờ gửi secret về đây, nên các ô này luôn trống.
+
       markSecretField('payosClientId', bc.payosConfigured);
       markSecretField('payosApiKey', bc.payosConfigured);
       markSecretField('payosChecksumKey', bc.payosConfigured);
@@ -891,7 +955,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
   function getVal(id) { return document.getElementById(id)?.value?.trim() || ''; }
   function setVal(id, val) { const el = document.getElementById(id); if (el) el.value = val || ''; }
-  /** Cho biết một ô secret đang có giá trị lưu sẵn, và cách giữ lại hoặc xoá nó. */
+
   function markSecretField(id, isConfigured) {
     const el = document.getElementById(id);
     if (!el) return;

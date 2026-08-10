@@ -3,9 +3,9 @@ import { PermissionFlagsBits } from 'discord.js';
 import { checkAndAutoWhitelist } from '../utils/botWhitelistManager.js';
 import { getModConfig } from './moderationManager.js';
 const TIME_WINDOW = 10000;
-const THRESHOLD_CHANNELS = 2; 
-const THRESHOLD_MESSAGES = 5; 
-const GC_INTERVAL = 30000; 
+const THRESHOLD_CHANNELS = 2;
+const THRESHOLD_MESSAGES = 5;
+const GC_INTERVAL = 30000;
 const imageTracker = new Map();
 const pingTracker = new Map();
 const textTracker = new Map();
@@ -29,7 +29,7 @@ export async function handleAntiSpam(message) {
   if (!message.member) return;
   if (message.author.id === message.client.user.id) return;
   if (!message.guild) return;
-  // Tôn trọng công tắc antiSpam (trước đây cờ này không được đọc ở đâu cả).
+
   const modConfig = await getModConfig(message.guild.id);
   if (modConfig.antiSpam === false) return;
   if (message.author.bot) {
@@ -56,7 +56,7 @@ export async function handleAntiSpam(message) {
       }
     }
     if (maxRepeat >= 5) {
-      await executePunishment(message.member, [{ channelId, timestamp: now, messageId: message.id, channelRef: message.channel, content: currentWord }], 'Word Spam', 5 * 60 * 1000); 
+      await executePunishment(message.member, [{ channelId, timestamp: now, messageId: message.id, channelRef: message.channel, content: currentWord }], 'Word Spam', 5 * 60 * 1000);
       return;
     }
   }
@@ -67,7 +67,7 @@ export async function handleAntiSpam(message) {
   textTracker.set(userId, textRecords);
   if (textRecords.length >= THRESHOLD_MESSAGES) {
     textTracker.delete(userId);
-    await executePunishment(message.member, textRecords, 'Message Spam', 10 * 60 * 1000); 
+    await executePunishment(message.member, textRecords, 'Message Spam', 10 * 60 * 1000);
     return;
   }
   if (message.attachments.size > 0) {
@@ -80,9 +80,9 @@ export async function handleAntiSpam(message) {
       imageTracker.set(userId, records);
       const uniqueChannels = new Set(records.map(r => r.channelId));
       if (uniqueChannels.size >= THRESHOLD_CHANNELS) {
-        imageTracker.delete(userId); 
-        await executePunishment(message.member, records, 'Ghost Image', 60 * 60 * 1000); 
-        return; 
+        imageTracker.delete(userId);
+        await executePunishment(message.member, records, 'Ghost Image', 60 * 60 * 1000);
+        return;
       }
     }
   }
@@ -96,8 +96,8 @@ export async function handleAntiSpam(message) {
     records.push({ channelId, timestamp: now, messageId: message.id, channelRef: message.channel, mentionedRoles, mentionedUsers });
     pingTracker.set(userId, records);
     if (records.length >= 4) {
-      pingTracker.delete(userId); 
-      await executePunishment(message.member, records, 'Ghost Ping', 10 * 60 * 1000); 
+      pingTracker.delete(userId);
+      await executePunishment(message.member, records, 'Ghost Ping', 10 * 60 * 1000);
       return;
     }
   }

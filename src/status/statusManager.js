@@ -163,9 +163,9 @@ export async function saveBlacklist(list) {
     }
 }
 
-// Geolocation cache — avoids hitting ip-api.com on every status update cycle
+
 const geoCache = new Map();
-const GEO_CACHE_TTL = 3600000; // 1 hour
+const GEO_CACHE_TTL = 3600000;
 
 function countryCodeToFlag(countryCode) {
     const code = String(countryCode || '').toUpperCase();

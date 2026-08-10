@@ -94,7 +94,7 @@ export function setupErrorHandler(client) {
         async function sendGlobalAlert(title, msg, stack) {
             if (!ownerId || !client.isReady()) return;
             const now = Date.now();
-            if (now - lastAlertTime < 10000) return; 
+            if (now - lastAlertTime < 10000) return;
             lastAlertTime = now;
             try {
                 const owner = await client.users.fetch(ownerId).catch(() => null);

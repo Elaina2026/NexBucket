@@ -41,11 +41,11 @@ export function decryptToken(encryptedData) {
         return null;
     }
 }
-/**
- * Đọc một giá trị có thể đang ở dạng mã hoá HOẶC plaintext cũ (trước khi bật mã hoá).
- * Chuỗi ciphertext của chúng ta luôn có đúng 3 phần ngăn bởi ':' (iv:authTag:data);
- * nếu đúng dạng đó mà giải mã thất bại thì trả '' thay vì trả ra chuỗi thô.
- */
+
+
+
+
+
 export function decryptOrLegacy(value) {
     if (!value) return '';
     const decrypted = decryptToken(value);

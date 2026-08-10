@@ -3,18 +3,18 @@ import { EmbedBuilder } from './embed.js';
 import { supabase } from '../database/supabaseClient.js';
 import { getSection, saveSection } from '../database/guildSettings.js';
 export const JTCEmojis = {
-  NAME: '<:Channel:1522174537989623808>',
-  LIMIT: '<:member:1522167712501993542>',
-  LOCK: '<:lock_IDS:1522175041226412032>',
-  UNLOCK: '<:unlocked_IDS:1522212012673990716>',
-  HIDE: '<:Clock:1522175347259609210>',
-  UNHIDE: '<:icon1:1522211690274492417>',
-  INVITE: '<:Call:1522174275048706049>',
-  STATUS: '<:icon:1522191566662533221>',
-  KICK: '<:staff_admin:1522185520367800420> ',
-  BITRATE: '<:Music_IDS:1522175589643976825> ', 
-  TRANSFER: '<:Owner:1522171138002911293>',
-  SAVE: '<:icon2:1522223416323604570>'
+  NAME: '<:name:1535994083594604594>',
+  LIMIT: '<:limit_128x128:1535992819712397372>',
+  LOCK: '<:lock_128x128:1535992821436391485>',
+  UNLOCK: '<:unlock_128x128:1535992831309652030>',
+  HIDE: '<:hide_128x128:1535992814406602872>',
+  UNHIDE: '<:unhide_128x128:1535992828747063378>',
+  INVITE: '<:invite_128x128:1535992816151429261>',
+  STATUS: '<:status_128x128:1535992825454272554>',
+  KICK: '<:kick_128x128:1535992817980022834>',
+  BITRATE: '<:bitrate_128x128:1535992812636737587>',
+  TRANSFER: '<:transfer_128x128:1535992827274600528>',
+  SAVE: '<:save_128x128:1535992804394663997>'
 };
 export const DEFAULT_JTC_CONFIG = Object.freeze({
   hubChannelId: '',
@@ -87,12 +87,6 @@ export async function saveJtcConfig(data) {
     await saveJtcSettings(guildId, { hubChannelId });
   }
 }
-/**
- * Đặt hub channel cho MỘT guild.
- * Dùng hàm này thay cho saveJtcConfig() khi chỉ đổi một guild — saveJtcConfig
- * gán đè nguyên `jtcConfigCache = data`, nên truyền object một guild vào đó
- * sẽ xoá sạch cache hub của tất cả guild khác.
- */
 export async function setJtcHub(guildId, hubChannelId) {
   if (!guildId) return;
   try {
@@ -127,8 +121,6 @@ export async function getJtcActive() {
 export async function saveJtcActive(data) {
   global.JTC_ACTIVE_MEMORY = data;
   if (!supabase) return;
-  // Sync per-guild: upsert current channels, delete removed ones.
-  // No more delete-all-then-insert.
   try {
     const rows = [];
     for (const [guildId, channels] of Object.entries(data)) {
@@ -136,7 +128,6 @@ export async function saveJtcActive(data) {
       for (const [channelId, info] of Object.entries(channels)) {
         rows.push({ guild_id: guildId, channel_id: channelId, owner_id: info.ownerId });
       }
-      // Delete channels no longer active in this guild
       if (channelIds.length > 0) {
         await supabase.from('jtc_active')
           .delete()
@@ -173,9 +164,9 @@ export async function getJtcProfiles() {
       });
     }
     return jtcProfilesCache;
-  } catch { 
+  } catch {
     if (!jtcProfilesCache) jtcProfilesCache = {};
-    return jtcProfilesCache; 
+    return jtcProfilesCache;
   }
 }
 export async function saveJtcProfiles(data) {
@@ -207,7 +198,7 @@ export async function handleSetupJTC(interaction) {
       parent: category ? category.id : null,
       permissionOverwrites: [
         {
-          id: guild.id, 
+          id: guild.id,
           allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.Connect],
           deny: [PermissionFlagsBits.Speak]
         }
@@ -357,7 +348,7 @@ export async function sweepOrphanedChannels(client) {
       swept++;
       continue;
     }
-    for (const [channelId, info] of Object.entries(channels)) {
+    for (const channelId of Object.keys(channels)) {
       const channel = guild.channels.cache.get(channelId);
       if (!channel) {
         delete active[guildId][channelId];

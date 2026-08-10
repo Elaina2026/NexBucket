@@ -5,6 +5,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import {
   getMinecraftBannerFallback,
+  getMinecraftBannerTitle,
   parseMinecraftAddress,
   parseTrackedMinecraftAddress,
   renderMinecraftBanner,
@@ -80,6 +81,11 @@ test('tracked Minecraft address recovers only known legacy telemetry rows', () =
   );
 });
 
+test('Minecraft banner hides the server address behind a generic title', () => {
+  assert.equal(getMinecraftBannerTitle({ ip: 'private.example.com' }), 'A Minecraft Server');
+  assert.equal(getMinecraftBannerTitle({ name: 'Public Network' }), 'Public Network');
+});
+
 test('Minecraft banner fallback is a PNG', async () => {
   const png = await getMinecraftBannerFallback();
   assert.ok(Buffer.isBuffer(png));
@@ -95,6 +101,6 @@ test('Minecraft renderer produces Discord-compatible banner dimensions', {
     name: 'Offline fixture',
   }, true);
   const image = await loadImage(result.png);
-  assert.equal(image.width, 1530);
-  assert.equal(image.height, 180);
+  assert.equal(image.width, 1990);
+  assert.equal(image.height, 256);
 });

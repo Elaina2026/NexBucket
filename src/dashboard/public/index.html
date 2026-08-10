@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+
 <html lang="en">
 <head>
   <link rel="icon" type="image/png" href="/favicon.ico">
@@ -13,13 +13,13 @@
   <meta name="twitter:card" content="summary" />
   <title>NexBucket — Discord Server Management</title>
   <meta name="description" content="Manage tickets, moderation, payments, Minecraft status and server automation securely with NexBucket.">
-  <link rel="stylesheet" href="/style.css?v=1.6" />
+  <link rel="stylesheet" href="/style.css?v=1.7" />
   <script src="/theme-init.js"></script>
   <script type="module" src="/i18n.js?v=1.1"></script>
 </head>
 <body>
 <div class="app-shell">
-  
+
   <header class="topbar">
     <div class="topbar-left">
       <img class="logo-icon-bg" src="/api/bot-avatar" alt="Bot Avatar" style="object-fit:cover; padding:0; border:1px solid var(--border);" />
@@ -36,11 +36,11 @@
   </header>
 
   <main id="mainContent">
-    
-    <!-- ===== LANDING PAGE (Logged Out) ===== -->
-    <div id="loggedOutView" class="hidden">
 
-      <!-- Hero Section with Parallax -->
+
+    <div id="loggedOutView">
+
+
       <section class="landing-hero" id="heroSection">
         <div class="hero-particles" id="heroParticles"></div>
         <div class="hero-content">
@@ -65,7 +65,7 @@
         </div>
       </section>
 
-      <!-- Features Section -->
+
       <section class="landing-features" id="featuresSection">
         <div class="features-header">
           <h2 class="features-title" data-i18n="feat_title">Everything You Need</h2>
@@ -105,7 +105,7 @@
         </div>
       </section>
 
-      <!-- Creator Section -->
+
       <section class="landing-creator" id="creatorSection">
         <div class="creator-card">
           <div class="creator-avatar-wrap">
@@ -118,30 +118,30 @@
       </section>
     </div>
 
-    
-    <!-- ===== LOGGED IN VIEW ===== -->
+
+
     <div id="loggedInView" class="hidden">
-      
+
       <div id="serverPickerView">
         <div class="section-label"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg><span data-i18n="your_servers">Your Servers</span></div>
         <div id="serverGrid" class="server-grid"></div>
       </div>
 
-      
+
       <div id="dashboardLayout" class="dashboard-layout hidden">
         <button id="btnBackToServers" class="btn-back"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg><span data-i18n="back_to_servers">Back to Servers</span></button>
 
         <div class="layout-grid">
-          
+
           <nav class="sidebar" id="sidebar">
             <div class="sidebar-server-info" id="sidebarServerInfo"></div>
             <div class="sidebar-nav" id="sidebarNav"></div>
           </nav>
 
-          
+
           <section class="content-area" id="contentArea">
             <form id="configForm">
-              
+
             </form>
             <div class="action-bar">
               <button type="button" id="btnSave" class="btn-save"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg><span data-i18n="save_config">Save Configuration</span></button>
@@ -157,7 +157,7 @@
     <p>NexBucket Dashboard &bull; <a href="/tos" style="color:var(--text-m);text-decoration:none;" data-i18n="footer_tos">Terms of Service</a> &bull; <a href="/privacy" style="color:var(--text-m);text-decoration:none;" data-i18n="footer_privacy">Privacy Policy</a></p>
   </footer>
 </div>
-<script type="module" src="/dashboard.js?v=1.5"></script>
+<script type="module" src="/dashboard.js?v=1.6"></script>
 <script type="module" src="/index-scripts.js"></script>
 </body>
 </html>

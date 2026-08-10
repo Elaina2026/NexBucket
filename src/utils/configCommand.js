@@ -127,7 +127,7 @@ export async function handleEditModalSubmit(interaction) {
     config.welcomeText = text;
     await saveWelcomeConfig(interaction.guild.id, config);
     await interaction.reply({ content: '✅ Welcome system configuration updated successfully!', flags: MessageFlags.Ephemeral });
-  } 
+  }
   else if (interaction.customId === 'modal_config_goodbye') {
     const bgUrl = interaction.fields.getTextInputValue('goodbye_bg');
     const text = interaction.fields.getTextInputValue('goodbye_text');
@@ -144,7 +144,7 @@ export async function handleEditModalSubmit(interaction) {
       if (nickname && nickname.trim() !== '') {
         await interaction.guild.members.me.setNickname(nickname);
       } else {
-        await interaction.guild.members.me.setNickname(null); 
+        await interaction.guild.members.me.setNickname(null);
       }
     } catch (e) {
       console.error('Failed to set nickname:', e);

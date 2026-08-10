@@ -12,7 +12,7 @@ const execAsync = promisify(exec);
 import axios from 'axios';
 dotenv.config({ override: true });
 import ConfigManager from '../ticket/configManager.js';
-import { getWelcomeConfig } from '../welcome/welcomeManager.js';
+import { getWelcomeConfig, renderWelcomeBanner } from '../welcome/welcomeManager.js';
 import { getJtcSettings, normalizeJtcConfig, setJtcSettingsCache } from '../utils/jtcManager.js';
 import { getIncidents } from '../utils/errorHandler.js';
 import { getAllServicesStatus, getOverallStatus } from '../utils/uptimeTracker.js';
@@ -80,11 +80,11 @@ export function startDashboard(client) {
         console.error(`[Dashboard] ${context}:`, error);
         return res.status(500).json({ error: 'Internal Server Error' });
     };
-    // Mẫu CPU trước đó, dùng để tính % theo chênh lệch ở /api/admin/system.
+
     let lastCpuSample = process.cpuUsage();
     let lastCpuSampleAt = Date.now();
-    // Ghi log ngay tại limiter. Middleware log cũ được đăng ký SAU tất cả route
-    // nên Express không bao giờ chạy tới nó — không sự kiện RATE_LIMIT nào được ghi.
+
+
     const rateLimitHandler = (req, res, next, options) => {
         const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket.remoteAddress;
         logSecurityEvent('RATE_LIMIT', ip, req.headers['user-agent'], `Path: ${req.path}`);
@@ -114,7 +114,7 @@ export function startDashboard(client) {
             "script-src 'self' https://static.cloudflareinsights.com",
             "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
             "font-src 'self' https://fonts.gstatic.com",
-            "img-src 'self' data: https://cdn.discordapp.com https://media.discordapp.net https://img.vietqr.io https://*.supabase.co",
+            "img-src 'self' data: blob: https://cdn.discordapp.com https://media.discordapp.net https://img.vietqr.io https://*.supabase.co",
             "connect-src 'self' https://cloudflareinsights.com",
             "object-src 'none'",
             "frame-ancestors 'none'",
@@ -187,17 +187,17 @@ export function startDashboard(client) {
         res.sendFile(path.join(sourcePublicPath, 'admin.html'));
     });
 
-    // Đích quay về mà bankManager.createPaymentLink() gửi cho PayOS.
-    // Không có hai route này thì người dùng thanh toán xong sẽ nhận 404.
+
+
     app.get('/payos/success', (req, res) => res.redirect('/?payment=success'));
     app.get('/payos/cancel', (req, res) => res.redirect('/?payment=cancelled'));
 
     app.get('/api/admin/system', requireAdmin, async (req, res) => {
         try {
             const cpus = os.cpus();
-            // Đo CHÊNH LỆCH giữa hai lần lấy mẫu. Trước đây code dùng thẳng
-            // process.cpuUsage() — đó là tổng CPU-giây tích luỹ từ lúc khởi động,
-            // nên con số chỉ tăng dần rồi kẹt ở 100% mãi mãi.
+
+
+
             const nowMs = Date.now();
             const cpuDelta = process.cpuUsage(lastCpuSample);
             const elapsedMs = nowMs - lastCpuSampleAt;
@@ -235,7 +235,7 @@ export function startDashboard(client) {
                     }
                 }
             } catch (e) {
-                // Silently ignore disk space errors (e.g. wmic timeout) to prevent console spam
+
             }
 
             res.json({
@@ -473,7 +473,6 @@ export function startDashboard(client) {
                     const permissions = BigInt(g.permissions);
                     const isOwner = g.owner === true;
                     const isAdministrator = (permissions & 0x8n) === 0x8n;
-                    const isManageGuild = (permissions & 0x20n) === 0x20n;
                     const botGuild = client.guilds.cache.get(g.id);
                     let permissionTier = 'manage_server';
                     if (isOwner) permissionTier = 'owner';
@@ -535,6 +534,42 @@ export function startDashboard(client) {
             res.json({ channels, roles, bannerUrl, iconUrl, name: guild.name, memberCount: guild.memberCount });
         } catch (err) {
             sendInternalError(res, err, 'API request failed');
+        }
+    });
+    app.post('/api/guilds/:guildId/welcome-preview', async (req, res) => {
+        try {
+            const auth = await getAuthenticatedUser(req);
+            if (!auth) return res.status(401).json({ error: 'Unauthorized' });
+            const { guildId } = req.params;
+            const guild = client.guilds.cache.get(guildId);
+            if (!guild) return res.status(404).json({ error: 'Guild not found in bot cache' });
+            const guildMember = await getGuildMember(guild, auth.session.user_id);
+            if (!guildMember || (!guildMember.permissions.has('Administrator') && !guildMember.permissions.has('ManageGuild'))) {
+                return res.status(403).json({ error: 'Forbidden: You do not have Administrator permissions on this server.' });
+            }
+            const mode = req.body?.mode;
+            if (mode !== 'welcome' && mode !== 'goodbye') {
+                return res.status(400).json({ error: 'Invalid preview mode' });
+            }
+            const message = typeof req.body?.message === 'string' ? req.body.message : '';
+            const title = typeof req.body?.title === 'string' ? req.body.title.trim() : '';
+            const background = typeof req.body?.background === 'string' ? req.body.background.trim() : '';
+            if (message.length > 2000 || title.length > 80 || background.length > 2048) {
+                return res.status(400).json({ error: 'Preview input is too long' });
+            }
+            if (background && !isAllowedImageUrl(background, ALLOWED_PROXY_DOMAINS)) {
+                return res.status(422).json({ error: 'Background URL is not allowed' });
+            }
+            const isWelcome = mode === 'welcome';
+            const config = isWelcome
+                ? { welcomeMessageContent: message, welcomeText: title, welcomeBg: background }
+                : { goodbyeMessageContent: message, goodbyeText: title, goodbyeBg: background };
+            const png = await renderWelcomeBanner(guildMember, isWelcome, config);
+            res.set('Content-Type', 'image/png');
+            res.set('Cache-Control', 'no-store');
+            return res.send(png);
+        } catch (err) {
+            sendInternalError(res, err, 'Welcome preview failed');
         }
     });
     app.get('/api/config/:guildId', async (req, res) => {
@@ -760,7 +795,7 @@ export function startDashboard(client) {
         }
     });
 
-    // ===== WEBHOOK: PayOS Callback =====
+
     app.post('/api/webhooks/payos', async (req, res) => {
         try {
             const payload = req.body;
@@ -838,9 +873,9 @@ export function startDashboard(client) {
         }
     });
 
-    // ===== WEBHOOK: Card2K Callback =====
+
     app.post('/api/webhooks/card2k', async (req, res) => {
-        // KHÔNG log req.query/req.body: chúng chứa `code` và `serial` — thông tin có giá trị tiền.
+
         const wlog = (...args) => { if (process.env.DEBUG_WEBHOOKS === '1') console.log('[Card2K]', ...args); };
         try {
             const payload = { ...req.query, ...req.body };
@@ -874,15 +909,15 @@ export function startDashboard(client) {
                     const signString = partnerKey + normalizedCode + normalizedSerial;
                     const computedSignature = crypto.createHash('md5').update(signString).digest('hex');
 
-                    // MD5 là định dạng bắt buộc của provider; so sánh timing-safe để tránh rò thêm tín hiệu.
+
                     if (!safeEqualString(computedSignature, normalizedSignature)) {
                         console.warn(`[Card2K Webhook] Signature mismatch for request_id=${normalizedRequestId}`);
                         return res.status(401).json({ error: 'Invalid Signature - Unauthorized' });
                     }
                     wlog('signature ok, status=', status, 'telco=', telco, 'trans_id=', trans_id);
 
-                    // Chốt kết quả bằng hàm dùng chung với poller, để hai đường
-                    // (callback đẩy về / bot chủ động hỏi) không bao giờ lệch logic.
+
+
                     const outcome = await applyCardResult(client, {
                         request_id: normalizedRequestId,
                         status,
@@ -1168,7 +1203,7 @@ export function startDashboard(client) {
                     }
                 }
             } catch (err) {
-                // ignore auth errors
+
             }
 
             if (!hasAdminBypass && data.password && !safeEqualString(data.password, transcriptPassword)) {

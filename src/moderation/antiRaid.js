@@ -4,10 +4,10 @@ import { EmbedBuilder } from '../utils/embed.js';
 import { checkAndAutoWhitelist } from '../utils/botWhitelistManager.js';
 import { getModConfig } from './moderationManager.js';
 const RAID_THRESHOLD = 3;
-const TIME_WINDOW_MS = 10000; 
+const TIME_WINDOW_MS = 10000;
 const actionLimits = new Map();
-const PUNISH_TTL = 24 * 60 * 60 * 1000; 
-const punishedUsers = new Map(); 
+const PUNISH_TTL = 24 * 60 * 60 * 1000;
+const punishedUsers = new Map();
 const raidedServers = new Set();
 export function isServerUnderRaid(guildId) {
   return raidedServers.has(guildId);
@@ -94,7 +94,7 @@ async function executePunishment(guild, user, reason) {
         .setTimestamp();
       await sendAlertToGuild(guild, embed);
       await notifyOwners(guild, { embeds: [embed] });
-      return; 
+      return;
     }
     const rolesToRemove = member.roles.cache.filter(r => r.id !== guild.id && !r.managed);
     await member.roles.remove(rolesToRemove, 'Anti-Raid: Quarantine').catch(() => {});
@@ -133,8 +133,8 @@ async function sendAlertToGuild(guild, embed) {
   if (!me) return;
   let targetChannel = guild.systemChannel;
   if (!targetChannel || !targetChannel.permissionsFor(me).has(['SendMessages', 'ViewChannel'])) {
-     targetChannel = guild.channels.cache.find(c => 
-       c.isTextBased() && 
+     targetChannel = guild.channels.cache.find(c =>
+       c.isTextBased() &&
        c.permissionsFor(me).has(['SendMessages', 'ViewChannel'])
      );
   }
@@ -150,13 +150,13 @@ async function cleanUpSpamChannel(channel) {
   if (channel && channel.deletable) {
     setTimeout(async () => {
       await channel.delete('Anti-Raid: Clean up spam channel').catch(() => {});
-    }, 1000); 
+    }, 1000);
   }
 }
 async function checkRaid(guild, log, actionName) {
   if (!log || !log.executor || log.executor.id === guild.client.user.id) return false;
   if (Date.now() - log.createdTimestamp > 60000) return false;
-  // Tôn trọng công tắc antiRaid (trước đây cờ này không được đọc ở đâu cả).
+
   const modConfig = await getModConfig(guild.id);
   if (modConfig.antiRaid === false) return false;
   if (log.executor.bot) {
@@ -194,7 +194,7 @@ export function setupAntiRaid(client) {
   });
   client.on('channelUpdate', async (oldChannel, newChannel) => {
     if (!oldChannel.guild) return;
-    if (oldChannel.name === newChannel.name) return; 
+    if (oldChannel.name === newChannel.name) return;
     try {
       const logs = await newChannel.guild.fetchAuditLogs({ limit: 20, type: AuditLogEvent.ChannelUpdate }).catch(() => null);
       if (!logs) return;

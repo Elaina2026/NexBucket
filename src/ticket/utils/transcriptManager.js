@@ -1,12 +1,12 @@
 import { supabase } from '../../database/supabaseClient.js';
 import crypto from 'crypto';
 
-/**
- * Fetches all messages from a channel and saves them to Supabase as a JSON transcript.
- * @param {import('discord.js').TextChannel} channel 
- * @param {string} closedBy 
- * @returns {Promise<{ url: string, password: string }|null>} The generated transcript URL and password, or null if failed.
- */
+
+
+
+
+
+
 export async function createWebTranscript(channel, closedBy, creatorId) {
   if (!supabase) {
     console.warn('[Transcript] Supabase is not configured. Skipping transcript generation.');
@@ -110,9 +110,9 @@ export async function createWebTranscript(channel, closedBy, creatorId) {
     }
 
     const dashboardUrl = process.env.DASHBOARD_URL || 'http://localhost:3000';
-    return { 
-      url: `${dashboardUrl}/transcript/${transcriptId}`, 
-      password 
+    return {
+      url: `${dashboardUrl}/transcript/${transcriptId}`,
+      password
     };
 
   } catch (err) {

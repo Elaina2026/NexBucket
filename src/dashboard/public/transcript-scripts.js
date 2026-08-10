@@ -150,7 +150,7 @@ function renderMessage(value) {
 
         let titleHtml = emb.title ? `<div class="embed-title">${escapeHTML(emb.title)}</div>` : '';
         let descHtml = emb.description ? `<div class="embed-description">${parseMarkdown(emb.description, msg)}</div>` : '';
-        
+
         let fieldsHtml = '';
         if (Array.isArray(emb.fields) && emb.fields.length > 0) {
         fieldsHtml = '<div class="embed-fields">';
@@ -211,11 +211,11 @@ async function attemptFetch(password = '') {
     loadingScreen.classList.remove('hidden');
     passwordScreen.classList.add('hidden');
     errorScreen.classList.add('hidden');
-    
+
     const res = await fetch(`/api/transcript/${transcriptId}`, {
         headers: password ? { Authorization: `Transcript ${password}` } : {},
     });
-    
+
     if (res.status === 401 || res.status === 403) {
         const errData = await res.json().catch(() => ({}));
         loadingScreen.classList.add('hidden');
@@ -255,16 +255,16 @@ async function attemptFetch(password = '') {
     });
 
     messagesContainer.innerHTML = htmlContent;
-    // CSP script-src 'self' chan onerror inline; su kien 'error' khong bubble
-    // nen phai gan truc tiep sau khi chen HTML.
+
+
     messagesContainer.querySelectorAll('img[data-avatar-fallback]').forEach(img => {
         img.onerror = () => { img.src = 'https://cdn.discordapp.com/embed/avatars/0.png'; };
     });
-    
+
     loadingScreen.classList.add('hidden');
     topbar.classList.remove('hidden');
     chatArea.classList.remove('hidden');
-    
+
     } catch (err) {
     console.error(err);
     loadingScreen.classList.add('hidden');

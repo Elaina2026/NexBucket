@@ -136,9 +136,9 @@ function pickWinners(participants, count) {
   const shuffled = [...participants].sort(() => 0.5 - Math.random());
   return shuffled.slice(0, count);
 }
-// checkGiveaways chạy đồng thời ở 2 nơi: interval 30 giây trong index.js và lời gọi
-// trực tiếp từ handleGiveawayEnd. Nếu cả hai cùng thấy ended === false thì người thắng
-// bị công bố hai lần, nên cần khoá trong tiến trình + ghi `ended` TRƯỚC khi công bố.
+
+
+
 const endingNow = new Set();
 export async function checkGiveaways(client) {
   const now = Date.now();

@@ -5,7 +5,7 @@ export const welcomeSlashCommands = [
   new SlashCommandBuilder()
     .setName('setup-welcome')
     .setDescription('Set the channel for welcome messages')
-    .addChannelOption(option => 
+    .addChannelOption(option =>
       option.setName('channel')
         .setDescription('The channel to send welcome messages in')
         .setRequired(true)
@@ -15,7 +15,7 @@ export const welcomeSlashCommands = [
   new SlashCommandBuilder()
     .setName('setup-goodbye')
     .setDescription('Set the channel for goodbye messages')
-    .addChannelOption(option => 
+    .addChannelOption(option =>
       option.setName('channel')
         .setDescription('The channel to send goodbye messages in')
         .setRequired(true)

@@ -14,12 +14,12 @@ function switchSection(sec) {
   currentSection = sec;
   document.querySelectorAll('.sidebar-item').forEach(el => el.classList.remove('active'));
   document.querySelectorAll('.content-section').forEach(el => el.classList.remove('active'));
-  
+
   const btn = document.querySelector(`.sidebar-item[data-section="${sec}"]`);
   if (btn) btn.classList.add('active');
   const panel = document.getElementById(`sec-${sec}`);
   if (panel) panel.classList.add('active');
-  
+
   if (window.location.pathname !== `/admin/${sec}`) {
       history.pushState(null, '', `/admin/${sec}`);
   }
@@ -29,14 +29,14 @@ function initRouter() {
   const pathParts = window.location.pathname.split('/');
   const sec = pathParts[2] && pathParts[2] !== '' ? pathParts[2].replace('.html', '') : 'overview';
   switchSection(sec);
-  
+
   document.querySelectorAll('.sidebar-item').forEach(btn => {
     btn.addEventListener('click', (e) => {
       const section = e.currentTarget.getAttribute('data-section');
       if (section) switchSection(section);
     });
   });
-  
+
   window.addEventListener('popstate', () => {
     const sec = window.location.pathname.split('/')[2] || 'overview';
     switchSection(sec.replace('.html', ''));
@@ -93,13 +93,13 @@ function renderOverview(data) {
 }
 function renderGrowthChart(data) {
   const wrap = document.getElementById('growthChart');
-  // fetchJSON tra ve {__forbidden:true} khi gap 403; kiem tra Array.isArray
-  // de khong goi .map() tren object do (TypeError).
+
+
   if (!Array.isArray(data) || data.length < 2) {
     wrap.innerHTML = '<div class="empty-state">Not enough data yet. Growth snapshots are saved every 6 hours.</div>';
     return;
   }
-  
+
   const oldest = data[0];
   const newest = data[data.length - 1];
   let guildsGrowth = 0;
@@ -224,7 +224,7 @@ function renderSystemStats(sys) {
   document.getElementById('cpuModel').textContent = sys.cpu.model;
   const cpuBar = document.getElementById('cpuBar');
   if (cpuBar) cpuBar.style.width = Math.min(100, sys.cpu.processUsagePercent) + '%';
-  
+
   const gbTotal = (sys.ram.total / 1073741824).toFixed(1);
   const gbUsed = ((sys.ram.total - sys.ram.free) / 1073741824).toFixed(1);
   const ramPercent = ((sys.ram.total - sys.ram.free) / sys.ram.total) * 100;
@@ -278,8 +278,8 @@ async function refreshAll() {
 }
 function start() {
   initRouter();
-  // Uy quyen su kien: CSP script-src 'self' chan moi onclick inline, va sessionsList
-  // duoc render lai lien tuc nen khong the gan listener truc tiep len tung nut.
+
+
   document.getElementById('sessionsList')?.addEventListener('click', (e) => {
     const btn = e.target.closest('.btn-revoke');
     if (btn) revokeSession(btn.dataset.sessionId);

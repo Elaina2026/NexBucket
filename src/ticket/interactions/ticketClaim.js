@@ -24,7 +24,7 @@ export async function handleTicketClaim(interaction) {
   try {
     await interaction.deferReply();
   } catch (err) {
-    if (err.code === 10003) return; 
+    if (err.code === 10003) return;
     throw err;
   }
   try {
@@ -53,7 +53,7 @@ export async function handleTicketClaim(interaction) {
         if (existing) {
           await channel.permissionOverwrites.edit(roleId, {
             SendMessages: false,
-            ViewChannel: true 
+            ViewChannel: true
           });
         }
       }

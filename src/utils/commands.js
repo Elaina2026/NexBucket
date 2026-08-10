@@ -73,7 +73,7 @@ export const utilCommands = [
   new SlashCommandBuilder()
     .setName('lock')
     .setDescription('Lock the current channel or an entire category')
-    .addChannelOption(option => 
+    .addChannelOption(option =>
       option.setName('category')
         .setDescription('Optional: The category to lock (locks all channels inside)')
         .addChannelTypes(ChannelType.GuildCategory)
@@ -83,7 +83,7 @@ export const utilCommands = [
   new SlashCommandBuilder()
     .setName('unlock')
     .setDescription('Unlock the current channel or an entire category')
-    .addChannelOption(option => 
+    .addChannelOption(option =>
       option.setName('category')
         .setDescription('Optional: The category to unlock (unlocks all channels inside)')
         .addChannelTypes(ChannelType.GuildCategory)
@@ -109,7 +109,7 @@ export const utilCommands = [
   new SlashCommandBuilder()
     .setName('setup-jtc')
     .setDescription('Setup the Join-To-Create (JTC) voice system')
-    .addChannelOption(option => 
+    .addChannelOption(option =>
       option.setName('category')
         .setDescription('The category to create the Hub channel in')
         .addChannelTypes(ChannelType.GuildCategory)

@@ -1,5 +1,5 @@
--- Migration 001: preserve legacy data while consolidating guild config.
--- Base schema creates guild_settings and RPCs before this migration runs.
+
+
 
 DO $$
 BEGIN
@@ -120,5 +120,5 @@ BEGIN
 END;
 $$;
 
--- Keep legacy tables for rollback during transition. New JavaScript never reads them.
+
 NOTIFY pgrst, 'reload schema';

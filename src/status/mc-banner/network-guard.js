@@ -62,15 +62,13 @@ function isPrivateIp(ip) {
     const f = bytes[0];
     const s = bytes[1];
 
-    // unspecified / loopback / link-local / site-local / multicast / unique-local
-    if ((f & 0xfe) === 0xfc) return true; // fc00::/7 (Unique local)
-    if (f === 0xfe && (s & 0xc0) === 0x80) return true; // fe80::/10 (Link local)
-    if (f === 0xfe && (s & 0xc0) === 0xc0) return true; // fec0::/10 (Deprecated site local)
-    if (f === 0xff) return true; // ff00::/8 (Multicast)
-    if (bytes.every(b => b === 0)) return true; // ::
-    if (bytes.slice(0, 15).every(b => b === 0) && bytes[15] === 1) return true; // ::1
+    if ((f & 0xfe) === 0xfc) return true;
+    if (f === 0xfe && (s & 0xc0) === 0x80) return true;
+    if (f === 0xfe && (s & 0xc0) === 0xc0) return true;
+    if (f === 0xff) return true;
+    if (bytes.every(b => b === 0)) return true;
+    if (bytes.slice(0, 15).every(b => b === 0) && bytes[15] === 1) return true;
 
-    // IPv4-mapped IPv6 (::ffff:x.x.x.x)
     if (isIpv4MappedPrivate(bytes)) return true;
   }
   return false;
@@ -87,7 +85,6 @@ function isIpv4MappedPrivate(bytes) {
 
 function expandIPv6(ip) {
   if (ip.includes('.')) {
-    // IPv4 mapped / embedded
     const lastColon = ip.lastIndexOf(':');
     const v4Str = ip.slice(lastColon + 1);
     const v4Parts = v4Str.split('.').map(Number);

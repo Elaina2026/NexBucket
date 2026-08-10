@@ -7,11 +7,11 @@ export class EmbedBuilder extends DiscordEmbedBuilder {
   constructor(data) {
     super(data);
     if (botClient && botClient.user) {
-      this.setFooter({ 
-        text: botClient.user.username, 
-        iconURL: botClient.user.displayAvatarURL() 
+      this.setFooter({
+        text: botClient.user.username,
+        iconURL: botClient.user.displayAvatarURL()
       });
-    } 
+    }
   }
   setFooter(options) {
     if (botClient && botClient.user && options) {

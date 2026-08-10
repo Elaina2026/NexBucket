@@ -15,21 +15,31 @@ export async function isBotWhitelisted(guildId, botId) {
     return false;
   }
 }
-// Top.gg API v0 requires project authentication; no public unauthenticated bot lookup exists.
-// Cache directory membership briefly to avoid hitting the 60 req/min bot limit.
+
+
 const topGGCache = new Map();
 const TOPGG_CACHE_TTL = 6 * 60 * 60 * 1000;
-const TOPGG_TOKEN = () => String(process.env.TOPGG_TOKEN || '').trim();
+
+export async function isBotListedOnTopGG(botId, httpClient = axios) {
+  try {
+    const response = await httpClient.request({
+      method: 'HEAD',
+      url: `https://top.gg/api/widget/${botId}.svg`,
+      timeout: 5000,
+      maxRedirects: 0,
+      validateStatus: () => true,
+    });
+    const contentType = String(response.headers?.['content-type'] || '');
+    return response.status === 200 && /^image\/png(?:;|$)/i.test(contentType);
+  } catch (error) {
+    console.error('[BotWhitelist] Top.gg lookup failed:', error.response?.status || error.code || error.message);
+    return false;
+  }
+}
 
 export async function checkAndAutoWhitelist(guildId, user) {
   if (!user?.bot) return false;
   if (await isBotWhitelisted(guildId, user.id)) return true;
-
-  const token = TOPGG_TOKEN();
-  if (!token) {
-    console.warn('[BotWhitelist] TOPGG_TOKEN is required for Top.gg verification; bot not whitelisted.');
-    return false;
-  }
 
   const cached = topGGCache.get(user.id);
   if (cached && Date.now() - cached.at < TOPGG_CACHE_TTL) {
@@ -40,21 +50,11 @@ export async function checkAndAutoWhitelist(guildId, user) {
     return false;
   }
 
-  try {
-    const response = await axios.get(`https://top.gg/api/bots/${user.id}`, {
-      timeout: 5000,
-      headers: { Authorization: token },
-      validateStatus: status => status === 200 || status === 404,
-    });
-    const listed = response.status === 200 && response.data?.id === user.id;
-    topGGCache.set(user.id, { listed, at: Date.now() });
-    if (!listed) return false;
-    await addBotToWhitelist(guildId, user.id, 'SYSTEM_AUTO_TOPGG');
-    return true;
-  } catch (error) {
-    console.error('[BotWhitelist] Top.gg lookup failed:', error.response?.status || error.code || error.message);
-    return false;
-  }
+  const listed = await isBotListedOnTopGG(user.id);
+  topGGCache.set(user.id, { listed, at: Date.now() });
+  if (!listed) return false;
+  await addBotToWhitelist(guildId, user.id, 'SYSTEM_AUTO_TOPGG');
+  return true;
 }
 export async function addBotToWhitelist(guildId, botId, addedBy) {
   if (!supabase) return false;

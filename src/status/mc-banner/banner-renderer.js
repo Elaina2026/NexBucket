@@ -10,11 +10,11 @@ class BannerRenderer {
   }
 
   async render(options) {
-    const scale = options.width / BannerImages.BASE_WIDTH;
-    const renderHeight = Math.max(1, Math.trunc(BannerImages.BASE_HEIGHT * scale));
+    const renderHeight = 256;
     const canvas = createCanvas(options.width, renderHeight);
     const ctx = canvas.getContext("2d");
-    ctx.imageSmoothingEnabled = false;
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
 
     const [background, icon, pingIcon] = await Promise.all([
       BannerImages.background(
@@ -27,49 +27,55 @@ class BannerRenderer {
       this.#getPingIcon(options.ping),
     ]);
 
-    ctx.drawImage(background, 0, 0, options.width, renderHeight);
-    this.font.draw(ctx, [{ text: options.title, color: "#ffffff" }], Math.trunc(76 * scale), Math.trunc(7 * scale), 16 * scale);
+    ctx.save();
+    ctx.filter = "blur(2px) brightness(0.55)";
+    ctx.drawImage(background, -4, -4, options.width + 8, renderHeight + 8);
+    ctx.restore();
+    ctx.fillStyle = "rgba(0, 0, 0, 0.18)";
+    ctx.fillRect(0, 0, options.width, renderHeight);
+
+    const padding = 24;
+    const iconSize = 184;
+    const iconX = padding;
+    const iconY = Math.trunc((renderHeight - iconSize) / 2);
+    ctx.save();
+    ctx.globalAlpha = 0.88;
+    ctx.filter = "blur(0.4px)";
+    ctx.drawImage(icon, iconX, iconY, iconSize, iconSize);
+    ctx.restore();
+
+    const textX = iconX + iconSize + 28;
+    ctx.save();
+    ctx.globalAlpha = 0.82;
+    ctx.filter = "blur(0.4px)";
+    this.font.draw(ctx, [{ text: options.title, color: "#eeeeee" }], textX, 18, 38);
+    ctx.restore();
     for (let index = 0; index < options.motd.length; index++) {
       this.font.draw(
         ctx,
         options.motd[index],
-        Math.trunc(76 * scale),
-        Math.trunc(29 * scale) + Math.trunc(index * 18 * scale),
-        16 * scale,
+        textX,
+        78 + index * 54,
+        40,
       );
     }
-    ctx.drawImage(
-      icon,
-      Math.trunc(5 * scale),
-      Math.trunc(5 * scale),
-      Math.trunc(64 * scale),
-      Math.trunc(64 * scale),
-    );
-    ctx.drawImage(
-      pingIcon,
-      options.width - Math.trunc(27 * scale),
-      Math.trunc(7 * scale),
-      Math.trunc(20 * scale),
-      Math.trunc(15.5 * scale),
-    );
+
+    const pingWidth = 64;
+    const pingHeight = 50;
+    const pingX = options.width - padding - pingWidth;
+    const playerFontSize = 44;
+    const playerY = 17;
+    const pingY = 9;
+    ctx.drawImage(pingIcon, pingX, pingY, pingWidth, pingHeight);
     this.font.draw(
       ctx,
-      [{ text: options.players, color: "#aaaaaa" }],
-      options.width - Math.trunc(34 * scale),
-      Math.trunc(8 * scale),
-      16 * scale,
+      [{ text: options.players, color: "#eeeeee" }],
+      pingX - 20,
+      playerY,
+      playerFontSize,
       { align: "right" },
     );
-    this.font.draw(
-      ctx,
-      [{ text: options.watermark, color: "#555555" }],
-      options.width,
-      renderHeight - Math.trunc(8 * scale),
-      6 * scale,
-      { align: "right" },
-    );
-    const output = BannerImages.ensureOutputSize(canvas, options.width);
-    return output.toBuffer("image/png");
+    return canvas.toBuffer("image/png");
   }
 
   async #getPingIcon(milliseconds) {

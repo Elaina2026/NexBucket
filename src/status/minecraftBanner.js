@@ -16,7 +16,7 @@ const DEFAULT_ASSET_DIR = path.resolve(__dirname, '..', '..', 'MCServerBanner', 
 const ASSETS_DIR = path.resolve(__dirname, '..', '..', 'assets');
 const FALLBACK_IMAGE_PATH = path.join(ASSETS_DIR, 'unknown_server.png');
 const BANNERS_DIR = path.join(ASSETS_DIR, 'banners');
-const WIDTH = 1530;
+const WIDTH = 1990;
 const cache = new Map();
 const pending = new Map();
 let enginePromise = null;
@@ -101,6 +101,10 @@ export function parseMinecraftAddress(ip, port = null) {
   return parseHostPort(ip, port);
 }
 
+export function getMinecraftBannerTitle(server) {
+  return server.name || 'A Minecraft Server';
+}
+
 export function parseTrackedMinecraftAddress(ip, port = null, recoverTelemetry = false) {
   const rawIp = String(ip ?? '').trim();
   try {
@@ -152,11 +156,10 @@ async function renderServer(server) {
     png = renderer
       ? await renderer.render({
           width: WIDTH,
-          title: server.name || target.display,
+          title: getMinecraftBannerTitle(server),
           motd,
           players: status.online ? `${status.onlinePlayers}/${status.maxPlayers}` : '?/?',
           ping: status.online ? status.latencyMillis : -1,
-          watermark: `${status.versionName} • ${new Date().toISOString()}`,
           favicon: status.online && status.favicon ? status.favicon : fallbackImage,
           backgroundUrl: background,
           allowRemoteBackgrounds: false,

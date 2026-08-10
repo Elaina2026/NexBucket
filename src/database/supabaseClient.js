@@ -1,12 +1,12 @@
 import { createClient } from '@supabase/supabase-js';
 const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_KEY; 
+const supabaseKey = process.env.SUPABASE_KEY;
 const customFetch = async (url, options) => {
   try {
     return await fetch(url, { ...options, signal: options?.signal || AbortSignal.timeout(15000) });
   } catch (err) {
     if (err.message === 'fetch failed' || err.name === 'TimeoutError' || err.code === 'UND_ERR_CONNECT_TIMEOUT' || err.name === 'AbortError') {
-      return new Response(JSON.stringify({ 
+      return new Response(JSON.stringify({
         message: 'Database connection timed out (Database might be paused/sleeping)',
         code: 'TIMEOUT',
         details: 'Supabase is currently unreachable.'

@@ -1,5 +1,5 @@
--- NexBucket database schema — JavaScript backend, Supabase service-role access only.
--- Per-guild module configuration has one source: guild_settings.
+
+
 
 CREATE TABLE IF NOT EXISTS guild_settings (
   guild_id TEXT PRIMARY KEY,
@@ -73,7 +73,7 @@ CREATE TABLE IF NOT EXISTS bot_whitelist (
   PRIMARY KEY (guild_id, bot_id)
 );
 
--- Runtime moderation state. Module settings live in guild_settings.moderation.
+
 CREATE TABLE IF NOT EXISTS moderation (
   guild_id TEXT PRIMARY KEY,
   warnings_json JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -357,5 +357,5 @@ BEGIN
 END;
 $$;
 
--- Status page is served by backend, so browser roles need no direct table access.
+
 NOTIFY pgrst, 'reload schema';

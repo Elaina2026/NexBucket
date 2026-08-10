@@ -13,7 +13,7 @@ export async function handleJtcSelectMenu(interaction) {
     return interaction.reply({ content: '❌ Only the owner of this voice channel can use these controls.', flags: MessageFlags.Ephemeral });
   }
   const value = interaction.values[0];
-  const channel = interaction.channel; 
+  const channel = interaction.channel;
   const voiceChannel = interaction.member.voice.channel;
   if (!voiceChannel || voiceChannel.id !== channel.id) {
     return interaction.reply({ content: '❌ You must be inside this voice channel to manage it.', flags: MessageFlags.Ephemeral });
@@ -32,7 +32,7 @@ export async function handleJtcSelectMenu(interaction) {
       const row = new ActionRowBuilder().addComponents(nameInput);
       modal.addComponents(row);
       await interaction.showModal(modal);
-    } 
+    }
     else if (value === 'setting_status') {
       const modal = new ModalBuilder()
         .setCustomId('jtc_modal_status')
@@ -146,7 +146,7 @@ export async function handleJtcModalSubmit(interaction) {
       const newName = interaction.fields.getTextInputValue('new_name');
       await voiceChannel.setName(newName).catch(() => {});
       await interaction.reply({ content: `✅ Channel name updated to **${newName}**`, flags: MessageFlags.Ephemeral });
-    } 
+    }
     else if (customId === 'jtc_modal_status') {
       const newStatus = interaction.fields.getTextInputValue('new_status');
       try {

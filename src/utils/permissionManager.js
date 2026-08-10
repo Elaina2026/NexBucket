@@ -1,6 +1,6 @@
 import { supabase } from '../database/supabaseClient.js';
 import { PermissionFlagsBits } from 'discord.js';
-let botRolesCache = {}; 
+let botRolesCache = {};
 export async function loadBotRoles() {
   if (!supabase) return;
   try {
@@ -46,14 +46,14 @@ export function isBotOwner(member) {
 }
 export function isBotAdmin(member) {
   if (!member || !member.guild) return false;
-  if (isBotOwner(member)) return true; 
+  if (isBotOwner(member)) return true;
   const roles = botRolesCache[member.guild.id];
   if (!roles) return false;
   return member.roles.cache.has(roles.admin_role_id);
 }
 export function isBotDev(member) {
   if (!member || !member.guild) return false;
-  if (isBotAdmin(member)) return true; 
+  if (isBotAdmin(member)) return true;
   const roles = botRolesCache[member.guild.id];
   if (!roles) return false;
   return member.roles.cache.has(roles.dev_role_id);

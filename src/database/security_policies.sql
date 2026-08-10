@@ -1,6 +1,6 @@
--- NexBucket RLS verification/reconciliation.
--- Backend uses service_role. Browser roles get no direct table access.
--- Safe to run repeatedly after schema or migrations.
+
+
+
 
 DO $$
 DECLARE
@@ -28,9 +28,3 @@ REVOKE ALL ON FUNCTION save_guild_section(TEXT, TEXT, JSONB, BIGINT) FROM PUBLIC
 REVOKE ALL ON FUNCTION save_guild_sections(TEXT, JSONB, BIGINT) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION save_guild_section(TEXT, TEXT, JSONB, BIGINT) TO service_role;
 GRANT EXECUTE ON FUNCTION save_guild_sections(TEXT, JSONB, BIGINT) TO service_role;
-
--- Verification query:
--- SELECT tablename, rowsecurity
--- FROM pg_tables
--- WHERE schemaname = 'public'
--- ORDER BY tablename;

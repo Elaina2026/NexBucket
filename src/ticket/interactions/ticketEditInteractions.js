@@ -1,6 +1,6 @@
-import { 
-  ActionRowBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, 
-  StringSelectMenuBuilder, MessageFlags, EmbedBuilder, StringSelectMenuOptionBuilder, ButtonBuilder, ButtonStyle 
+import {
+  ActionRowBuilder, ModalBuilder, TextInputBuilder, TextInputStyle,
+  StringSelectMenuBuilder, MessageFlags, EmbedBuilder, StringSelectMenuOptionBuilder, ButtonBuilder, ButtonStyle
 } from 'discord.js';
 import ConfigManager from '../configManager.js';
 import { isBotAdmin } from '../../utils/permissionManager.js';
@@ -17,9 +17,9 @@ export async function buildPanelEmbed(guildId) {
     .setFooter({ text: config.panelFooter || 'Support System • Select a category below' })
     .setTimestamp();
   if (config.embedAuthorName) {
-    embed.setAuthor({ 
-      name: config.embedAuthorName, 
-      url: config.embedAuthorUrl || null 
+    embed.setAuthor({
+      name: config.embedAuthorName,
+      url: config.embedAuthorUrl || null
     });
   }
   return embed;
@@ -228,7 +228,7 @@ export async function handleTicketEditModalSubmit(interaction) {
     updates.staffRoleIds = rolesStr ? rolesStr.split(',').map(r => r.trim()).filter(Boolean) : [];
     updates.transcriptChannelId = interaction.fields.getTextInputValue('transcriptChannelId');
     updates.reviewChannelId = interaction.fields.getTextInputValue('reviewChannelId');
-  } 
+  }
   else if (interaction.customId === 'modal_ticket_panel') {
     updates.panelTitle = interaction.fields.getTextInputValue('panelTitle');
     updates.panelDescription = interaction.fields.getTextInputValue('panelDescription');

@@ -191,7 +191,6 @@ See `.env.example` for the complete template.
 | `UPDATE_INTERVAL` | No | Minecraft message refresh interval in milliseconds |
 | `GUILD_SETTINGS_CACHE_MS` | No | Short per-guild settings cache lifetime |
 | `MINECRAFT_CONFIG_CACHE_MS` | No | Minecraft tracked-server cache lifetime |
-| `TOPGG_TOKEN` | No | Top.gg lookup used by automatic bot verification |
 | `DEBUG_WEBHOOKS` | No | Card2K debugging; keep `0` in production |
 
 Do not change `ENCRYPTION_SECRET` after encrypted data exists unless existing ciphertext has been migrated. Changing it makes saved OAuth, PayOS, and Card2K secrets unreadable.

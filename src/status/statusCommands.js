@@ -9,17 +9,17 @@ export const statusCommandData = new SlashCommandBuilder()
     subcommand
       .setName('add')
       .setDescription('Add a Minecraft server to track in a specific channel')
-      .addStringOption(option => 
+      .addStringOption(option =>
         option.setName('ip')
           .setDescription('The IP address of the Minecraft server')
           .setRequired(true)
       )
-      .addChannelOption(option => 
+      .addChannelOption(option =>
         option.setName('channel')
           .setDescription('The channel to post the live status banner')
           .setRequired(true)
       )
-      .addIntegerOption(option => 
+      .addIntegerOption(option =>
         option.setName('port')
           .setDescription('The port of the Minecraft server (default 25565)')
           .setRequired(false)
@@ -29,7 +29,7 @@ export const statusCommandData = new SlashCommandBuilder()
     subcommand
       .setName('remove')
       .setDescription('Stop tracking a Minecraft server in a specific channel')
-      .addChannelOption(option => 
+      .addChannelOption(option =>
         option.setName('channel')
           .setDescription('The channel where the status is currently tracked')
           .setRequired(true)
@@ -55,9 +55,9 @@ export async function handleStatusCommand(interaction) {
     const servers = await getServers(guildId);
     const existing = servers.find(s => s.channelId === channel.id);
     if (existing) {
-      return interaction.reply({ 
-        content: `❌ Channel <#${channel.id}> is already tracking server: **${existing.ip}**.\nPlease use \`/status remove\` first or choose a different channel.`, 
-        flags: MessageFlags.Ephemeral 
+      return interaction.reply({
+        content: `❌ Channel <#${channel.id}> is already tracking server: **${existing.ip}**.\nPlease use \`/status remove\` first or choose a different channel.`,
+        flags: MessageFlags.Ephemeral
       });
     }
     try {
@@ -75,8 +75,8 @@ export async function handleStatusCommand(interaction) {
       updateAllStatus(interaction.client).catch(console.error);
     } catch (err) {
       console.error('Error adding status:', err);
-      // Nếu chính interaction.reply() ở trên là thứ ném lỗi thì gọi reply lần nữa
-      // sẽ ném InteractionAlreadyReplied, che mất lỗi gốc.
+
+
       const msg = '❌ Failed to add server tracking to the database.';
       if (interaction.replied || interaction.deferred) {
         await interaction.editReply({ content: msg }).catch(() => {});
@@ -97,9 +97,9 @@ export async function handleStatusCommand(interaction) {
           if (msg && msg.deletable) await msg.delete();
         } catch {}
       }
-      await interaction.reply({ 
-        content: `✅ Successfully removed server tracking from <#${channel.id}>.`, 
-        flags: MessageFlags.Ephemeral 
+      await interaction.reply({
+        content: `✅ Successfully removed server tracking from <#${channel.id}>.`,
+        flags: MessageFlags.Ephemeral
       });
     } catch (err) {
       console.error('Error removing status:', err);

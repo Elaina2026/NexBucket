@@ -31,7 +31,7 @@ export async function createBackup(client, guildId) {
     if (channel.permissionOverwrites && channel.permissionOverwrites.cache) {
       permissionOverwrites = channel.permissionOverwrites.cache.map(overwrite => {
         let name = null;
-        if (overwrite.type === 0 && overwrite.id !== guild.id) { 
+        if (overwrite.type === 0 && overwrite.id !== guild.id) {
           const role = guild.roles.cache.get(overwrite.id);
           if (role) name = role.name;
         }
@@ -47,11 +47,11 @@ export async function createBackup(client, guildId) {
     const channelData = {
       name: channel.name,
       type: channel.type,
-      parentId: channel.parentId, 
+      parentId: channel.parentId,
       position: channel.position,
       permissionOverwrites: permissionOverwrites
     };
-    if (channel.type === 4) { 
+    if (channel.type === 4) {
       backupData.categories.push({ id: channel.id, ...channelData });
     } else {
       backupData.channels.push({ id: channel.id, ...channelData });
@@ -60,7 +60,7 @@ export async function createBackup(client, guildId) {
   try {
     const members = guild.members.cache;
     for (const [memberId, member] of members) {
-      if (member.user.bot) continue; 
+      if (member.user.bot) continue;
       backupData.members.push({
         userId: member.id,
         roles: member.roles.cache.filter(r => !r.managed && r.id !== guild.id).map(r => r.name)
@@ -109,7 +109,7 @@ export async function restoreBackup(client, guildId, commandChannelId = null) {
   const currentChannels = await guild.channels.fetch().catch(() => new Map());
   for (const [id, channel] of currentChannels) {
     if (!channel || id === commandChannelId) continue;
-    const isCategory = channel.type === 4; 
+    const isCategory = channel.type === 4;
     const isValid = isCategory ? validCategoryNames.has(channel.name) : validChannelNames.has(channel.name);
     if (!isValid) {
       await channel.delete('Restoring backup: Deleting extraneous channels not in backup').catch(() => {});
@@ -128,7 +128,7 @@ export async function restoreBackup(client, guildId, commandChannelId = null) {
       }).catch(console.error);
     }
   }
-  const categoryMap = {}; 
+  const categoryMap = {};
   for (const catData of backupData.categories) {
     const existing = guild.channels.cache.find(c => c.name === catData.name && c.type === 4);
     if (!existing) {

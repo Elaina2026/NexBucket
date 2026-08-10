@@ -1,9 +1,14 @@
 import { getSection, saveSection } from '../database/guildSettings.js';
-import fs from 'fs';
 import path from 'path';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'url';
 import { AttachmentBuilder } from 'discord.js';
 import { createCanvas, loadImage, GlobalFonts } from '@napi-rs/canvas';
+
+const require = createRequire(import.meta.url);
+const { downloadImage } = require('../status/mc-banner/banner-images.js');
+const DEFAULT_BACKGROUND = 'https://cdn.koya.gg/gallery/l/e7wNTbc.png';
+const IMAGE_TIMEOUT_MS = 10000;
 
 export async function getWelcomeConfig(guildId) {
   if (!guildId) return { welcomeChannel: null, goodbyeChannel: null };
@@ -32,26 +37,47 @@ export async function saveWelcomeConfig(guildId, data) {
 }
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const FONT_CANDIDATES = ['unifont-16.0.04.otf', 'Pixelcraft.otf', 'Minecraftia-Regular.ttf']
-  .map(name => path.join(__dirname, '..', '..', 'assets', name));
-const FONT_PATH = FONT_CANDIDATES.find(candidate => fs.existsSync(candidate));
+const FONT_PATH = path.join(__dirname, '..', '..', 'assets', 'gg sans Bold.ttf');
+GlobalFonts.registerFromPath(FONT_PATH, 'WelcomeFont');
 
-if (FONT_PATH) {
-  GlobalFonts.registerFromPath(FONT_PATH, 'DiscordFont');
+async function loadBackground(source) {
+  if (Buffer.isBuffer(source)) return loadImage(source);
+  const value = String(source || DEFAULT_BACKGROUND).trim() || DEFAULT_BACKGROUND;
+  const url = new URL(value);
+  if (url.protocol !== 'https:') throw new TypeError('Background URL must use HTTPS');
+  return downloadImage(url.href, false, IMAGE_TIMEOUT_MS);
 }
 
-async function createBannerImage(member, isWelcome, config = {}) {
+function drawFallbackBackground(ctx, width, height) {
+  const gradient = ctx.createLinearGradient(0, 0, width, height);
+  gradient.addColorStop(0, '#5865f2');
+  gradient.addColorStop(1, '#23272a');
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, width, height);
+}
+
+export function formatWelcomeMessage(member, isWelcome, config = {}) {
+  const template = isWelcome
+    ? (config.welcomeMessageContent || 'Welcome {user} to **{server}**!')
+    : (config.goodbyeMessageContent || '{user} has left **{server}**.');
+  const userMention = isWelcome ? `${member}` : `<@${member.id}>`;
+  return String(template)
+    .slice(0, 2000)
+    .replace(/\{user\}/g, userMention)
+    .replace(/\{server\}/g, member.guild.name);
+}
+
+export async function renderWelcomeBanner(member, isWelcome, config = {}) {
   const canvas = createCanvas(800, 400);
   const ctx = canvas.getContext('2d');
-  let backgroundUrl = isWelcome
-    ? (config.welcomeBg || config.welcome_bg || 'https://cdn.koya.gg/gallery/l/e7wNTbc.png')
-    : (config.goodbyeBg || config.goodbye_bg || 'https://cdn.koya.gg/gallery/l/e7wNTbc.png');
+  const backgroundSource = isWelcome
+    ? (config.welcomeBg || config.welcome_bg || DEFAULT_BACKGROUND)
+    : (config.goodbyeBg || config.goodbye_bg || DEFAULT_BACKGROUND);
   try {
-    const background = await loadImage(backgroundUrl);
+    const background = await loadBackground(backgroundSource);
     ctx.drawImage(background, 0, 0, canvas.width, canvas.height);
-  } catch (e) {
-    const defaultBg = await loadImage('https://cdn.koya.gg/gallery/l/e7wNTbc.png');
-    ctx.drawImage(defaultBg, 0, 0, canvas.width, canvas.height);
+  } catch {
+    drawFallbackBackground(ctx, canvas.width, canvas.height);
   }
   const avatarUrl = member.user.displayAvatarURL({ extension: 'png', size: 512 });
   const avatar = await loadImage(avatarUrl);
@@ -70,20 +96,20 @@ async function createBannerImage(member, isWelcome, config = {}) {
   ctx.clip();
   ctx.drawImage(avatar, avatarX - avatarRadius, avatarY - avatarRadius, avatarRadius * 2, avatarRadius * 2);
   ctx.restore();
-  let titleText = isWelcome
+  const titleText = String(isWelcome
     ? (config.welcomeText || config.welcome_text || 'WELCOME')
-    : (config.goodbyeText || config.goodbye_text || 'GOOD BYE');
-  const usernameText = member.user.tag.toUpperCase();
+    : (config.goodbyeText || config.goodbye_text || 'GOOD BYE')).slice(0, 80);
+  const usernameText = String(member.user.tag || member.user.username || 'USER').toUpperCase().slice(0, 80);
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  const fontName = FONT_PATH ? '"DiscordFont"' : '"DISCORD", "Arial Black", Arial, sans-serif';
-  ctx.font = `bold 70px ${fontName}`;
+  const fontName = '"WelcomeFont"';
+  ctx.font = `70px ${fontName}`;
   ctx.lineWidth = 8;
   ctx.strokeStyle = '#000000';
   ctx.strokeText(titleText, canvas.width / 2, 290);
   ctx.fillStyle = '#ffffff';
   ctx.fillText(titleText, canvas.width / 2, 290);
-  ctx.font = `bold 45px ${fontName}`;
+  ctx.font = `45px ${fontName}`;
   ctx.lineWidth = 6;
   ctx.strokeStyle = '#000000';
   ctx.strokeText(usernameText, canvas.width / 2, 350);
@@ -110,11 +136,9 @@ export async function handleGuildMemberAdd(member) {
   const channel = member.guild.channels.cache.get(config.welcomeChannel);
   if (!channel) return;
   try {
-    const imageBuffer = await createBannerImage(member, true, config);
+    const imageBuffer = await renderWelcomeBanner(member, true, config);
     const attachment = new AttachmentBuilder(imageBuffer, { name: 'welcome-image.png' });
-    let msgContent = config.welcomeMessageContent || 'Welcome {user} to **{server}**!';
-    msgContent = msgContent.replace(/\{user\}/g, `${member}`).replace(/\{server\}/g, member.guild.name);
-    await channel.send({ content: msgContent, files: [attachment] });
+    await channel.send({ content: formatWelcomeMessage(member, true, config), files: [attachment] });
   } catch (error) {
     console.error('[Welcome] Error sending welcome message:', error);
   }
@@ -126,11 +150,9 @@ export async function handleGuildMemberRemove(member) {
   const channel = member.guild.channels.cache.get(config.goodbyeChannel);
   if (!channel) return;
   try {
-    const imageBuffer = await createBannerImage(member, false, config);
+    const imageBuffer = await renderWelcomeBanner(member, false, config);
     const attachment = new AttachmentBuilder(imageBuffer, { name: 'goodbye-image.png' });
-    let msgContent = config.goodbyeMessageContent || '{user} has left **{server}**.';
-    msgContent = msgContent.replace(/\{user\}/g, `<@${member.id}>`).replace(/\{server\}/g, member.guild.name);
-    await channel.send({ content: msgContent, files: [attachment] });
+    await channel.send({ content: formatWelcomeMessage(member, false, config), files: [attachment] });
   } catch (error) {
     console.error('[Goodbye] Error sending goodbye message:', error);
   }
