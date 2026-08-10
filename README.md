@@ -292,10 +292,10 @@ Restore the original `ENCRYPTION_SECRET`. If the key was intentionally rotated, 
 
 ## Contributors
 
-- **Elaina2026** (Lead Developer)
-- **Claude** (AI Assistant)
-- **Codex** (AI Assistant)
-- **Gemini** (AI Assistant)
+- **Elaina2026** — Quản lý và tổng hợp
+- **Claude** — Code / Lập trình chính
+- **Codex** — Phân tích & tìm lỗi
+- **Gemini** — Sub Agent / Phụ trợ tác vụ
 
 ## License and notices
 
