@@ -79,7 +79,7 @@ export function createDnsEmbed(result, interaction) {
   }
 
   return embed
-    .setFooter({ text: `Requested by ${requesterName(interaction)} • RDAP: rdap.org` })
+    .setFooter({ text: `Requested by ${requesterName(interaction)} • RDAP & DNS` })
     .setTimestamp();
 }
 

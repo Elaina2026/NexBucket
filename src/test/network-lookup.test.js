@@ -5,6 +5,7 @@ import {
   checkTarget,
   lookupDnsRecords,
   lookupDomain,
+  lookupRdap,
   normalizeDomain,
   normalizeIpOrDomain,
   parseRdapDomain,
@@ -56,6 +57,21 @@ test('RDAP parsing extracts registration data without exposing contacts', () => 
   assert.equal(parsed.registrar, 'Example Registrar');
   assert.equal(parsed.createdAt, '2020-01-01T00:00:00Z');
   assert.equal(parsed.dnssec, 'Signed');
+});
+
+test('RDAP uses direct Verisign endpoints for com and net domains', async () => {
+  const requested = [];
+  const fetchImpl = async (url, options) => {
+    requested.push({ url, options });
+    return { ok: true, json: async () => ({ events: [], entities: [] }) };
+  };
+  await lookupRdap('3fmc.com', fetchImpl);
+  await lookupRdap('donutsmp.net', fetchImpl);
+  await lookupRdap('example.org', fetchImpl);
+  assert.equal(requested[0].url, 'https://rdap.verisign.com/com/v1/domain/3fmc.com');
+  assert.equal(requested[1].url, 'https://rdap.verisign.com/net/v1/domain/donutsmp.net');
+  assert.equal(requested[2].url, 'https://rdap.org/domain/example.org');
+  assert.equal(requested[0].options.headers['user-agent'], 'NexBucket/1.0');
 });
 
 test('domain lookup returns DNS data when RDAP times out', async () => {

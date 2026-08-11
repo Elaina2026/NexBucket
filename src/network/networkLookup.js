@@ -108,8 +108,15 @@ export function parseRdapDomain(data) {
 }
 
 export async function lookupRdap(domain, fetchImpl = fetch) {
-  const response = await fetchImpl(`https://rdap.org/domain/${encodeURIComponent(domain)}`, {
-    headers: { accept: 'application/rdap+json, application/json' },
+  const tld = domain.split('.').at(-1);
+  const baseUrl = ['com', 'net'].includes(tld)
+    ? `https://rdap.verisign.com/${tld}/v1/domain/`
+    : 'https://rdap.org/domain/';
+  const response = await fetchImpl(`${baseUrl}${encodeURIComponent(domain)}`, {
+    headers: {
+      accept: 'application/rdap+json, application/json',
+      'user-agent': 'NexBucket/1.0',
+    },
     signal: AbortSignal.timeout(7000),
   });
   if (!response.ok) throw new Error(`RDAP returned HTTP ${response.status}`);
