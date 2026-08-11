@@ -1,4 +1,5 @@
 import { EmbedBuilder } from '../utils/embed.js';
+import NetworkGuard from './mc-banner/network-guard.js';
 import dns from 'node:dns';
 import { AttachmentBuilder, MessageFlags } from 'discord.js';
 import { supabase } from '../database/supabaseClient.js';
@@ -173,8 +174,8 @@ function countryCodeToFlag(countryCode) {
     return String.fromCodePoint(...[...code].map(char => 127397 + char.charCodeAt(0)));
 }
 
-async function getGeoInfo(ip) {
-    if (/^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|127\.|localhost)/i.test(ip)) {
+export async function getGeoInfo(ip, fetchImpl = fetch) {
+    if (NetworkGuard.isPrivateIp(ip)) {
         return { location: '🏠 Local Network', isp: 'N/A' };
     }
     const cached = geoCache.get(ip);
@@ -182,20 +183,22 @@ async function getGeoInfo(ip) {
         return cached.data;
     }
     try {
-        const res = await fetch(`http://ip-api.com/json/${ip}?fields=country,countryCode,city,isp,status`, {
+        const res = await fetchImpl(`http://ip-api.com/json/${encodeURIComponent(ip)}?fields=country,countryCode,city,isp,status,message`, {
             signal: AbortSignal.timeout(5000),
         });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const json = await res.json();
-        if (json.status === 'success') {
-            const data = {
-                location: `${countryCodeToFlag(json.countryCode)} ${json.city || 'Unknown'}, ${json.country || 'Unknown'}`,
-                isp: json.isp || 'Unknown',
-            };
-            geoCache.set(ip, { data, timestamp: Date.now() });
-            return data;
-        }
-    } catch {}
-    return { location: '🌍 Unknown', isp: 'Unknown' };
+        if (json.status !== 'success') throw new Error(json.message || 'Lookup failed');
+        const data = {
+            location: `${countryCodeToFlag(json.countryCode)} ${json.city || 'Unknown'}, ${json.country || 'Unknown'}`,
+            isp: json.isp || 'Unknown',
+        };
+        geoCache.set(ip, { data, timestamp: Date.now() });
+        return data;
+    } catch (error) {
+        console.error(`[Status] Geolocation failed for ${ip}:`, error.message || error);
+        return { location: '🌍 Unknown', isp: 'Unknown' };
+    }
 }
 
 export async function updateServerStatus(server, client) {
@@ -245,7 +248,7 @@ export async function updateServerStatus(server, client) {
             const version = data.versionName || 'Unknown';
             const latencyText = `${data.latencyMillis}ms`;
 
-            const geo = await getGeoInfo(ip);
+            const geo = await getGeoInfo(data.resolvedAddress || ip);
             const location = geo.location;
             const isp = geo.isp;
 
@@ -334,7 +337,7 @@ export async function handleMcServer(interaction) {
             const percent = maxPlayers > 0 ? Math.round((onlinePlayers / maxPlayers) * 100) : 0;
             const version = data.versionName || 'Unknown';
             const latencyText = `${data.latencyMillis}ms`;
-            const { location, isp } = await getGeoInfo(ip);
+            const { location, isp } = await getGeoInfo(data.resolvedAddress || ip);
 
             embed = new EmbedBuilder()
                 .setColor('#2ecc71')

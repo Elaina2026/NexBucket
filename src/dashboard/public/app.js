@@ -18,31 +18,136 @@ const SERVICE_ICONS = {
   'banking': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="svc-icon"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>',
   'jtc': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="svc-icon"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>',
 };
-function initTheme() {
-  const toggleBtn = document.getElementById('themeToggle');
-  if (!toggleBtn) return;
-  toggleBtn.addEventListener('click', () => {
-    const root = document.documentElement;
-    const isLight = root.getAttribute('data-theme') === 'light';
-    if (isLight) {
-      root.setAttribute('data-theme', 'dark');
-      localStorage.setItem('theme', 'dark');
-    } else {
-      root.setAttribute('data-theme', 'light');
-      localStorage.setItem('theme', 'light');
-    }
-  });
-}
 function initTabs() {
   const btns = document.querySelectorAll('.tab-btn');
   const contents = document.querySelectorAll('.tab-content');
   btns.forEach(btn => {
     btn.addEventListener('click', () => {
       btns.forEach(b => b.classList.remove('active'));
-      contents.forEach(c => c.classList.remove('active'));
+      contents.forEach(c => {
+        c.classList.remove('active');
+        c.style.display = 'none';
+      });
       btn.classList.add('active');
-      document.getElementById(btn.dataset.tab).classList.add('active');
+      const target = document.getElementById(btn.dataset.tab);
+      if (target) {
+        target.classList.add('active');
+        target.style.display = 'block';
+        if (btn.dataset.tab === 'tab-ai-models') fetchAiModels();
+      }
     });
+  });
+}
+
+const AI_MODELS_PER_PAGE = 20;
+const aiModelsState = { models: null, query: '', provider: '', page: 1 };
+
+function escapeHTML(value) {
+  return String(value ?? '').replace(/[&<>"']/g, char => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[char]);
+}
+
+function formatModelNumber(value) {
+  return Number.isFinite(value) ? value.toLocaleString() : 'Unknown';
+}
+
+function formatModelPrice(value) {
+  return Number.isFinite(value) ? `$${value.toLocaleString(undefined, { maximumFractionDigits: 4 })}` : '?';
+}
+
+function renderAiModels() {
+  const container = document.getElementById('aiModelsList');
+  const summary = document.getElementById('aiModelsSummary');
+  const pagination = document.getElementById('aiModelsPagination');
+  const pageLabel = document.getElementById('aiModelsPage');
+  const previous = document.getElementById('aiModelsPrev');
+  const next = document.getElementById('aiModelsNext');
+  if (!container || !Array.isArray(aiModelsState.models)) return;
+
+  const query = aiModelsState.query.toLowerCase();
+  const filtered = aiModelsState.models.filter(model => {
+    const matchesProvider = !aiModelsState.provider || model.provider === aiModelsState.provider;
+    const searchable = `${model.name} ${model.id} ${model.provider}`.toLowerCase();
+    return matchesProvider && searchable.includes(query);
+  });
+  const pages = Math.max(1, Math.ceil(filtered.length / AI_MODELS_PER_PAGE));
+  aiModelsState.page = Math.min(aiModelsState.page, pages);
+  const offset = (aiModelsState.page - 1) * AI_MODELS_PER_PAGE;
+  const pageModels = filtered.slice(offset, offset + AI_MODELS_PER_PAGE);
+
+  if (summary) summary.textContent = `${filtered.length.toLocaleString()} of ${aiModelsState.models.length.toLocaleString()} models`;
+  if (pagination) pagination.hidden = filtered.length <= AI_MODELS_PER_PAGE;
+  if (pageLabel) pageLabel.textContent = `Page ${aiModelsState.page} of ${pages}`;
+  if (previous) previous.disabled = aiModelsState.page <= 1;
+  if (next) next.disabled = aiModelsState.page >= pages;
+
+  if (pageModels.length === 0) {
+    container.innerHTML = '<div class="empty-state">No AI models match these filters.</div>';
+    return;
+  }
+
+  container.innerHTML = pageModels.map(model => `
+    <div class="service-card operational">
+      <div class="svc-main">
+        <div class="svc-info">
+          <div class="svc-name">${escapeHTML(model.name || model.id)}</div>
+          <div class="svc-desc">${escapeHTML(model.id)}<br>Context: ${formatModelNumber(model.context_window)} tokens | Max Output: ${formatModelNumber(model.max_output_tokens)} tokens</div>
+        </div>
+      </div>
+      <div class="svc-meta">
+        <span class="status-badge">Provider: ${escapeHTML(model.provider || 'unknown')}</span>
+        <span class="status-badge status-up">Vision: ${model.vision_support ? 'Yes' : 'No'}</span>
+        <span class="status-badge">Price In/Out: ${formatModelPrice(model.input_price_per_m)} / ${formatModelPrice(model.output_price_per_m)} per 1M</span>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function fetchAiModels() {
+  const container = document.getElementById('aiModelsList');
+  if (!container || aiModelsState.models) return;
+  const data = await fetchJSON('/api/ai/models');
+  if (!Array.isArray(data?.models) || data.models.length === 0) {
+    container.innerHTML = '<div class="empty-state">Failed to load AI models catalogue.</div>';
+    return;
+  }
+
+  aiModelsState.models = data.models.filter(model =>
+    model && typeof model.id === 'string' && typeof model.name === 'string'
+  );
+  if (aiModelsState.models.length === 0) {
+    container.innerHTML = '<div class="empty-state">Failed to load AI models catalogue.</div>';
+    return;
+  }
+
+  const providers = [...new Set(aiModelsState.models.map(model => model.provider).filter(Boolean))].sort();
+  const providerFilter = document.getElementById('aiProviderFilter');
+  if (providerFilter) {
+    providerFilter.replaceChildren(new Option('All providers', ''));
+    providers.forEach(provider => providerFilter.add(new Option(provider, provider)));
+  }
+  renderAiModels();
+}
+
+function initAiModelsControls() {
+  document.getElementById('aiModelSearch')?.addEventListener('input', event => {
+    aiModelsState.query = event.target.value.trim();
+    aiModelsState.page = 1;
+    renderAiModels();
+  });
+  document.getElementById('aiProviderFilter')?.addEventListener('change', event => {
+    aiModelsState.provider = event.target.value;
+    aiModelsState.page = 1;
+    renderAiModels();
+  });
+  document.getElementById('aiModelsPrev')?.addEventListener('click', () => {
+    aiModelsState.page--;
+    renderAiModels();
+  });
+  document.getElementById('aiModelsNext')?.addEventListener('click', () => {
+    aiModelsState.page++;
+    renderAiModels();
   });
 }
 function formatUptime(sec) {
@@ -169,8 +274,8 @@ async function refreshAll() {
   }
 }
 function startLoop() {
-  initTheme();
   initTabs();
+  initAiModelsControls();
   const timerEl = document.getElementById('refreshTimer');
   countdown = REFRESH_SEC;
   refreshAll();

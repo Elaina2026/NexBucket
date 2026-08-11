@@ -99,6 +99,10 @@ export const utilCommands = [
     .setDescription('Check the bot\'s API and websocket latency')
     .toJSON(),
   new SlashCommandBuilder()
+    .setName('aimodel')
+    .setDescription('Display the real-time AI Models Leaderboard')
+    .toJSON(),
+  new SlashCommandBuilder()
     .setName('uptime')
     .setDescription('Display the bot\'s total uptime')
     .toJSON(),
@@ -123,3 +127,5 @@ export const utilCommands = [
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
     .toJSON(),
 ];
+
+export const utilCommandNames = new Set(utilCommands.map(command => command.name));

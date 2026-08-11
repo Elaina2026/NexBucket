@@ -490,6 +490,39 @@ export async function handleUtilCommand(interaction) {
     }
     return;
   }
+  if (cmd === 'aimodel') {
+    await interaction.deferReply();
+    try {
+      const { getModelsLeaderboard } = await import('./aiManager.js');
+      const models = await getModelsLeaderboard();
+      const embed = new EmbedBuilder()
+        .setTitle('🤖 Real-Time AI Models Leaderboard')
+        .setColor('#5865F2')
+        .setDescription('Below are top AI models with real-time specs & capabilities:')
+        .setTimestamp();
+
+      models.slice(0, 10).forEach((m, idx) => {
+        const formatNumber = value => Number.isFinite(value) ? value.toLocaleString().slice(0, 24) : 'Unknown';
+        const formatPrice = value => Number.isFinite(value) ? `$${String(value).slice(0, 23)}` : '?';
+        const context = formatNumber(m.context_window);
+        const maxOutput = formatNumber(m.max_output_tokens);
+        const inputPrice = formatPrice(m.input_price_per_m);
+        const outputPrice = formatPrice(m.output_price_per_m);
+        const name = String(m.name || m.id || 'Unknown').replace(/[\r\n]+/g, ' ').slice(0, 150);
+        const provider = String(m.provider || 'unknown').replace(/[`\r\n]/g, '').slice(0, 60) || 'unknown';
+        embed.addFields({
+          name: `${idx + 1}. ${name}`,
+          value: `**Provider:** \`${provider}\` | **Context:** \`${context}\` | **Max Output:** \`${maxOutput}\`\n**Vision:** ${m.vision_support ? '✅ Yes' : '❌ No'} | **Price (In/Out):** \`${inputPrice} / ${outputPrice}\` per 1M tokens`,
+          inline: false,
+        });
+      });
+
+      return interaction.editReply({ embeds: [embed] });
+    } catch (err) {
+      console.error('[Slash Command aimodel Error]:', err);
+      return interaction.editReply({ content: '❌ Failed to fetch AI models leaderboard.' });
+    }
+  }
 }
 export async function handleLockCommand(message) {
   if (!message.member.permissions.has(PermissionFlagsBits.ManageChannels)) {
