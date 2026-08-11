@@ -100,7 +100,7 @@ export const utilCommands = [
     .toJSON(),
   new SlashCommandBuilder()
     .setName('aimodel')
-    .setDescription('Display the real-time AI Models Leaderboard')
+    .setDescription('Display the SWE-bench Verified AI coding leaderboard')
     .toJSON(),
   new SlashCommandBuilder()
     .setName('uptime')

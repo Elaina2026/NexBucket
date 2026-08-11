@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { CARD_STATUS, PENDING_STATUSES, describeStatus, isFinalStatus, shouldExpirePending } from './cardResult.js';
+import { CARD_STATUS, PENDING_STATUSES, describeStatus, isFinalStatus, shouldExpirePending } from '../banking/cardResult.js';
 
 test('Card2K status lifecycle is explicit', () => {
   assert.equal(isFinalStatus(1), true);

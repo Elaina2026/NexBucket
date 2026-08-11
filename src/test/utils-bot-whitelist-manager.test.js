@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isBotListedOnTopGG } from './botWhitelistManager.js';
+import { isBotListedOnTopGG } from '../utils/botWhitelistManager.js';
 
 test('Top.gg widget identifies a listed bot without authentication', async () => {
   let request;

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getGeoInfo, normalizeServerList, normalizeTrackedServer } from './statusManager.js';
+import { getGeoInfo, normalizeServerList, normalizeTrackedServer } from '../status/statusManager.js';
 
 const guildId = '12345678901234567';
 

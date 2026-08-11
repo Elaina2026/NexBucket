@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { DEFAULT_JTC_CONFIG, formatJtcChannelName, normalizeJtcConfig } from './jtcManager.js';
+import { DEFAULT_JTC_CONFIG, formatJtcChannelName, normalizeJtcConfig } from '../utils/jtcManager.js';
 
 test('JTC config fills defaults for legacy rows', () => {
   assert.deepEqual(normalizeJtcConfig({ hubChannelId: '123' }), {

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { shouldAutoBanForWarnings } from './moderationManager.js';
+import { shouldAutoBanForWarnings } from '../moderation/moderationManager.js';
 
 test('auto-ban fires only when warnings cross the configured threshold', () => {
   assert.equal(shouldAutoBanForWarnings(2, 3, 1), false);

@@ -1,6 +1,5 @@
 import { EmbedBuilder } from './embed.js';
-import { MessageFlags, PermissionFlagsBits, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle, AttachmentBuilder } from 'discord.js';
-import { createCanvas, loadImage } from '@napi-rs/canvas';
+import { MessageFlags, PermissionFlagsBits, ActionRowBuilder, StringSelectMenuBuilder, AttachmentBuilder } from 'discord.js';
 import ms from 'ms';
 import { supabase } from '../database/supabaseClient.js';
 async function getReminders(now = Date.now()) {
@@ -74,13 +73,23 @@ async function applyBotRolesOverwrites(channel, guildId, perms) {
   }
 }
 
-async function renderAvatarAndDecor(avatarUrl, decorUrl) {
-  const [avatar, decor] = await Promise.all([loadImage(avatarUrl), loadImage(decorUrl)]);
-  const canvas = createCanvas(2400, 1200);
-  const ctx = canvas.getContext('2d');
-  ctx.drawImage(avatar, 0, 0, 1200, 1200);
-  ctx.drawImage(decor, 1200, 0, 1200, 1200);
-  return canvas.toBuffer('image/png');
+export function createAvatarEmbed(user, requestedBy) {
+  const avatarUrl = user.displayAvatarURL({ size: 1024, extension: 'png' });
+  const decorUrl = user.avatarDecorationURL();
+  const bannerUrl = user.bannerURL({ size: 1024, extension: 'png' });
+  const links = [
+    `[URL](${avatarUrl})`,
+    decorUrl ? `[Decoration URL](${decorUrl})` : 'Decoration URL: Not available',
+    bannerUrl ? `[Banner URL](${bannerUrl})` : 'Banner URL: Not available',
+  ];
+  const embed = new EmbedBuilder()
+    .setColor('#5865F2')
+    .setAuthor({ name: `@${user.username}'s avatar`, iconURL: avatarUrl })
+    .setDescription(links.join('\n'))
+    .setImage(avatarUrl)
+    .setFooter({ text: `Requested by ${requestedBy}` });
+  if (decorUrl) embed.setThumbnail(decorUrl);
+  return embed;
 }
 
 export async function handleUtilCommand(interaction) {
@@ -173,37 +182,8 @@ export async function handleUtilCommand(interaction) {
     await interaction.deferReply();
     const selectedUser = interaction.options.getUser('user') || interaction.user;
     const user = await interaction.client.users.fetch(selectedUser.id, { force: true }).catch(() => selectedUser);
-    const avatarUrl = user.displayAvatarURL({ size: 1024, extension: 'png', forceStatic: true });
-    const decorUrl = user.avatarDecorationURL();
-    const embed = new EmbedBuilder()
-      .setColor('#5865F2')
-      .setTitle(`🖼️ ${user.username}'s Avatar${decorUrl ? ' + Decoration' : ''}`)
-      .setFooter({ text: `Requested by ${interaction.user.tag}` });
-    const buttons = [new ButtonBuilder()
-      .setLabel('Open Avatar')
-      .setStyle(ButtonStyle.Link)
-      .setURL(avatarUrl)];
-    const files = [];
-
-    if (decorUrl) {
-      try {
-        const image = await renderAvatarAndDecor(avatarUrl, decorUrl);
-        files.push(new AttachmentBuilder(image, { name: 'avatar-and-decor.png' }));
-        embed.setImage('attachment://avatar-and-decor.png');
-      } catch (error) {
-        console.error('[Avatar] Failed to combine decoration:', error.message || error);
-        embed.setImage(avatarUrl);
-      }
-      buttons.push(new ButtonBuilder()
-        .setLabel('Open Decor')
-        .setStyle(ButtonStyle.Link)
-        .setURL(decorUrl));
-    } else {
-      embed.setImage(avatarUrl);
-    }
-
-    const row = new ActionRowBuilder().addComponents(buttons);
-    await interaction.editReply({ embeds: [embed], components: [row], files });
+    const embed = createAvatarEmbed(user, interaction.user.tag);
+    await interaction.editReply({ embeds: [embed] });
     return;
   }
   if (cmd === 'autorole') {
@@ -493,34 +473,24 @@ export async function handleUtilCommand(interaction) {
   if (cmd === 'aimodel') {
     await interaction.deferReply();
     try {
-      const { getModelsLeaderboard } = await import('./aiManager.js');
-      const models = await getModelsLeaderboard();
+      const [{ AI_CODING_SOURCE, getAiCodingLeaderboard }, { renderAiCodingChart }] = await Promise.all([
+        import('./aiCodingLeaderboard.js'),
+        import('./aiChartRenderer.js'),
+      ]);
+      const image = renderAiCodingChart(getAiCodingLeaderboard(), AI_CODING_SOURCE);
+      const attachment = new AttachmentBuilder(image, { name: 'ai-coding-leaderboard.png' });
       const embed = new EmbedBuilder()
-        .setTitle('🤖 Real-Time AI Models Leaderboard')
+        .setTitle('🤖 AI Coding Leaderboard')
         .setColor('#5865F2')
-        .setDescription('Below are top AI models with real-time specs & capabilities:')
+        .setDescription(`SWE-bench Verified results using the same mini-SWE-agent harness. [View official source](${AI_CODING_SOURCE.url})`)
+        .setImage('attachment://ai-coding-leaderboard.png')
+        .setFooter({ text: `Updated ${AI_CODING_SOURCE.updatedAt} • Higher is better` })
         .setTimestamp();
 
-      models.slice(0, 10).forEach((m, idx) => {
-        const formatNumber = value => Number.isFinite(value) ? value.toLocaleString().slice(0, 24) : 'Unknown';
-        const formatPrice = value => Number.isFinite(value) ? `$${String(value).slice(0, 23)}` : '?';
-        const context = formatNumber(m.context_window);
-        const maxOutput = formatNumber(m.max_output_tokens);
-        const inputPrice = formatPrice(m.input_price_per_m);
-        const outputPrice = formatPrice(m.output_price_per_m);
-        const name = String(m.name || m.id || 'Unknown').replace(/[\r\n]+/g, ' ').slice(0, 150);
-        const provider = String(m.provider || 'unknown').replace(/[`\r\n]/g, '').slice(0, 60) || 'unknown';
-        embed.addFields({
-          name: `${idx + 1}. ${name}`,
-          value: `**Provider:** \`${provider}\` | **Context:** \`${context}\` | **Max Output:** \`${maxOutput}\`\n**Vision:** ${m.vision_support ? '✅ Yes' : '❌ No'} | **Price (In/Out):** \`${inputPrice} / ${outputPrice}\` per 1M tokens`,
-          inline: false,
-        });
-      });
-
-      return interaction.editReply({ embeds: [embed] });
+      return interaction.editReply({ embeds: [embed], files: [attachment] });
     } catch (err) {
       console.error('[Slash Command aimodel Error]:', err);
-      return interaction.editReply({ content: '❌ Failed to fetch AI models leaderboard.' });
+      return interaction.editReply({ content: '❌ Failed to generate the AI model chart.' });
     }
   }
 }

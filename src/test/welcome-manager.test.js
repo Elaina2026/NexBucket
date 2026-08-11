@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createCanvas, loadImage } from '@napi-rs/canvas';
-import { formatWelcomeMessage, renderWelcomeBanner } from './welcomeManager.js';
+import { formatWelcomeMessage, renderWelcomeBanner } from '../welcome/welcomeManager.js';
 
 function imageBuffer(width, height, color) {
   const canvas = createCanvas(width, height);

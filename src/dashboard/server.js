@@ -25,6 +25,7 @@ import { parseTrackedMinecraftAddress } from '../status/minecraftBanner.js';
 import { applyCardResult } from '../banking/cardResult.js';
 import { supabase } from '../database/supabaseClient.js';
 import { encryptToken, decryptToken, generateCsrfToken, sanitizePayload } from '../utils/securityUtils.js';
+import { LEARN_IMAGE_MAX_BYTES, validateLearnImage } from '../utils/learnImage.js';
 import {
     cookieHeader,
     isAllowedImageUrl,
@@ -446,6 +447,24 @@ export function startDashboard(client) {
         if (!accessToken) return null;
         return { session, accessToken };
     }
+    async function requireGuildAdministrator(req, res) {
+        const auth = await getAuthenticatedUser(req);
+        if (!auth) {
+            res.status(401).json({ error: 'Unauthorized' });
+            return null;
+        }
+        const guild = client.guilds.cache.get(req.params.guildId);
+        if (!guild) {
+            res.status(404).json({ error: 'Guild not found in bot cache' });
+            return null;
+        }
+        const member = await getGuildMember(guild, auth.session.user_id);
+        if (!member?.permissions.has('Administrator')) {
+            res.status(403).json({ error: 'Forbidden: Administrator permission required.' });
+            return null;
+        }
+        return { auth, guild, member };
+    }
     app.get('/api/auth/me', async (req, res) => {
         try {
             const auth = await getAuthenticatedUser(req);
@@ -572,6 +591,172 @@ export function startDashboard(client) {
             sendInternalError(res, err, 'Welcome preview failed');
         }
     });
+    const learnBucket = 'learn-images';
+    let learnBucketPromise;
+    function ensureLearnBucket() {
+        if (!learnBucketPromise) {
+            learnBucketPromise = supabase.storage.createBucket(learnBucket, {
+                public: true,
+                fileSizeLimit: LEARN_IMAGE_MAX_BYTES,
+                allowedMimeTypes: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'],
+            }).then(({ error }) => {
+                if (error && !/already exists|duplicate/i.test(error.message || '')) throw error;
+            }).catch(error => {
+                learnBucketPromise = null;
+                throw error;
+            });
+        }
+        return learnBucketPromise;
+    }
+    function learnImageUrl(imagePath) {
+        if (!imagePath) return '';
+        return supabase.storage.from(learnBucket).getPublicUrl(imagePath).data.publicUrl;
+    }
+    function learnActor(auth) {
+        return {
+            id: String(auth.session.user_id),
+            name: String(auth.session.username || auth.session.user_id).slice(0, 100),
+        };
+    }
+    function learnEntryFromRequest(body, guildId, current, actor, now) {
+        const imagePath = body.imagePath === undefined
+            ? String(current?.imagePath || '')
+            : String(body.imagePath || '').trim();
+        if (imagePath && (!imagePath.startsWith(`${guildId}/`) || imagePath.includes('..'))) {
+            throw new TypeError('Invalid Learn image path');
+        }
+        return {
+            response: typeof body.response === 'string' ? body.response : '',
+            imageUrl: learnImageUrl(imagePath),
+            imagePath,
+            enabled: body.enabled !== false,
+            createdAt: current?.createdAt || now,
+            createdBy: current?.createdBy || actor.id,
+            createdByName: current?.createdByName || actor.name,
+            updatedAt: now,
+            updatedBy: actor.id,
+            updatedByName: actor.name,
+        };
+    }
+    async function removeLearnImage(guildId, imagePath) {
+        if (!imagePath || !imagePath.startsWith(`${guildId}/`) || imagePath.includes('..')) return;
+        const { error } = await supabase.storage.from(learnBucket).remove([imagePath]);
+        if (error) console.error('[Learn] Failed to remove image:', error.message || error);
+    }
+
+    app.get('/api/guilds/:guildId/learn', async (req, res) => {
+        try {
+            const access = await requireGuildAdministrator(req, res);
+            if (!access) return;
+            const { getArData } = await import('../utils/chatFeatures.js');
+            const data = await getArData();
+            res.setHeader('Cache-Control', 'no-store');
+            res.json({ entries: data[req.params.guildId] || {} });
+        } catch (error) {
+            sendInternalError(res, error, 'Learn list failed');
+        }
+    });
+    app.post('/api/guilds/:guildId/learn/image', express.raw({
+        type: () => true,
+        limit: LEARN_IMAGE_MAX_BYTES,
+    }), async (req, res) => {
+        try {
+            const access = await requireGuildAdministrator(req, res);
+            if (!access) return;
+            if (!supabase) return res.status(503).json({ error: 'Database not configured' });
+            const image = await validateLearnImage(req.body, req.headers['content-type']);
+            await ensureLearnBucket();
+            const imagePath = `${req.params.guildId}/${crypto.randomUUID()}.${image.extension}`;
+            const { error } = await supabase.storage.from(learnBucket).upload(imagePath, req.body, {
+                contentType: image.mimeType,
+                upsert: false,
+                cacheControl: '31536000',
+            });
+            if (error) throw error;
+            res.status(201).json({ imagePath, imageUrl: learnImageUrl(imagePath) });
+        } catch (error) {
+            if (error instanceof TypeError || error instanceof RangeError) {
+                return res.status(422).json({ error: error.message });
+            }
+            sendInternalError(res, error, 'Learn image upload failed');
+        }
+    });
+    app.delete('/api/guilds/:guildId/learn/image', async (req, res) => {
+        try {
+            const access = await requireGuildAdministrator(req, res);
+            if (!access) return;
+            await removeLearnImage(req.params.guildId, String(req.body?.imagePath || ''));
+            res.json({ success: true });
+        } catch (error) {
+            sendInternalError(res, error, 'Learn image cleanup failed');
+        }
+    });
+    app.post('/api/guilds/:guildId/learn', async (req, res) => {
+        try {
+            const access = await requireGuildAdministrator(req, res);
+            if (!access) return;
+            const { getArData, normalizeArEntry, normalizeLearnTrigger, saveArData } = await import('../utils/chatFeatures.js');
+            const trigger = normalizeLearnTrigger(req.body?.trigger);
+            const all = await getArData();
+            const current = all[req.params.guildId] || {};
+            if (current[trigger]) return res.status(409).json({ error: 'Trigger already exists' });
+            const now = new Date().toISOString();
+            const entry = normalizeArEntry(learnEntryFromRequest(req.body || {}, req.params.guildId, null, learnActor(access.auth), now));
+            await saveArData(req.params.guildId, { ...current, [trigger]: entry });
+            res.status(201).json({ trigger, entry });
+        } catch (error) {
+            if (error instanceof TypeError || error instanceof RangeError) return res.status(400).json({ error: error.message });
+            sendInternalError(res, error, 'Learn create failed');
+        }
+    });
+    app.put('/api/guilds/:guildId/learn', async (req, res) => {
+        try {
+            const access = await requireGuildAdministrator(req, res);
+            if (!access) return;
+            const { getArData, normalizeArEntry, normalizeLearnTrigger, saveArData } = await import('../utils/chatFeatures.js');
+            const originalTrigger = normalizeLearnTrigger(req.body?.originalTrigger);
+            const trigger = normalizeLearnTrigger(req.body?.trigger);
+            const all = await getArData();
+            const current = all[req.params.guildId] || {};
+            const original = current[originalTrigger];
+            if (!original) return res.status(404).json({ error: 'Trigger not found' });
+            if (trigger !== originalTrigger && current[trigger]) return res.status(409).json({ error: 'Trigger already exists' });
+            const now = new Date().toISOString();
+            const entry = normalizeArEntry(learnEntryFromRequest(req.body || {}, req.params.guildId, original, learnActor(access.auth), now));
+            const next = { ...current };
+            delete next[originalTrigger];
+            next[trigger] = entry;
+            await saveArData(req.params.guildId, next);
+            if (original.imagePath && original.imagePath !== entry.imagePath) {
+                await removeLearnImage(req.params.guildId, original.imagePath);
+            }
+            res.json({ trigger, entry });
+        } catch (error) {
+            if (error instanceof TypeError || error instanceof RangeError) return res.status(400).json({ error: error.message });
+            sendInternalError(res, error, 'Learn update failed');
+        }
+    });
+    app.delete('/api/guilds/:guildId/learn', async (req, res) => {
+        try {
+            const access = await requireGuildAdministrator(req, res);
+            if (!access) return;
+            const { getArData, normalizeLearnTrigger, saveArData } = await import('../utils/chatFeatures.js');
+            const trigger = normalizeLearnTrigger(req.body?.trigger);
+            const all = await getArData();
+            const current = all[req.params.guildId] || {};
+            const entry = current[trigger];
+            if (!entry) return res.status(404).json({ error: 'Trigger not found' });
+            const next = { ...current };
+            delete next[trigger];
+            await saveArData(req.params.guildId, next);
+            await removeLearnImage(req.params.guildId, entry.imagePath);
+            res.json({ success: true });
+        } catch (error) {
+            if (error instanceof TypeError || error instanceof RangeError) return res.status(400).json({ error: error.message });
+            sendInternalError(res, error, 'Learn delete failed');
+        }
+    });
+
     app.get('/api/config/:guildId', async (req, res) => {
         try {
             res.setHeader('Cache-Control', 'no-store');
@@ -589,9 +774,6 @@ export function startDashboard(client) {
             const cardConfig = await getCardConfig(guildId);
             const statsConfig = await getStatsConfigForGuild(guildId);
             const modConfig = await getModConfig(guildId);
-            const { getArData } = await import('../utils/chatFeatures.js');
-            const arData = await getArData();
-            const autoresponderConfig = arData[guildId] || {};
             const settings = await getAllSections(guildId, true);
             const minecraftServers = [];
             for (const server of Array.isArray(settings.minecraft?.servers) ? settings.minecraft.servers : []) {
@@ -655,7 +837,6 @@ export function startDashboard(client) {
                 },
                 configVersion,
                 serverBanner,
-                autoresponderConfig,
             });
         } catch (err) {
             if (isDatabaseUnavailable(err)) return sendDatabaseUnavailable(res, err);
@@ -688,19 +869,6 @@ export function startDashboard(client) {
             const cardConfig = asObject(pickKey(cleanBody, 'cardConfig', 'card_config'));
             const statsConfig = asObject(pickKey(cleanBody, 'statsConfig', 'stats_config'));
             const statusConfig = asObject(pickKey(cleanBody, 'statusConfig', 'status_config'));
-            const autoresponderConfig = pickKey(cleanBody, 'autoresponderConfig', 'autoresponder_config');
-            let normalizedAutoresponderConfig;
-            if (autoresponderConfig !== undefined) {
-                try {
-                    const { normalizeArTriggers } = await import('../utils/chatFeatures.js');
-                    normalizedAutoresponderConfig = normalizeArTriggers(autoresponderConfig);
-                } catch (error) {
-                    if (error instanceof TypeError || error instanceof RangeError) {
-                        return res.status(400).json({ error: error.message });
-                    }
-                    throw error;
-                }
-            }
             const existingSettings = await getAllSections(guildId, true);
             const existingBank = await getBankConfig(guildId);
             const preserveSecret = (incoming, encrypted) => {
@@ -792,10 +960,6 @@ export function startDashboard(client) {
                     return res.status(409).json({ error: 'Settings changed from Discord or database. Reload before saving.' });
                 }
                 throw saveError;
-            }
-            if (normalizedAutoresponderConfig !== undefined) {
-                const { saveArData } = await import('../utils/chatFeatures.js');
-                await saveArData(guildId, normalizedAutoresponderConfig);
             }
             setJtcSettingsCache(guildId, payload.jtc);
             for (const server of normalizedServers) {

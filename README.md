@@ -1,10 +1,11 @@
 <p align="center">
-  <img src="https://cdn.discordapp.com/avatars/1532351525563666533/16ed1c332d9c4f9ee7f029bd86918421.png?size=1024" alt="NexBucket Bot Avatar" width="120" style="border-radius: 50%;">
-  <h1 align="center">NexBucket</h1>
+  <img src="https://cdn.discordapp.com/avatars/1532351525563666533/16ed1c332d9c4f9ee7f029bd86918421.png?size=1024" alt="NexBucket Bot Avatar" width="120">
 </p>
 
+<h1 align="center">NexBucket</h1>
+
 <p align="center">
-  <strong>Discord server management, payments, moderation, tickets, Minecraft status, and automation in one Node.js bot.</strong>
+  <strong>A unified Discord bot and web dashboard for moderation, tickets, automation, payments, server monitoring, and community management.</strong>
 </p>
 
 <p align="center">
@@ -18,107 +19,123 @@
 
 ## Overview
 
-NexBucket is a multi-server Discord bot and web dashboard. Each Discord server has isolated configuration stored in Supabase. Discord OAuth2 controls dashboard access, while the backend service-role client performs database operations.
+NexBucket combines a multi-server Discord bot with an OAuth2-protected management dashboard. Each guild has isolated configuration backed by Supabase/PostgreSQL, while sensitive credentials and database access remain on the server.
 
-### Main capabilities
+The project uses Node.js ESM, Discord.js 14, Express 5, Supabase, Sharp, and `@napi-rs/canvas`.
 
-| Module | Capabilities |
+## Features
+
+| Area | Highlights |
 | --- | --- |
-| Tickets | Category-based tickets, staff claims, editing, access control, password-protected web transcripts, automatic expiry |
-| Moderation | Warn, mute, hard mute, temporary ban, ban list, anti-spam, anti-raid, anti-link, banned words, warning-threshold auto-ban |
-| Welcome | Welcome and goodbye cards, custom backgrounds and messages, auto-role |
-| Voice JTC | Join-to-Create hubs, temporary rooms, user limits, bitrate, locking, personal room profiles |
-| Payments | VietQR, PayOS payment links and signed webhooks, Card2K top-ups and polling |
-| Minecraft | Java server ping, MOTD/font rendering, favicon fallback, local backgrounds, cached Discord status banners |
-| Server tools | Giveaways, reminders, AFK, autoresponder, statistics channels, backups, blacklist and bot whitelist |
-| Dashboard | Discord OAuth2, per-guild permission checks, bilingual UI, public service status, owner-only administration |
+| Tickets | Category-based ticket panels, staff claims, access controls, editing, ratings, password-protected web transcripts, and automatic expiry |
+| Moderation | Ban, temporary ban, kick, timeout, mute, warnings, anti-spam, anti-link, anti-raid, banned words, and threshold-based auto-ban |
+| Learn manager | Text, image, or mixed automatic responses; dashboard search, preview, duplicate warnings, enable/disable state, metadata, and Administrator-only CRUD |
+| AI tools | Claude chat integration and a local SWE-bench Verified AI coding leaderboard rendered as a chart |
+| Network tools | RDAP-powered WHOIS summaries, DNS records, public IP/domain availability checks, ISP/location metadata, and private-network protection |
+| Minecraft | Java server ping, SRV resolution, MOTD rendering, favicon support, local backgrounds, caching, and Discord-ready status banners |
+| Community | Welcome/goodbye cards, auto-role, Join-to-Create rooms, giveaways, reminders, AFK status, statistics channels, and backups |
+| Payments | VietQR, PayOS payment links and signed callbacks, Card2K top-ups, encrypted provider credentials, and status polling |
+| Dashboard | Discord OAuth2, per-guild authorization, dark/light themes, configuration APIs, activity views, owner administration, and public service status |
+
+## Command highlights
+
+| Command | Purpose |
+| --- | --- |
+| `/ticket` | Configure and publish the ticket system |
+| `/dns whois domain:<domain>` | Show concise registration and essential DNS information |
+| `/check ip-domain:<target>` | Check a public IP/domain, HTTP/HTTPS availability, latency, ISP, and location |
+| `/aimodel` | Render the local SWE-bench Verified AI coding leaderboard |
+| `/avatar` | Show avatar, decoration, banner, and direct asset links |
+| `/mcserver` | Query a Minecraft server and render its status banner |
+| `/giveaway` | Start, edit, end, or reroll giveaways |
+| `/setup-welcome`, `/setup-goodbye` | Configure member arrival and departure cards |
+| `/setup-jtc` | Configure temporary Join-to-Create voice rooms |
+| `/qrbank`, `/setup-card` | Configure payment and card top-up workflows |
+| `/status`, `/setup-serverstats` | Monitor services and publish live guild statistics |
+
+Run `/help` and `/botguide` in Discord for the complete command list. Administrative commands still enforce their Discord permission requirements.
 
 ## Architecture
 
 ```text
-Discord events / commands
+index.js                         Composition root
+   |
+   +-- src/runtime/              Startup, scheduled jobs, event registration
+   +-- src/events/               Discord interaction, message, guild, and member routing
+   |      |
+   |      +-- feature modules    Tickets, moderation, welcome, JTC, payments, status
+   |      +-- src/network/       RDAP, DNS, and safe availability checks
+   |
+   +-- src/dashboard/server.js   Express, OAuth2, sessions, APIs, callbacks
           |
-          v
-       index.js
-          |
-   +------+------+----------------+----------------+
-   |             |                |                |
-Tickets      Moderation       Utilities        Status
-   |             |                |                |
-   +-------------+-------+--------+----------------+
-                         |
-                  guildSettings.js
-                         |
-               Supabase / PostgreSQL
-
-Browser --> Express dashboard --> Discord OAuth2
-                |       |
-                |       +--> Discord API and guild cache
-                +----------> backend-only Supabase client
+          +-- Supabase/PostgreSQL
+          +-- Discord API and guild cache
 ```
 
-Important paths:
+### Project structure
 
-- `index.js` — process startup, Discord event routing, command registration, periodic jobs.
-- `src/dashboard/server.js` — Express dashboard, OAuth2, sessions, APIs, payment callbacks.
-- `src/database/` — Supabase client, canonical schema, migrations, guild settings cache.
-- `src/ticket/`, `src/moderation/`, `src/welcome/`, `src/giveaway/` — Discord modules.
-- `src/status/` — Minecraft status, server statistics, renderer adapter.
-- `src/utils/` — JTC, backups, reminders, permissions, logging and shared features.
-- `assets/banners/` — optional local Minecraft banner backgrounds.
+```text
+NexBucket/
+├── index.js                     Bot entrypoint and dependency wiring
+├── src/
+│   ├── runtime/                 Startup jobs and event registration
+│   ├── events/                  Discord event handlers and routing
+│   ├── network/                 DNS, RDAP, IP metadata, and availability checks
+│   ├── dashboard/               Express server and browser interface
+│   ├── database/                Supabase client, schema, migrations, and settings
+│   ├── ticket/                  Ticket commands, components, and transcripts
+│   ├── moderation/              Moderation and automatic protection
+│   ├── status/                  Minecraft and service monitoring
+│   ├── banking/                 VietQR, PayOS, and Card2K integrations
+│   ├── welcome/                 Welcome/goodbye cards and auto-role
+│   ├── giveaway/                Giveaway lifecycle
+│   ├── utils/                   Shared utilities and community features
+│   └── test/                    Central Node.js test suite
+├── scripts/                     Asset preparation scripts
+├── assets/                      Runtime images and optional banner backgrounds
+├── .env.example                 Environment template
+├── LICENSE
+└── NOTICE.md
+```
 
 ## Requirements
 
-- Node.js 24 or newer.
-- npm.
-- Discord application and bot token.
-- Supabase project with a backend `service_role` key.
-- PostgreSQL session or transaction pooler URL for schema migrations.
-- HTTPS domain for production dashboard and OAuth callback.
+- Node.js 24 or newer
+- npm
+- A Discord application and bot token
+- A Supabase project with a backend `service_role` key
+- A PostgreSQL session or transaction pooler URL for migrations
+- An HTTPS origin for the production dashboard and OAuth callback
 
-## Installation
+## Quick start
 
 ```bash
 git clone https://github.com/Elaina2026/NexBucket.git
 cd NexBucket
 npm install
 npm run assets:prepare
-```
-
-Create the environment file:
-
-```bash
 cp .env.example .env
 ```
 
-Windows users can copy `.env.example` to `.env` manually.
-
-Start development mode:
+Windows users can copy `.env.example` to `.env` manually. Fill in the required credentials, then validate and start the project:
 
 ```bash
+npm test
 npm run dev
 ```
 
-Start production mode:
+Production mode:
 
 ```bash
 npm start
 ```
 
-Run tests:
-
-```bash
-npm test
-```
-
 ## Discord application setup
 
 1. Create an application in the [Discord Developer Portal](https://discord.com/developers/applications).
-2. Create a bot and enable the gateway intents required by the enabled modules.
-3. Copy the bot token to `DISCORD_TOKEN`.
-4. Copy the application ID to `CLIENT_ID`.
-5. Copy the OAuth2 client secret to `CLIENT_SECRET`.
-6. Set the OAuth2 redirect URL to:
+2. Create its bot user and enable the gateway intents required by the enabled modules.
+3. Set `DISCORD_TOKEN`, `CLIENT_ID`, and `CLIENT_SECRET` in `.env`.
+4. Add the production OAuth2 redirect URL:
 
 ```text
 https://your-domain.example/api/auth/callback
@@ -130,146 +147,105 @@ For local development:
 http://localhost:3000/api/auth/callback
 ```
 
-The dashboard only displays servers where the user has Administrator or Manage Server permission and the bot is present.
+The dashboard only exposes guilds where the signed-in user has Administrator or Manage Server permission and the bot is present. Learn management requires Discord Administrator permission.
 
-## Supabase setup
+## Supabase and migrations
 
-Set these values in `.env`:
+Configure the backend service-role client and PostgreSQL poolers:
 
 ```env
 SUPABASE_URL=https://your-project-id.supabase.co
 SUPABASE_KEY=your-backend-service-role-key
-
-# Runtime transaction pooler
 DATABASE_URL=postgresql://postgres.your-project-id:ENCODED_PASSWORD@aws-0-region.pooler.supabase.com:6543/postgres?pgbouncer=true
-
-# Migration session pooler, preferred
 DIRECT_URL=postgresql://postgres.your-project-id:ENCODED_PASSWORD@aws-0-region.pooler.supabase.com:5432/postgres
 ```
 
-`SUPABASE_KEY` must never be sent to browser code, committed, or used as a public `anon` key. Runtime table access is backend-only; Row Level Security is enabled by the canonical schema.
+`SUPABASE_KEY` is backend-only. Never expose it to browser code, commit it, or substitute it with a public client key.
 
-Special characters in PostgreSQL passwords must be URL-encoded:
+Startup applies the canonical schema and pending files from `src/database/migrations/`. Applied migrations are recorded in `schema_migrations`; `DIRECT_URL` is preferred over `DATABASE_URL`.
 
-| Character | Encoding |
-| --- | --- |
-| `/` | `%2F` |
-| `@` | `%40` |
-| `:` | `%3A` |
-| `#` | `%23` |
-| `%` | `%25` |
-
-### Schema and migrations
-
-Startup executes the canonical schema and pending files from `src/database/migrations/`. Applied migrations are recorded in `schema_migrations`; `DIRECT_URL` is preferred over `DATABASE_URL`.
-
-Before applying migrations to an existing database:
+Before applying migrations to an existing deployment:
 
 1. Back up PostgreSQL.
-2. Apply and verify on staging.
-3. Inspect query plans and application logs.
+2. Verify the migration on staging.
+3. Inspect application logs and query behavior.
 4. Approve the production rollout separately.
-
-The repository contains migration SQL only. Its presence does not mean it has been applied to production.
 
 Use `src/database/security_policies.sql` in the Supabase SQL Editor when RLS policies need reconciliation.
 
 ## Environment variables
 
-See `.env.example` for the complete template.
+See `.env.example` for the deployment template.
 
 | Variable | Required | Purpose |
 | --- | --- | --- |
 | `DISCORD_TOKEN` | Yes | Discord bot token |
-| `CLIENT_ID` | Yes | Discord application ID and OAuth client ID |
+| `CLIENT_ID` | Yes | Discord application and OAuth client ID |
 | `CLIENT_SECRET` | Yes | Discord OAuth2 client secret |
-| `BOT_OWNER_ID` | Recommended | Owner-only dashboard and administrative access |
+| `BOT_OWNER_ID` | Recommended | Owner-only bot and dashboard access |
 | `SUPABASE_URL` | Yes | Supabase project URL |
 | `SUPABASE_KEY` | Yes | Backend-only Supabase service-role key |
 | `DATABASE_URL` | Yes | Runtime PostgreSQL pooler and migration fallback |
 | `DIRECT_URL` | Recommended | PostgreSQL session pooler for migrations |
-| `ENCRYPTION_SECRET` | Yes | AES-256-GCM key source for OAuth and payment secrets |
+| `ENCRYPTION_SECRET` | Yes | AES-256-GCM key source for stored OAuth/payment secrets |
+| `ANTHROPIC_API_KEY` | Optional | Enables Claude chat requests; not required for the local `/aimodel` leaderboard |
 | `DASHBOARD_PORT` | No | Express port; defaults to `3000` |
-| `DASHBOARD_URL` | Production | Canonical dashboard origin; use HTTPS in production |
-| `UPDATE_INTERVAL` | No | Minecraft message refresh interval in milliseconds |
-| `GUILD_SETTINGS_CACHE_MS` | No | Short per-guild settings cache lifetime |
-| `MINECRAFT_CONFIG_CACHE_MS` | No | Minecraft tracked-server cache lifetime |
-| `DEBUG_WEBHOOKS` | No | Card2K debugging; keep `0` in production |
+| `DASHBOARD_URL` | Production | Exact public dashboard origin; use HTTPS |
+| `UPDATE_INTERVAL` | No | Minecraft status refresh interval in milliseconds |
+| `GUILD_SETTINGS_CACHE_MS` | No | Per-guild settings cache lifetime |
+| `MINECRAFT_CONFIG_CACHE_MS` | No | Tracked Minecraft server cache lifetime |
+| `DEBUG_WEBHOOKS` | No | Card2K diagnostics; keep disabled in production |
 
-Do not change `ENCRYPTION_SECRET` after encrypted data exists unless existing ciphertext has been migrated. Changing it makes saved OAuth, PayOS, and Card2K secrets unreadable.
+Do not change `ENCRYPTION_SECRET` after encrypted data exists unless existing ciphertext has been migrated. Losing this value makes saved OAuth, PayOS, and Card2K credentials unreadable.
 
-## Minecraft banner renderer
+## Minecraft banner assets
 
-Prepare verified Minecraft assets once per deployment:
+Prepare verified assets once per deployment:
 
 ```bash
 npm run assets:prepare
 ```
 
-Relevant configuration:
+Relevant options are documented in `.env.example`. Place optional PNG, JPEG, or WebP backgrounds in `assets/banners/`.
 
-```env
-MC_BANNER_ASSET_DIR=MCServerBanner/node-assets
-MINECRAFT_ASSET_VERSION=1.21.10
-MC_BANNER_CACHE_SECONDS=300
-MC_BANNER_MAX_CACHE_ENTRIES=300
-MC_BANNER_CONNECT_TIMEOUT_MS=4000
-MC_BANNER_READ_TIMEOUT_MS=5000
-MC_BANNER_MAX_CONCURRENT_RENDERS=1
-MC_BANNER_ALLOW_PRIVATE_HOSTS=false
-MC_BANNER_STRIP_PRIVATE_GLYPHS=true
+Keep `MC_BANNER_ALLOW_PRIVATE_HOSTS=false` on public deployments. Enabling it permits connections to private/LAN targets and should only be used in explicitly trusted environments.
+
+## Security notes
+
+- Serve the dashboard through HTTPS and set `DASHBOARD_URL` to the exact public origin.
+- Keep Discord, Supabase, PostgreSQL, Anthropic, PayOS, Card2K, and encryption secrets on the backend.
+- Preserve OAuth state validation, HttpOnly/SameSite cookies, origin checks, CSP, HSTS, frame denial, and MIME sniffing protection.
+- Verify payment signatures before changing transaction state.
+- Never log card codes, serials, signatures, access tokens, or provider secrets.
+- Keep `DEBUG_WEBHOOKS=0` in production.
+- Keep public network checks restricted to public addresses; localhost, private, link-local, and reserved ranges are blocked.
+- Back up data before migrations or restore operations. Restore is intentionally destructive and requires confirmation.
+
+The image proxy accepts HTTPS images only from an explicit allowlist, blocks redirects, and limits response type and size. Learn uploads validate declared MIME type, decoded format, file size, and dimensions before storage.
+
+## Testing
+
+The complete Node.js test suite lives in `src/test/`:
+
+```bash
+npm test
 ```
 
-Place PNG/JPEG/WebP backgrounds in `assets/banners/`. Each new banner render randomly selects from every supported image in that folder. Missing or offline favicons fall back to `assets/unknown_server.png`.
-
-Keep `MC_BANNER_ALLOW_PRIVATE_HOSTS=false` on public deployments. Enabling it allows the bot to connect to private/LAN targets and should only be used for explicitly trusted servers.
-
-## Dashboard and API security
-
-Production checklist:
-
-- Serve only through HTTPS and set `DASHBOARD_URL` to the exact public origin.
-- Keep Discord, Supabase, PostgreSQL, OAuth, PayOS, Card2K and encryption secrets backend-only.
-- Restrict proxy trust to the deployment topology; the app currently expects one trusted reverse proxy.
-- Keep OAuth state, HttpOnly session cookies, SameSite cookies and origin checks enabled.
-- Verify PayOS and Card2K signatures before state changes.
-- Never log card codes, card serials, webhook signatures or payment secrets.
-- Keep `DEBUG_WEBHOOKS=0` in production.
-- Rotate exposed secrets immediately.
-- Review owner-only incidents, activities, sessions and security logs through authenticated admin routes.
-- Back up data before restore or migration operations. Restore remains intentionally destructive and requires confirmation.
-
-Security headers include CSP, HSTS on HTTPS, frame denial, MIME sniffing protection, referrer policy and restrictive permissions policy. The image proxy accepts HTTPS images only from an explicit allowlist, blocks redirects and limits response type and size.
-
-## Performance notes
-
-NexBucket reduces Supabase load with:
-
-- short TTL caches and concurrent-read coalescing for guild settings;
-- one bulk uptime insert per cycle;
-- one grouped uptime history query per cache window;
-- due-only giveaway and reminder queries;
-- adaptive Card2K polling backoff;
-- bounded transcript, incident and activity queries;
-- Minecraft render caching, pending-render deduplication and concurrency limits;
-- optimistic guild configuration writes through versioned PostgreSQL RPC.
-
-Measure real production results with Supabase Observability or `pg_stat_statements`; do not infer production CPU changes from local code alone.
+Tests cover dashboard security helpers, payments, moderation, Learn entries and image validation, network input/SSRF boundaries, command embeds, Minecraft resolution/rendering, AI leaderboards, welcome cards, and shared utilities. Network tests use injected dependencies and do not require live Internet access.
 
 ## Troubleshooting
 
 ### OAuth callback fails
 
-- Confirm `DASHBOARD_URL` exactly matches the configured Discord redirect origin.
-- Confirm the redirect path is `/api/auth/callback`.
-- Check `CLIENT_ID`, `CLIENT_SECRET`, HTTPS proxy forwarding and cookie settings.
+- Confirm `DASHBOARD_URL` exactly matches the Discord redirect origin.
+- Confirm the callback path is `/api/auth/callback`.
+- Check `CLIENT_ID`, `CLIENT_SECRET`, reverse-proxy forwarding, HTTPS, and cookie settings.
 
-### Database is paused or slow
+### Database is unavailable or slow
 
-- Check Supabase project state and API latency.
-- Verify pooler credentials and URL-encoded password characters.
-- Inspect `pg_stat_statements` and indexes before increasing polling frequency.
-- Keep settings and uptime caches enabled.
+- Check the Supabase project and pooler credentials.
+- URL-encode special characters in PostgreSQL passwords.
+- Inspect Supabase Observability or `pg_stat_statements` before increasing polling frequency.
 
 ### Minecraft banner assets are missing
 
@@ -277,18 +253,11 @@ Measure real production results with Supabase Observability or `pg_stat_statemen
 npm run assets:prepare
 ```
 
-Then verify `MC_BANNER_ASSET_DIR` is persistent and writable in the deployment environment.
+Then verify that `MC_BANNER_ASSET_DIR` is persistent and readable by the bot.
 
 ### Saved secrets cannot be decrypted
 
-Restore the original `ENCRYPTION_SECRET`. If the key was intentionally rotated, migrate existing ciphertext before removing the old key.
-
-### Payment callback is rejected
-
-- Verify the provider callback URL uses HTTPS.
-- Confirm the saved per-guild PayOS or Card2K credentials.
-- Check transaction order code, amount and callback signature.
-- Do not enable secret-bearing request logs in production.
+Restore the original `ENCRYPTION_SECRET`. For an intentional rotation, migrate existing ciphertext before removing the old key.
 
 ## Contributors
 
@@ -303,4 +272,4 @@ Created and maintained by **Elaina2026**.
 
 NexBucket is licensed under [Creative Commons Attribution-NonCommercial 4.0 International](LICENSE).
 
-The Minecraft banner integration has separate dual-license permission for use in NexBucket and carries upstream attribution. See [NOTICE.md](NOTICE.md). Third-party dependencies and downloaded Mojang assets retain their respective terms and trademarks.
+The Minecraft banner integration has separate dual-license permission for use in NexBucket and retains upstream attribution. See [NOTICE.md](NOTICE.md). Third-party dependencies and downloaded Mojang assets retain their respective terms and trademarks.

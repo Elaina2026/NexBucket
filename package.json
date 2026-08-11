@@ -7,7 +7,7 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "test": "node --test src/**/*.test.js",
+    "test": "node --test src/test/*.test.js",
     "assets:prepare": "node scripts/prepare-mc-banner-assets.cjs",
     "start": "node index.js",
     "dev": "node --watch index.js"

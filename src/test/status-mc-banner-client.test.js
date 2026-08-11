@@ -1,9 +1,10 @@
-'use strict';
+import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
+import { createRequire } from 'node:module';
+import test from 'node:test';
 
-const assert = require('node:assert/strict');
-const { EventEmitter } = require('node:events');
-const test = require('node:test');
-const MinecraftStatusClient = require('./minecraft-status-client');
+const require = createRequire(import.meta.url);
+const MinecraftStatusClient = require('../status/mc-banner/minecraft-status-client.js');
 
 class MockSocket extends EventEmitter {
   setNoDelay() {}
@@ -15,7 +16,7 @@ test('uses Minecraft SRV target while preserving the requested handshake host', 
     resolveSrv: async () => [{ name: 'backend.example.net', port: 25570, priority: 0, weight: 1 }],
     lookup: async host => {
       assert.equal(host, 'backend.example.net');
-      return [{ address: '203.0.113.10', family: 4 }];
+      return [{ address: '8.8.8.8', family: 4 }];
     },
   };
   const client = new MinecraftStatusClient(100, 100, -1, false, { dnsResolver });
@@ -28,10 +29,10 @@ test('uses Minecraft SRV target while preserving the requested handshake host', 
   const result = await client.query('play.example.com', 25565);
   assert.deepEqual(received, {
     handshakeHost: 'play.example.com',
-    address: '203.0.113.10',
+    address: '8.8.8.8',
     port: 25570,
   });
-  assert.equal(result.resolvedAddress, '203.0.113.10');
+  assert.equal(result.resolvedAddress, '8.8.8.8');
   assert.equal(result.resolvedHost, 'backend.example.net');
   assert.equal(result.resolvedPort, 25570);
 });
@@ -44,22 +45,22 @@ test('tries every public DNS address until one responds', async () => {
       throw error;
     },
     lookup: async () => [
-      { address: '203.0.113.1', family: 4 },
-      { address: '203.0.113.2', family: 4 },
+      { address: '8.8.8.8', family: 4 },
+      { address: '1.1.1.1', family: 4 },
     ],
   };
   const client = new MinecraftStatusClient(100, 100, -1, false, { dnsResolver });
   const attempted = [];
   client.queryAddress = async (handshakeHost, address) => {
     attempted.push(address);
-    if (address.endsWith('.1')) throw new Error('Connection refused');
+    if (address === '8.8.8.8') throw new Error('Connection refused');
     return { online: true };
   };
 
   const result = await client.query('play.example.com', 25565);
   assert.equal(result.online, true);
-  assert.equal(result.resolvedAddress, '203.0.113.2');
-  assert.deepEqual(attempted, ['203.0.113.1', '203.0.113.2']);
+  assert.equal(result.resolvedAddress, '1.1.1.1');
+  assert.deepEqual(attempted, ['8.8.8.8', '1.1.1.1']);
 });
 
 test('connect ignores an error emitted after a successful connection', async () => {
@@ -74,5 +75,5 @@ test('connect ignores an error emitted after a successful connection', async () 
     },
   });
 
-  assert.equal(await client.connect('203.0.113.1', 25565), socket);
+  assert.equal(await client.connect('8.8.8.8', 25565), socket);
 });

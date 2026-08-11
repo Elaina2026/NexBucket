@@ -1,6 +1,9 @@
-const test = require('node:test');
-const assert = require('node:assert/strict');
-const { fitMotdFontSize } = require('./banner-renderer.js');
+import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
+import test from 'node:test';
+
+const require = createRequire(import.meta.url);
+const { fitMotdFontSize } = require('../status/mc-banner/banner-renderer.js');
 
 function fontWithWidthAt40(width) {
   return {

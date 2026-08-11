@@ -11,6 +11,7 @@ import { configSlashCommand } from '../utils/configCommand.js';
 import { statusCommandData } from '../status/statusCommands.js';
 import { botWhitelistCommandData } from '../utils/botWhitelistCommand.js';
 import { data as ticketCommand } from './commands/ticketEdit.js';
+import { networkCommands } from '../network/networkCommands.js';
 export const commands = [
   new SlashCommandBuilder()
     .setName('mcserver')
@@ -39,6 +40,7 @@ export const commands = [
     .toJSON(),
   ...moderationCommands,
   ...utilCommands,
+  ...networkCommands,
   ...giveawayCommands,
   ...welcomeSlashCommands,
   serverStatsCommand,

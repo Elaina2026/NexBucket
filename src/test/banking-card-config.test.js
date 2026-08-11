@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { inspectCardConfig, normalizeCardDomain } from './cardConfig.js';
+import { inspectCardConfig, normalizeCardDomain } from '../banking/cardConfig.js';
 import { encryptToken } from '../utils/securityUtils.js';
 
 process.env.ENCRYPTION_SECRET ||= 'nexbucket-test-only-secret';

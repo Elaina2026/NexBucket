@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { askClaude, getModelsLeaderboard } from './aiManager.js';
+import { askClaude, getModelsLeaderboard } from '../utils/aiManager.js';
 
 function createCache(models = null, expiresAt = 0) {
   return { models, expiresAt, refreshPromise: null };

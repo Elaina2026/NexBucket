@@ -8,7 +8,7 @@ import {
   parseCookies,
   pickKey,
   safeEqualString,
-} from './dashboardUtils.js';
+} from '../dashboard/dashboardUtils.js';
 
 test('keepSecret preserves, clears, and replaces secrets', () => {
   assert.equal(keepSecret('', 'saved'), 'saved');

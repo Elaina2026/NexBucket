@@ -82,6 +82,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   };
   const SECTIONS = [
     { id: 'general', label: 'General', icon: I.gear },
+    { id: 'learn', label: 'Learn', icon: I.chat, adminOnly: true },
     { id: 'welcome', label: 'Welcome', icon: I.chat },
     { id: 'goodbye', label: 'Goodbye', icon: I.door },
     { id: 'ticket', label: 'Tickets', icon: I.ticket },
@@ -143,7 +144,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     sidebarServerInfo.innerHTML = iconSrc ? `<img src="${esc(iconSrc)}" alt=""/>` : '';
     sidebarServerInfo.innerHTML += `<div><div class="ss-name">${esc(guild.name)}</div><div class="ss-id">${guild.id}</div></div>`;
     sidebarNav.innerHTML = '';
-    SECTIONS.forEach((s) => {
+    SECTIONS.filter(s => !s.adminOnly || ['owner', 'administrator'].includes(guild.permissionTier)).forEach((s) => {
       const btn = document.createElement('button');
       btn.className = 'sidebar-item' + (s.id === initialSection ? ' active' : '');
       btn.dataset.section = s.id;
@@ -170,9 +171,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     sidebarNav.querySelectorAll('.sidebar-item').forEach(b => b.classList.toggle('active', b.dataset.section === id));
     contentArea.querySelectorAll('.content-section').forEach(s => s.classList.toggle('active', s.id === 'sec-' + id));
     const actionBar = document.querySelector('.action-bar');
-    if (actionBar) actionBar.style.display = id === 'transcripts' ? 'none' : 'flex';
+    if (actionBar) actionBar.style.display = ['transcripts', 'learn'].includes(id) ? 'none' : 'flex';
     if (updateUrl) pushRoute(currentGuildId, id);
     if (id === 'transcripts') loadTranscripts();
+    if (id === 'learn') loadLearnEntries();
   }
   function makeChannelPicker(id, label, hint, filterTypes = null) {
     const filteredChannels = filterTypes ? guildChannels.filter(c => filterTypes.includes(c.type)) : guildChannels;
@@ -208,7 +210,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       'https://cdn.koya.gg/gallery/l/UBITUg8.png', 'https://cdn.koya.gg/gallery/l/jh0brcw.png', 'https://cdn.koya.gg/gallery/l/6mWYs87.png',
       'https://cdn.koya.gg/gallery/l/y06fE4T.png', 'https://cdn.koya.gg/gallery/l/vbOPkZ4.png', 'https://cdn.koya.gg/gallery/l/W26rNNb.png'
     ];
-    const thumbs = urls.map(u => `<img class="banner-thumb" src="/api/proxy-image?url=${encodeURIComponent(u)}" title="Click to use" data-banner-target="${id}" data-banner-mode="${mode}" data-banner-url="${u}" />`).join('');
+    const thumbs = urls.map((u, index) => `<button type="button" class="banner-thumb-button" aria-label="Use suggested background ${index + 1}" data-banner-target="${id}" data-banner-mode="${mode}" data-banner-url="${u}"><img class="banner-thumb" src="/api/proxy-image?url=${encodeURIComponent(u)}" alt="Suggested background ${index + 1}" loading="lazy"/></button>`).join('');
     return `<div class="form-group">
       <label class="field-label">${label}</label>
       <div class="discord-preview" data-discord-preview="${mode}">
@@ -224,7 +226,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       </div>
       <input type="text" id="${id}" class="text-input" placeholder="https://..." data-banner-input="${id}" data-banner-mode="${mode}"/>
       <details class="banner-gallery-details">
-        <summary>Choose from gallery (Suggested backgrounds)</summary>
+        <summary><span class="banner-gallery-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg></span><span class="banner-gallery-copy"><strong>Choose from gallery</strong><small>Suggested backgrounds</small></span>${I.chevron}</summary>
         <div class="banner-gallery-grid">
           ${thumbs}
         </div>
@@ -304,7 +306,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
   document.getElementById('configForm')?.addEventListener('click', (e) => {
-    const thumb = e.target.closest('.banner-thumb[data-banner-url]');
+    const thumb = e.target.closest('.banner-thumb-button[data-banner-url]');
     if (thumb) {
       const input = document.getElementById(thumb.dataset.bannerTarget);
       if (input) input.value = thumb.dataset.bannerUrl;
@@ -318,6 +320,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     const form = document.getElementById('configForm');
     form.innerHTML = '';
     form.innerHTML += `<div class="content-section active" id="sec-general"><div class="section-card"><div class="section-card-title">${I.gear} General Configuration</div>${makeRolePicker('autoRoleId', 'Auto-Role', 'Automatically assigned to new members.')}</div></div>`;
+    if (['owner', 'administrator'].includes(currentGuild?.permissionTier)) {
+      form.innerHTML += `<div class="content-section" id="sec-learn"><div class="section-card">
+        <div class="learn-heading"><div><div class="section-card-title">${I.chat} Learn / Auto Responder</div><span class="field-hint">Create text, image, or combined replies. Administrator permission required.</span></div><button type="button" id="btnAddLearn" class="btn-add-type">${I.plus} Add response</button></div>
+        <input id="learnSearch" class="text-input learn-search" type="search" placeholder="Search triggers or responses..." aria-label="Search learned responses"/>
+        <div id="learnList" class="learn-list"><div class="empty-state">Open this section to load responses.</div></div>
+      </div></div>`;
+    }
     form.innerHTML += `<div class="content-section" id="sec-welcome"><div class="section-card"><div class="section-card-title">${I.chat} Welcome Messages</div>
       ${makeChannelPicker('welcomeChannel', 'Welcome Channel', 'Channel where welcome messages are sent.', [0, 5])}
       ${makeTextarea('welcomeMessageContent', 'Welcome Message Text', 'Welcome {user} to **{server}**!', 'Use {user} for mention, {server} for server name. Sent as text above the banner.', 2)}
@@ -432,6 +441,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     initColorPickers();
     initTicketTypeManager();
     initStatusServerManager();
+    initLearnManager();
   }
   function initAllPickers() {
     document.querySelectorAll('.picker-wrap').forEach(wrap => {
@@ -536,6 +546,210 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
   let ticketTypes = [];
   let statusServers = [];
+  let learnEntries = Object.create(null);
+  let learnQuery = '';
+  function initLearnManager() {
+    document.getElementById('btnAddLearn')?.addEventListener('click', () => showLearnModal());
+    document.getElementById('learnSearch')?.addEventListener('input', event => {
+      learnQuery = event.target.value.trim().toLowerCase();
+      renderLearnEntries();
+    });
+  }
+  async function learnRequest(url, options = {}) {
+    const response = await fetch(url, options);
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const error = new Error(result.error || `Request failed (${response.status})`);
+      error.status = response.status;
+      throw error;
+    }
+    return result;
+  }
+  async function loadLearnEntries() {
+    const list = document.getElementById('learnList');
+    if (!list || !currentGuildId) return;
+    list.innerHTML = '<div class="empty-state">Loading learned responses...</div>';
+    try {
+      const result = await learnRequest(`/api/guilds/${currentGuildId}/learn`);
+      learnEntries = result.entries && typeof result.entries === 'object' ? result.entries : Object.create(null);
+      renderLearnEntries();
+    } catch (error) {
+      list.innerHTML = `<div class="empty-state">${esc(error.message)}</div>`;
+    }
+  }
+  function learnActor(entry) {
+    const name = entry.updatedByName || entry.updatedBy || entry.createdByName || entry.createdBy || 'Unknown';
+    const timestamp = entry.updatedAt || entry.createdAt;
+    if (!timestamp) return esc(name);
+    const date = new Date(timestamp);
+    return `${esc(name)} · ${Number.isNaN(date.getTime()) ? '' : esc(date.toLocaleString())}`;
+  }
+  function renderLearnEntries() {
+    const list = document.getElementById('learnList');
+    if (!list) return;
+    const entries = Object.entries(learnEntries).filter(([trigger, entry]) =>
+      `${trigger} ${entry?.response || ''}`.toLowerCase().includes(learnQuery)
+    );
+    if (!entries.length) {
+      list.innerHTML = `<div class="empty-state">${learnQuery ? 'No learned responses match this search.' : 'No learned responses yet.'}</div>`;
+      return;
+    }
+    list.innerHTML = '';
+    for (const [trigger, entry] of entries) {
+      const item = document.createElement('div');
+      item.className = `learn-item${entry.enabled === false ? ' disabled' : ''}`;
+      item.innerHTML = `<div class="learn-item-main">
+        <div class="learn-trigger">${esc(trigger)}</div>
+        <div class="learn-response">${entry.response ? esc(entry.response) : '<em>Image-only response</em>'}</div>
+        <div class="learn-meta">${entry.imageUrl ? 'Image attached · ' : ''}Updated by ${learnActor(entry)}</div>
+      </div>
+      ${entry.imageUrl ? `<img class="learn-thumb" src="${esc(entry.imageUrl)}" alt="Preview for ${esc(trigger)}"/>` : ''}
+      <div class="learn-actions">
+        <label class="toggle-switch" title="Enable response"><input type="checkbox" data-learn-toggle="${esc(trigger)}" ${entry.enabled === false ? '' : 'checked'}/><span class="toggle-slider"></span></label>
+        <button type="button" class="tt-edit" data-learn-edit="${esc(trigger)}" title="Edit response">${I.edit}</button>
+        <button type="button" class="tt-remove" data-learn-delete="${esc(trigger)}" title="Delete response">${I.x}</button>
+      </div>`;
+      item.querySelector('[data-learn-edit]')?.addEventListener('click', () => showLearnModal(trigger));
+      item.querySelector('[data-learn-delete]')?.addEventListener('click', () => confirmDeleteLearn(trigger));
+      item.querySelector('[data-learn-toggle]')?.addEventListener('change', async event => {
+        event.target.disabled = true;
+        try {
+          const result = await learnRequest(`/api/guilds/${currentGuildId}/learn`, {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ originalTrigger: trigger, trigger, ...entry, enabled: event.target.checked }),
+          });
+          learnEntries[trigger] = result.entry;
+          renderLearnEntries();
+        } catch (error) {
+          event.target.checked = !event.target.checked;
+          event.target.disabled = false;
+          showStatus(error.message, 'error');
+        }
+      });
+      list.appendChild(item);
+    }
+  }
+  async function cleanupUploadedLearnImage(imagePath) {
+    if (!imagePath) return;
+    await fetch(`/api/guilds/${currentGuildId}/learn/image`, {
+      method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ imagePath }),
+    }).catch(() => {});
+  }
+  function showLearnModal(originalTrigger = null) {
+    const current = originalTrigger ? learnEntries[originalTrigger] : null;
+    let overlay = document.getElementById('modalOverlay');
+    if (!overlay) { overlay = document.createElement('div'); overlay.id = 'modalOverlay'; overlay.className = 'modal-overlay'; document.body.appendChild(overlay); }
+    overlay.innerHTML = `<div class="modal learn-modal"><h3>${current ? 'Edit' : 'Add'} Learned Response</h3>
+      ${makeInput('learnTriggerInput', 'Trigger', 'hello', 'Matched anywhere in a message.', 'text', esc(originalTrigger || ''))}
+      <div id="learnDuplicateWarning" class="learn-warning" hidden>This trigger already exists.</div>
+      ${makeTextarea('learnResponseInput', 'Response Text', 'Optional when an image is selected', 'Maximum 2,000 characters.', 4)}
+      <div class="form-group"><label class="field-label">Response Image</label><input id="learnImageInput" class="learn-image-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif"/><label class="learn-image-upload" for="learnImageInput"><span class="learn-image-upload-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg></span><span class="learn-image-upload-copy"><strong>Choose an image</strong><small>PNG, JPEG, WebP, or GIF · Up to 5 MB</small><span id="learnImageFileName" class="learn-image-file-name">No image selected</span></span><span class="learn-image-upload-action">Browse</span></label></div>
+      <label class="learn-remove-image" ${current?.imageUrl ? '' : 'hidden'}><input id="learnRemoveImage" type="checkbox"/> Remove current image</label>
+      <div class="discord-preview learn-preview"><img class="discord-preview-avatar" src="/api/bot-avatar" alt="NexBucket"/><div class="discord-preview-body"><div class="discord-preview-author">NexBucket <span>APP</span></div><div id="learnPreviewText" class="discord-preview-message"></div><img id="learnPreviewImage" class="learn-preview-image" alt="Response image preview"/></div></div>
+      <div id="learnModalError" class="learn-warning" hidden></div>
+      <div class="modal-actions"><button type="button" class="btn-modal" id="btnCancelLearn">Cancel</button><button type="button" class="btn-modal primary" id="btnSaveLearn">Save</button></div></div>`;
+    overlay.classList.add('show');
+    const triggerInput = overlay.querySelector('#learnTriggerInput');
+    const responseInput = overlay.querySelector('#learnResponseInput');
+    const imageInput = overlay.querySelector('#learnImageInput');
+    const imageFileName = overlay.querySelector('#learnImageFileName');
+    const removeImage = overlay.querySelector('#learnRemoveImage');
+    const duplicateWarning = overlay.querySelector('#learnDuplicateWarning');
+    const previewText = overlay.querySelector('#learnPreviewText');
+    const previewImage = overlay.querySelector('#learnPreviewImage');
+    const errorBox = overlay.querySelector('#learnModalError');
+    const saveButton = overlay.querySelector('#btnSaveLearn');
+    responseInput.value = current?.response || '';
+    let previewUrl = '';
+    const clearPreviewUrl = () => { if (previewUrl) URL.revokeObjectURL(previewUrl); previewUrl = ''; };
+    const normalizedTrigger = value => value.trim().toLowerCase();
+    const renderPreview = () => {
+      previewText.textContent = responseInput.value.trim() || (imageInput.files[0] || (current?.imageUrl && !removeImage.checked) ? '' : 'Response preview');
+      const source = previewUrl || (current?.imageUrl && !removeImage.checked ? current.imageUrl : '');
+      previewImage.src = source;
+      previewImage.hidden = !source;
+    };
+    const checkDuplicate = () => {
+      const trigger = normalizedTrigger(triggerInput.value);
+      const duplicate = Boolean(learnEntries[trigger] && trigger !== originalTrigger);
+      duplicateWarning.hidden = !duplicate;
+      saveButton.disabled = duplicate;
+    };
+    triggerInput.addEventListener('input', checkDuplicate);
+    responseInput.addEventListener('input', renderPreview);
+    removeImage.addEventListener('change', renderPreview);
+    imageInput.addEventListener('change', () => {
+      clearPreviewUrl();
+      const file = imageInput.files[0];
+      imageFileName.textContent = file?.name || 'No image selected';
+      imageFileName.classList.toggle('selected', Boolean(file));
+      if (file) {
+        previewUrl = URL.createObjectURL(file);
+        removeImage.checked = false;
+      }
+      renderPreview();
+    });
+    const close = () => { clearPreviewUrl(); overlay.classList.remove('show'); };
+    overlay.querySelector('#btnCancelLearn').addEventListener('click', close);
+    overlay.addEventListener('click', event => { if (event.target === overlay) close(); });
+    saveButton.addEventListener('click', async () => {
+      errorBox.hidden = true;
+      saveButton.disabled = true;
+      let uploadedPath = '';
+      try {
+        const file = imageInput.files[0];
+        let imagePath = removeImage.checked ? '' : (current?.imagePath || '');
+        if (file) {
+          if (file.size > 5 * 1024 * 1024) throw new Error('Image must be 5 MB or smaller');
+          const uploaded = await learnRequest(`/api/guilds/${currentGuildId}/learn/image`, {
+            method: 'POST', headers: { 'Content-Type': file.type }, body: file,
+          });
+          imagePath = uploaded.imagePath;
+          uploadedPath = imagePath;
+        }
+        const payload = {
+          originalTrigger, trigger: triggerInput.value, response: responseInput.value,
+          imagePath, enabled: current?.enabled !== false,
+        };
+        const result = await learnRequest(`/api/guilds/${currentGuildId}/learn`, {
+          method: current ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+        });
+        if (originalTrigger && originalTrigger !== result.trigger) delete learnEntries[originalTrigger];
+        learnEntries[result.trigger] = result.entry;
+        uploadedPath = '';
+        close();
+        renderLearnEntries();
+      } catch (error) {
+        await cleanupUploadedLearnImage(uploadedPath);
+        errorBox.textContent = error.message;
+        errorBox.hidden = false;
+        saveButton.disabled = false;
+      }
+    });
+    checkDuplicate();
+    renderPreview();
+  }
+  function confirmDeleteLearn(trigger) {
+    let overlay = document.getElementById('modalOverlay');
+    if (!overlay) { overlay = document.createElement('div'); overlay.id = 'modalOverlay'; overlay.className = 'modal-overlay'; document.body.appendChild(overlay); }
+    overlay.innerHTML = `<div class="modal"><h3>Delete Learned Response</h3><p>Delete trigger <strong>${esc(trigger)}</strong>? This also removes its uploaded image.</p><div class="modal-actions"><button type="button" class="btn-modal" id="btnCancelLearnDelete">Cancel</button><button type="button" class="btn-modal danger" id="btnConfirmLearnDelete">Delete</button></div></div>`;
+    overlay.classList.add('show');
+    overlay.querySelector('#btnCancelLearnDelete').addEventListener('click', () => overlay.classList.remove('show'));
+    overlay.querySelector('#btnConfirmLearnDelete').addEventListener('click', async event => {
+      event.target.disabled = true;
+      try {
+        await learnRequest(`/api/guilds/${currentGuildId}/learn`, {
+          method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ trigger }),
+        });
+        delete learnEntries[trigger];
+        overlay.classList.remove('show');
+        renderLearnEntries();
+      } catch (error) {
+        event.target.disabled = false;
+        showStatus(error.message, 'error');
+      }
+    });
+  }
   function initTicketTypeManager() {
     document.getElementById('btnAddTicketType')?.addEventListener('click', () => showAddTicketTypeModal());
     renderTicketTypes();

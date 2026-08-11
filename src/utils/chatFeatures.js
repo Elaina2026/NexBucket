@@ -32,6 +32,55 @@ export async function setAfk(guildId, userId, reason, timestamp) {
   await supabase.from('afk_data').upsert({ guild_id: guildId, user_id: userId, reason, timestamp });
 }
 let arCache = null;
+
+export function normalizeLearnTrigger(value) {
+  const trigger = String(value ?? '').trim().toLowerCase();
+  if (!trigger || trigger.length > 100) throw new RangeError('Auto Responder triggers must be 1-100 characters');
+  return trigger;
+}
+
+function optionalText(value, maximum, field) {
+  const text = typeof value === 'string' ? value.trim() : '';
+  if (text.length > maximum) throw new RangeError(`${field} is too long`);
+  return text;
+}
+
+function optionalTimestamp(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+export function normalizeArEntry(value) {
+  const source = typeof value === 'string' ? { response: value } : value;
+  if (!source || typeof source !== 'object' || Array.isArray(source)) {
+    throw new TypeError('Auto Responder entries must be text or objects');
+  }
+
+  const response = optionalText(source.response, 2000, 'Auto Responder response');
+  const imageUrl = optionalText(source.imageUrl, 2048, 'Auto Responder image URL');
+  const imagePath = optionalText(source.imagePath, 500, 'Auto Responder image path');
+  if (!response && !imageUrl) throw new RangeError('Auto Responder entries require text or an image');
+  if (imageUrl) {
+    let parsed;
+    try { parsed = new URL(imageUrl); } catch { throw new TypeError('Auto Responder image URL is invalid'); }
+    if (parsed.protocol !== 'https:') throw new TypeError('Auto Responder image URL must use HTTPS');
+  }
+
+  return {
+    response,
+    imageUrl,
+    imagePath,
+    enabled: source.enabled !== false,
+    createdAt: optionalTimestamp(source.createdAt),
+    updatedAt: optionalTimestamp(source.updatedAt),
+    createdBy: optionalText(source.createdBy, 20, 'Creator ID'),
+    createdByName: optionalText(source.createdByName, 100, 'Creator name'),
+    updatedBy: optionalText(source.updatedBy, 20, 'Updater ID'),
+    updatedByName: optionalText(source.updatedByName, 100, 'Updater name'),
+  };
+}
+
 export function normalizeArTriggers(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new TypeError('Auto Responder config must be an object');
@@ -40,15 +89,22 @@ export function normalizeArTriggers(value) {
   if (entries.length > 100) throw new RangeError('Too many Auto Responder triggers');
 
   const normalized = Object.create(null);
-  for (const [rawTrigger, rawResponse] of entries) {
-    const trigger = String(rawTrigger).trim().toLowerCase();
-    const response = typeof rawResponse === 'string' ? rawResponse.trim() : '';
-    if (!trigger || trigger.length > 100 || !response || response.length > 2000) {
-      throw new RangeError('Auto Responder triggers must be 1-100 characters and responses 1-2000 characters');
-    }
-    normalized[trigger] = response;
+  for (const [rawTrigger, rawEntry] of entries) {
+    normalized[normalizeLearnTrigger(rawTrigger)] = normalizeArEntry(rawEntry);
   }
   return normalized;
+}
+
+export function createLearnReply(entry) {
+  const normalized = normalizeArEntry(entry);
+  if (!normalized.enabled) return null;
+  const reply = {};
+  if (normalized.response) reply.content = normalized.response;
+  if (normalized.imageUrl) {
+    const extension = new URL(normalized.imageUrl).pathname.match(/\.(png|jpe?g|webp|gif)$/i)?.[1]?.toLowerCase();
+    reply.files = [{ attachment: normalized.imageUrl, name: `learn-image${extension ? `.${extension}` : ''}` }];
+  }
+  return reply;
 }
 export async function getArData() {
   if (!supabase) return {};
@@ -101,9 +157,10 @@ export async function handleChatFeatures(message) {
   const arData = await getArData();
   if (arData[guildId]) {
     const content = message.content.toLowerCase();
-    for (const [trigger, response] of Object.entries(arData[guildId])) {
+    for (const [trigger, entry] of Object.entries(arData[guildId])) {
       if (content.includes(trigger)) {
-        await message.reply(response).catch(()=>{});
+        const reply = createLearnReply(entry);
+        if (reply) await message.reply(reply).catch(()=>{});
         break;
       }
     }
@@ -185,8 +242,8 @@ export async function handleAfkCommand(message) {
   await message.reply(`💤 You are now AFK: **${reason}**`);
 }
 export async function handleArCommand(message) {
-  if (!message.member.permissions.has(PermissionFlagsBits.ManageMessages)) {
-    return message.reply('You do not have permission to manage Auto Responder.');
+  if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
+    return message.reply('Administrator permission is required to manage Auto Responder.');
   }
   const argsFull = message.content.split(' ');
   const cmd = argsFull[0].toLowerCase();
@@ -204,24 +261,41 @@ export async function handleArCommand(message) {
   if (action === 'add') {
     const match = message.content.match(/"([^"]+)"\s+"([^"]+)"/);
     if (!match) return message.reply('❌ Invalid format! Use: `!ar add "trigger word" "response"` or `!learn "trigger word" "response"`');
-    const trigger = match[1].trim().toLowerCase();
-    const response = match[2].trim();
     try {
-      const normalized = normalizeArTriggers({ ...guildAr, [trigger]: response });
-      await saveArData(guildId, normalized);
+      const trigger = normalizeLearnTrigger(match[1]);
+      const response = match[2].trim();
+      const current = guildAr[trigger] ? normalizeArEntry(guildAr[trigger]) : null;
+      const now = new Date().toISOString();
+      const actorId = message.author.id;
+      const actorName = String(message.author.username || message.author.tag || actorId).slice(0, 100);
+      const entry = {
+        ...current,
+        response,
+        enabled: current?.enabled !== false,
+        createdAt: current?.createdAt || now,
+        createdBy: current?.createdBy || actorId,
+        createdByName: current?.createdByName || actorName,
+        updatedAt: now,
+        updatedBy: actorId,
+        updatedByName: actorName,
+      };
+      await saveArData(guildId, { ...guildAr, [trigger]: entry });
+      return message.reply(`✅ Saved Auto Responder: \`${trigger}\` -> \`${response}\``);
     } catch (error) {
       return message.reply(`❌ ${error.message}`);
     }
-    return message.reply(`✅ Added Auto Responder: \`${trigger}\` -> \`${response}\``);
   }
   if (action === 'remove' || action === 'delete') {
-    const trigger = (cmd === '!unlearn' ? argsFull.slice(1) : argsFull.slice(2)).join(' ').toLowerCase();
-    if (!trigger) return message.reply('Please enter a trigger keyword to delete. (Ex: !unlearn hello)');
-    if (!guildAr[trigger]) {
-      return message.reply('Keyword not found.');
+    try {
+      const rawTrigger = (cmd === '!unlearn' ? argsFull.slice(1) : argsFull.slice(2)).join(' ').replace(/^"|"$/g, '');
+      const trigger = normalizeLearnTrigger(rawTrigger);
+      if (!guildAr[trigger]) return message.reply('Keyword not found.');
+      const next = { ...guildAr };
+      delete next[trigger];
+      await saveArData(guildId, next);
+      return message.reply(`✅ Removed Auto Responder: \`${trigger}\``);
+    } catch (error) {
+      return message.reply(`❌ ${error.message}`);
     }
-    delete guildAr[trigger];
-    await saveArData(guildId, guildAr);
-    return message.reply(`✅ Removed Auto Responder: \`${trigger}\``);
   }
 }

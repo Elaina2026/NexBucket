@@ -9,7 +9,7 @@ import {
   parseMinecraftAddress,
   parseTrackedMinecraftAddress,
   renderMinecraftBanner,
-} from './minecraftBanner.js';
+} from '../status/minecraftBanner.js';
 
 const require = createRequire(import.meta.url);
 const { loadImage } = require('@napi-rs/canvas');
