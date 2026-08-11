@@ -101,8 +101,8 @@ export function parseMinecraftAddress(ip, port = null) {
   return parseHostPort(ip, port);
 }
 
-export function getMinecraftBannerTitle(server) {
-  return server.name || 'A Minecraft Server';
+export function getMinecraftBannerTitle() {
+  return 'A Minecraft Server';
 }
 
 export function parseTrackedMinecraftAddress(ip, port = null, recoverTelemetry = false) {

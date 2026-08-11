@@ -81,9 +81,9 @@ test('tracked Minecraft address recovers only known legacy telemetry rows', () =
   );
 });
 
-test('Minecraft banner hides the server address behind a generic title', () => {
+test('Minecraft banner always hides the server address behind a generic title', () => {
   assert.equal(getMinecraftBannerTitle({ ip: 'private.example.com' }), 'A Minecraft Server');
-  assert.equal(getMinecraftBannerTitle({ name: 'Public Network' }), 'Public Network');
+  assert.equal(getMinecraftBannerTitle({ name: 'private.example.com:25565' }), 'A Minecraft Server');
 });
 
 test('Minecraft banner fallback is a PNG', async () => {

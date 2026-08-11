@@ -303,7 +303,7 @@ export async function handleMcServer(interaction) {
     try {
         let banner;
         try {
-            banner = await renderMinecraftBanner({ ip, port, name: target });
+            banner = await renderMinecraftBanner({ ip, port });
         } catch (error) {
             console.error(`[Status] Banner failed for ${target}; using fallback image:`, error.message || error);
             const fallbackStatus = error.status || { online: false, error: error.message || 'Banner renderer failed' };

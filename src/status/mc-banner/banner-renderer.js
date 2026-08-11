@@ -2,6 +2,15 @@ const { createCanvas, loadImage } = require("@napi-rs/canvas");
 const { join } = require("node:path");
 const BannerImages = require("./banner-images");
 
+const MOTD_FONT_SIZE = 40;
+const MIN_MOTD_FONT_SIZE = 24;
+
+function fitMotdFontSize(font, segments, availableWidth) {
+  const width = font.measure(segments, MOTD_FONT_SIZE / 8);
+  if (width <= availableWidth || width <= 0) return MOTD_FONT_SIZE;
+  return Math.max(MIN_MOTD_FONT_SIZE, Math.floor(MOTD_FONT_SIZE * availableWidth / width));
+}
+
 class BannerRenderer {
   constructor(font, assetRoot) {
     this.font = font;
@@ -46,19 +55,25 @@ class BannerRenderer {
 
     const textX = iconX + iconSize + 28;
     ctx.save();
-    ctx.globalAlpha = 0.82;
     ctx.filter = "blur(0.4px)";
-    this.font.draw(ctx, [{ text: options.title, color: "#eeeeee" }], textX, 18, 38);
+    this.font.draw(ctx, [{ text: options.title, color: "#ffffff" }], textX, 18, 38);
     ctx.restore();
+    const motdWidth = options.width - padding - textX;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(textX, 72, motdWidth, renderHeight - 72);
+    ctx.clip();
     for (let index = 0; index < options.motd.length; index++) {
+      const fontSize = fitMotdFontSize(this.font, options.motd[index], motdWidth);
       this.font.draw(
         ctx,
         options.motd[index],
         textX,
         78 + index * 54,
-        40,
+        fontSize,
       );
     }
+    ctx.restore();
 
     const pingWidth = 64;
     const pingHeight = 50;
@@ -97,3 +112,4 @@ class BannerRenderer {
 }
 
 module.exports = BannerRenderer;
+module.exports.fitMotdFontSize = fitMotdFontSize;
