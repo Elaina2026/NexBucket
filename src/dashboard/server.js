@@ -589,6 +589,9 @@ export function startDashboard(client) {
             const cardConfig = await getCardConfig(guildId);
             const statsConfig = await getStatsConfigForGuild(guildId);
             const modConfig = await getModConfig(guildId);
+            const { getArData } = await import('../utils/chatFeatures.js');
+            const arData = await getArData();
+            const autoresponderConfig = arData[guildId] || {};
             const settings = await getAllSections(guildId, true);
             const minecraftServers = [];
             for (const server of Array.isArray(settings.minecraft?.servers) ? settings.minecraft.servers : []) {
@@ -652,6 +655,7 @@ export function startDashboard(client) {
                 },
                 configVersion,
                 serverBanner,
+                autoresponderConfig,
             });
         } catch (err) {
             if (isDatabaseUnavailable(err)) return sendDatabaseUnavailable(res, err);
@@ -684,6 +688,19 @@ export function startDashboard(client) {
             const cardConfig = asObject(pickKey(cleanBody, 'cardConfig', 'card_config'));
             const statsConfig = asObject(pickKey(cleanBody, 'statsConfig', 'stats_config'));
             const statusConfig = asObject(pickKey(cleanBody, 'statusConfig', 'status_config'));
+            const autoresponderConfig = pickKey(cleanBody, 'autoresponderConfig', 'autoresponder_config');
+            let normalizedAutoresponderConfig;
+            if (autoresponderConfig !== undefined) {
+                try {
+                    const { normalizeArTriggers } = await import('../utils/chatFeatures.js');
+                    normalizedAutoresponderConfig = normalizeArTriggers(autoresponderConfig);
+                } catch (error) {
+                    if (error instanceof TypeError || error instanceof RangeError) {
+                        return res.status(400).json({ error: error.message });
+                    }
+                    throw error;
+                }
+            }
             const existingSettings = await getAllSections(guildId, true);
             const existingBank = await getBankConfig(guildId);
             const preserveSecret = (incoming, encrypted) => {
@@ -775,6 +792,10 @@ export function startDashboard(client) {
                     return res.status(409).json({ error: 'Settings changed from Discord or database. Reload before saving.' });
                 }
                 throw saveError;
+            }
+            if (normalizedAutoresponderConfig !== undefined) {
+                const { saveArData } = await import('../utils/chatFeatures.js');
+                await saveArData(guildId, normalizedAutoresponderConfig);
             }
             setJtcSettingsCache(guildId, payload.jtc);
             for (const server of normalizedServers) {
@@ -941,6 +962,15 @@ export function startDashboard(client) {
     app.get('/api/bot-avatar', (req, res) => {
         if (!client.user) return res.status(404).send('Bot not ready');
         res.redirect(client.user.displayAvatarURL({ size: 128, extension: 'png' }));
+    });
+    app.get('/api/ai/models', async (req, res) => {
+        try {
+            const { getModelsLeaderboard } = await import('../utils/aiManager.js');
+            const models = await getModelsLeaderboard();
+            res.json({ success: true, models, updated_at: new Date().toISOString() });
+        } catch (err) {
+            sendInternalError(res, err, 'Failed to fetch AI models leaderboard');
+        }
     });
     app.get('/api/health', async (req, res) => {
         try {

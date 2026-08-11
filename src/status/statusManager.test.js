@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeServerList, normalizeTrackedServer } from './statusManager.js';
+import { getGeoInfo, normalizeServerList, normalizeTrackedServer } from './statusManager.js';
 
 const guildId = '12345678901234567';
 
@@ -51,4 +51,40 @@ test('one invalid tracked row does not remove valid rows', () => {
   } finally {
     console.error = originalError;
   }
+});
+
+
+test('geolocation skips external lookup for private IPv4 and IPv6 addresses', async () => {
+  const failFetch = async () => assert.fail('fetch should not be called');
+  assert.deepEqual(await getGeoInfo('127.0.0.1', failFetch), {
+    location: '🏠 Local Network',
+    isp: 'N/A',
+  });
+  assert.deepEqual(await getGeoInfo('::1', failFetch), {
+    location: '🏠 Local Network',
+    isp: 'N/A',
+  });
+});
+
+test('geolocation returns provider data for the resolved public address', async () => {
+  let requestedUrl;
+  const result = await getGeoInfo('8.8.4.4', async url => {
+    requestedUrl = url;
+    return {
+      ok: true,
+      json: async () => ({
+        status: 'success',
+        countryCode: 'VN',
+        city: 'Ho Chi Minh City',
+        country: 'Vietnam',
+        isp: 'Example ISP',
+      }),
+    };
+  });
+
+  assert.match(requestedUrl, /\/8\.8\.4\.4\?/);
+  assert.deepEqual(result, {
+    location: '🇻🇳 Ho Chi Minh City, Vietnam',
+    isp: 'Example ISP',
+  });
 });

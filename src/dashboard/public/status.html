@@ -59,6 +59,10 @@
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
         Services
       </button>
+      <button class="tab-btn" data-tab="tab-ai-models">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm1 15h-2v-6h2zm0-8h-2V7h2z"/></svg>
+        AI Leaderboard
+      </button>
     </div>
 
     <div id="tab-status" class="tab-content active">
@@ -66,6 +70,27 @@
         <h2 class="section-heading">CORE SERVICES</h2>
         <div class="services-list" id="servicesList">
           <div class="empty-state">Loading services...</div>
+        </div>
+      </section>
+    </div>
+
+    <div id="tab-ai-models" class="tab-content" style="display:none;">
+      <section class="section">
+        <h2 class="section-heading">OPENROUTER AI MODELS CATALOGUE</h2>
+        <div class="ai-model-controls">
+          <input class="text-input" id="aiModelSearch" type="search" placeholder="Search model, ID, or provider" aria-label="Search AI models">
+          <select class="select-input" id="aiProviderFilter" aria-label="Filter by AI provider">
+            <option value="">All providers</option>
+          </select>
+        </div>
+        <div class="ai-model-summary" id="aiModelsSummary" aria-live="polite"></div>
+        <div class="services-list" id="aiModelsList">
+          <div class="empty-state">Loading AI models...</div>
+        </div>
+        <div class="ai-model-pagination" id="aiModelsPagination" hidden>
+          <button class="nav-btn" id="aiModelsPrev" type="button">Previous</button>
+          <span id="aiModelsPage" aria-live="polite"></span>
+          <button class="nav-btn" id="aiModelsNext" type="button">Next</button>
         </div>
       </section>
     </div>

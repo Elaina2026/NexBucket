@@ -25,6 +25,7 @@ import { handleAntiSpam } from './src/moderation/antiSpam.js';
 import { setupAntiRaid } from './src/moderation/antiRaid.js';
 import { handleAutoMod } from './src/moderation/autoMod.js';
 import { handleUtilCommand, handleLockCommand, checkReminders, handleBotGuideSelect } from './src/utils/utilsManager.js';
+import { utilCommandNames } from './src/utils/commands.js';
 import { handleChatFeatures, handleAfkCommand, handleArCommand } from './src/utils/chatFeatures.js';
 import { handleSetupJTC, handleVoiceStateUpdate, sweepOrphanedChannels } from './src/utils/jtcManager.js';
 import { handleJtcSelectMenu, handleJtcModalSubmit, handleJtcUserSelect, handleJtcButton } from './src/utils/jtcInteractions.js';
@@ -147,16 +148,16 @@ client.on('interactionCreate', async (interaction) => {
         await handleModerationCommand(interaction);
         return;
       }
-      if (['blacklist', 'setup-roles', 'botguide', 'avatar', 'autorole', 'help', 'serverinfo', 'userinfo', 'remind', 'poll', 'announce', 'botinfo', 'ping', 'uptime', 'invite', 'lock', 'unlock'].includes(commandName)) {
+      if (commandName === 'setup-jtc') {
+        await handleSetupJTC(interaction);
+        return;
+      }
+      if (utilCommandNames.has(commandName)) {
         await handleUtilCommand(interaction);
         return;
       }
       if (commandName === 'giveaway') {
         await handleGiveawayCommand(interaction);
-        return;
-      }
-      if (commandName === 'setup-jtc') {
-        await handleSetupJTC(interaction);
         return;
       }
       if (commandName === 'qrbank') {

@@ -222,7 +222,13 @@ class MinecraftStatusClient {
 
     for (const address of addresses) {
       try {
-        return await this.queryAddress(host, address, target.port);
+        const status = await this.queryAddress(host, address, target.port);
+        return {
+          ...status,
+          resolvedAddress: address,
+          resolvedHost: target.host,
+          resolvedPort: target.port,
+        };
       } catch (error) {
         lastError = error;
       }

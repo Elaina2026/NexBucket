@@ -25,12 +25,15 @@ test('uses Minecraft SRV target while preserving the requested handshake host', 
     return { online: true };
   };
 
-  await client.query('play.example.com', 25565);
+  const result = await client.query('play.example.com', 25565);
   assert.deepEqual(received, {
     handshakeHost: 'play.example.com',
     address: '203.0.113.10',
     port: 25570,
   });
+  assert.equal(result.resolvedAddress, '203.0.113.10');
+  assert.equal(result.resolvedHost, 'backend.example.net');
+  assert.equal(result.resolvedPort, 25570);
 });
 
 test('tries every public DNS address until one responds', async () => {
@@ -55,6 +58,7 @@ test('tries every public DNS address until one responds', async () => {
 
   const result = await client.query('play.example.com', 25565);
   assert.equal(result.online, true);
+  assert.equal(result.resolvedAddress, '203.0.113.2');
   assert.deepEqual(attempted, ['203.0.113.1', '203.0.113.2']);
 });
 

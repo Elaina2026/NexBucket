@@ -32,6 +32,24 @@ export async function setAfk(guildId, userId, reason, timestamp) {
   await supabase.from('afk_data').upsert({ guild_id: guildId, user_id: userId, reason, timestamp });
 }
 let arCache = null;
+export function normalizeArTriggers(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError('Auto Responder config must be an object');
+  }
+  const entries = Object.entries(value);
+  if (entries.length > 100) throw new RangeError('Too many Auto Responder triggers');
+
+  const normalized = Object.create(null);
+  for (const [rawTrigger, rawResponse] of entries) {
+    const trigger = String(rawTrigger).trim().toLowerCase();
+    const response = typeof rawResponse === 'string' ? rawResponse.trim() : '';
+    if (!trigger || trigger.length > 100 || !response || response.length > 2000) {
+      throw new RangeError('Auto Responder triggers must be 1-100 characters and responses 1-2000 characters');
+    }
+    normalized[trigger] = response;
+  }
+  return normalized;
+}
 export async function getArData() {
   if (!supabase) return {};
   if (arCache) return arCache;
@@ -40,7 +58,11 @@ export async function getArData() {
     const ar = {};
     if (data) {
       data.forEach(row => {
-        ar[row.guild_id] = row.triggers_json || {};
+        try {
+          ar[row.guild_id] = normalizeArTriggers(row.triggers_json || {});
+        } catch {
+          ar[row.guild_id] = Object.create(null);
+        }
       });
     }
     arCache = ar;
@@ -48,15 +70,19 @@ export async function getArData() {
   } catch { return {}; }
 }
 export async function saveArData(guildId, triggers) {
+  const normalized = normalizeArTriggers(triggers);
   if (!supabase) return;
   if (!arCache) arCache = {};
-  arCache[guildId] = triggers;
-  await supabase.from('autoresponder_data').upsert({ guild_id: guildId, triggers_json: triggers });
+  arCache[guildId] = normalized;
+  await supabase.from('autoresponder_data').upsert({ guild_id: guildId, triggers_json: normalized });
 }
 import { getBankConfig, generateVietQRUrl, createPaymentLink, getPayOS } from '../banking/bankManager.js';
 import { EmbedBuilder } from 'discord.js';
+
 export async function handleChatFeatures(message) {
-  const guildId = message.guild.id;
+  if (message.author.bot) return;
+  const guildId = message.guild?.id;
+  if (!guildId) return;
   const userId = message.author.id;
   const afkData = await getAfkData();
   if (afkData[guildId] && afkData[guildId][userId]) {
@@ -178,10 +204,14 @@ export async function handleArCommand(message) {
   if (action === 'add') {
     const match = message.content.match(/"([^"]+)"\s+"([^"]+)"/);
     if (!match) return message.reply('❌ Invalid format! Use: `!ar add "trigger word" "response"` or `!learn "trigger word" "response"`');
-    const trigger = match[1].toLowerCase();
-    const response = match[2];
-    guildAr[trigger] = response;
-    await saveArData(guildId, guildAr);
+    const trigger = match[1].trim().toLowerCase();
+    const response = match[2].trim();
+    try {
+      const normalized = normalizeArTriggers({ ...guildAr, [trigger]: response });
+      await saveArData(guildId, normalized);
+    } catch (error) {
+      return message.reply(`❌ ${error.message}`);
+    }
     return message.reply(`✅ Added Auto Responder: \`${trigger}\` -> \`${response}\``);
   }
   if (action === 'remove' || action === 'delete') {
