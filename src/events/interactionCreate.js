@@ -11,7 +11,7 @@ import { isUserBlacklisted } from '../utils/blacklistManager.js';
 import { handleUtilCommand, handleBotGuideSelect } from '../utils/utilsManager.js';
 import { utilCommandNames } from '../utils/commands.js';
 import { handleSetupJTC } from '../utils/jtcManager.js';
-import { handleJtcSelectMenu, handleJtcModalSubmit, handleJtcUserSelect, handleJtcButton } from '../utils/jtcInteractions.js';
+import { handleJtcSelectMenu, handleJtcModalSubmit, handleJtcUserSelect, handleJtcMentionableSelect, handleJtcButton } from '../utils/jtcInteractions.js';
 import { handleWelcomeCommand } from '../welcome/welcomeCommands.js';
 import { handleStatusCommand } from '../status/statusCommands.js';
 import { handleSetupServerStats } from '../status/serverStatsManager.js';
@@ -68,7 +68,7 @@ export async function handleInteractionCreate(interaction) {
     if (interaction.customId === 'bot_guide_select') return handleBotGuideSelect(interaction);
     if (interaction.customId === 'edit_config_menu') return handleEditSelectMenu(interaction);
     if (['ticket_edit_menu', 'ticket_edit_remove_cat', 'ticket_edit_features'].includes(interaction.customId)) return handleTicketEditSelectMenu(interaction);
-    if (['jtc_settings', 'jtc_permissions'].includes(interaction.customId)) return handleJtcSelectMenu(interaction);
+    if (/^jtc_(settings|permissions|region):/.test(interaction.customId)) return handleJtcSelectMenu(interaction);
     return;
   }
   if (interaction.isButton()) {
@@ -82,7 +82,12 @@ export async function handleInteractionCreate(interaction) {
   }
   if (interaction.isUserSelectMenu()) {
     logActivity(interaction.guildId, interaction.guild?.name, interaction.user.id, 'USER_SELECT_USE', `Used user select: ${interaction.customId}`);
-    if (interaction.customId === 'jtc_user_kick') return handleJtcUserSelect(interaction);
+    if (interaction.customId.startsWith('jtc_user_')) return handleJtcUserSelect(interaction);
+    return;
+  }
+  if (interaction.isMentionableSelectMenu()) {
+    logActivity(interaction.guildId, interaction.guild?.name, interaction.user.id, 'MENTIONABLE_SELECT_USE', `Used mentionable select: ${interaction.customId}`);
+    if (interaction.customId.startsWith('jtc_mention_')) return handleJtcMentionableSelect(interaction);
     return;
   }
   if (interaction.isModalSubmit()) {

@@ -8,19 +8,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     localStorage.setItem('nex-theme', isLight ? 'dark' : 'light');
   });
 
-  const particleContainer = document.getElementById('heroParticles');
-  if (particleContainer) {
-    for (let i = 0; i < 30; i++) {
-      const p = document.createElement('div');
-      p.className = 'hero-particle';
-      p.style.left = Math.random() * 100 + '%';
-      p.style.top = Math.random() * 100 + '%';
-      p.style.animationDuration = (8 + Math.random() * 12) + 's';
-      p.style.animationDelay = (Math.random() * 10) + 's';
-      p.style.width = p.style.height = (2 + Math.random() * 4) + 'px';
-      particleContainer.appendChild(p);
-    }
-  }
   let currentGuildId = null, currentGuild = null, currentUser = null, guildsData = [];
   let configVersion = 0;
   let guildChannels = [], guildRoles = [];
@@ -66,15 +53,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     plus: `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`,
     x: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`,
     edit: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>`,
-    chevron: `<svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>`,
-    hash: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><line x1="4" y1="9" x2="20" y2="9"/><line x1="4" y1="15" x2="20" y2="15"/><line x1="10" y1="3" x2="8" y2="21"/><line x1="16" y1="3" x2="14" y2="21"/></svg>`,
-    voice: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>`,
-    category: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`,
-    announcement: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M3 11l18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/></svg>`,
-    stage: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/></svg>`,
-    forum: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>`,
   };
-  const CHANNEL_ICONS = { 0: I.hash, 2: I.voice, 4: I.category, 5: I.announcement, 13: I.stage, 15: I.forum };
   const BADGE = {
     owner: { label: 'Owner', cls: 'badge-owner' },
     administrator: { label: 'Admin', cls: 'badge-administrator' },
@@ -108,6 +87,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const av = document.getElementById('userAvatar');
     av.src = data.user.avatar ? `https://cdn.discordapp.com/avatars/${data.user.id}/${data.user.avatar}.png?size=64` : 'https://cdn.discordapp.com/embed/avatars/0.png';
     renderServerGrid(data.guilds);
+    loadReminders();
     const route = parseRoute();
     if (route.serverId) {
       const guild = data.guilds.find(g => g.id === route.serverId);
@@ -115,6 +95,224 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
   document.getElementById('btnLogout')?.addEventListener('click', async () => { await fetch('/api/auth/logout', { method: 'POST' }); location.reload(); });
+  const reminderList = document.getElementById('reminderList');
+  const reminderStatus = document.getElementById('reminderStatus');
+  const reminderEditOverlay = document.getElementById('reminderEditOverlay');
+  const reminderCancelOverlay = document.getElementById('reminderCancelOverlay');
+  const reminderEditForm = document.getElementById('reminderEditForm');
+  const reminderMessageInput = document.getElementById('reminderMessageInput');
+  const reminderTimeInput = document.getElementById('reminderTimeInput');
+  const reminderEditError = document.getElementById('reminderEditError');
+  const reminderDateTimeGroup = document.getElementById('reminderDateTimeGroup');
+  const scheduleTargetFields = document.getElementById('scheduleTargetFields');
+  const scheduleGuildInput = document.getElementById('scheduleGuildInput');
+  const scheduleChannelInput = document.getElementById('scheduleChannelInput');
+  const scheduleLocalTimeInput = document.getElementById('scheduleLocalTimeInput');
+  const scheduleTimeZone = document.getElementById('scheduleTimeZone');
+  let reminders = [];
+  let activeReminderId = null;
+  let activeReminderType = 'dm';
+  let activeScheduleTimeZone = 'UTC';
+
+  function setReminderStatus(message, isError = false) {
+    if (!reminderStatus) return;
+    reminderStatus.textContent = message;
+    reminderStatus.classList.toggle('error', isError);
+  }
+  function localDatetimeValue(timestamp) {
+    const date = new Date(timestamp);
+    const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+    return local.toISOString().slice(0, 16);
+  }
+  function closeReminderOverlay(overlay) {
+    overlay?.classList.remove('show');
+    activeReminderId = null;
+  }
+  function renderReminders() {
+    if (!reminderList) return;
+    reminderList.replaceChildren();
+    if (!reminders.length) {
+      const empty = document.createElement('div');
+      empty.className = 'empty-state';
+      empty.textContent = 'No pending schedules.';
+      reminderList.appendChild(empty);
+      return;
+    }
+    for (const reminder of reminders) {
+      const item = document.createElement('article');
+      item.className = 'reminder-item';
+      const main = document.createElement('div');
+      main.className = 'reminder-item-main';
+      const message = document.createElement('div');
+      message.className = 'reminder-message';
+      message.textContent = reminder.message;
+      const time = document.createElement('div');
+      time.className = 'reminder-time';
+      time.textContent = reminder.targetType === 'channel'
+        ? `Daily at ${reminder.localTime} (${reminder.timeZone}) · ${reminder.guildName || 'Unknown server'} / #${reminder.channelName || 'unknown-channel'} · Next ${new Date(reminder.endTime).toLocaleString()}`
+        : `Personal DM · Scheduled for ${new Date(reminder.endTime).toLocaleString()}`;
+      main.append(message, time);
+
+      const actions = document.createElement('div');
+      actions.className = 'reminder-actions';
+      const edit = document.createElement('button');
+      edit.type = 'button';
+      edit.className = 'reminder-action';
+      edit.textContent = 'Edit';
+      edit.addEventListener('click', () => openReminderEdit(reminder));
+      const cancel = document.createElement('button');
+      cancel.type = 'button';
+      cancel.className = 'reminder-action danger';
+      cancel.textContent = 'Cancel';
+      cancel.addEventListener('click', () => openReminderCancel(reminder));
+      actions.append(edit, cancel);
+      item.append(main, actions);
+      reminderList.appendChild(item);
+    }
+  }
+  async function reminderRequest(url, options = {}) {
+    const response = await fetch(url, options);
+    if (response.status === 401) {
+      location.assign('/api/auth/login');
+      throw new Error('Session expired');
+    }
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || `Request failed (${response.status})`);
+    return result;
+  }
+  async function loadReminders() {
+    if (!reminderList) return;
+    setReminderStatus('Loading schedules...');
+    try {
+      const result = await reminderRequest('/api/reminders');
+      reminders = Array.isArray(result.reminders) ? result.reminders : [];
+      renderReminders();
+      setReminderStatus(`${reminders.length} pending schedule${reminders.length === 1 ? '' : 's'}.`);
+    } catch (error) {
+      if (error.message !== 'Session expired') setReminderStatus(error.message, true);
+    }
+  }
+  function browserTimeZone() {
+    try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch { return 'UTC'; }
+  }
+  function fillScheduleGuilds(selectedId = '') {
+    scheduleGuildInput.replaceChildren();
+    for (const guild of guildsData) {
+      const option = document.createElement('option');
+      option.value = guild.id;
+      option.textContent = guild.name;
+      option.selected = guild.id === selectedId;
+      scheduleGuildInput.appendChild(option);
+    }
+  }
+  async function loadScheduleChannels(guildId, selectedId = '') {
+    scheduleChannelInput.replaceChildren(new Option('Loading channels...', ''));
+    scheduleChannelInput.disabled = true;
+    try {
+      const data = await reminderRequest(`/api/guilds/${guildId}/data`);
+      const channels = (data.channels || []).filter(channel => (channel.type === 0 || channel.type === 5) && channel.botCanSend);
+      scheduleChannelInput.replaceChildren();
+      for (const channel of channels) {
+        const option = new Option(`#${channel.name}`, channel.id, false, channel.id === selectedId);
+        scheduleChannelInput.appendChild(option);
+      }
+      if (!channels.length) scheduleChannelInput.appendChild(new Option('No text channels available', ''));
+    } catch (error) {
+      scheduleChannelInput.replaceChildren(new Option(error.message, ''));
+    } finally {
+      scheduleChannelInput.disabled = false;
+    }
+  }
+  async function openReminderEdit(reminder = null) {
+    activeReminderId = reminder?.id || null;
+    activeReminderType = reminder?.targetType || 'channel';
+    activeScheduleTimeZone = reminder?.timeZone || browserTimeZone();
+    document.getElementById('reminderEditTitle').textContent = reminder
+      ? `Edit ${activeReminderType === 'channel' ? 'server schedule' : 'reminder'}`
+      : 'Add server schedule';
+    reminderMessageInput.value = reminder?.message || '';
+    reminderMessageInput.maxLength = activeReminderType === 'channel' ? 2000 : 4096;
+    reminderDateTimeGroup.hidden = activeReminderType === 'channel';
+    scheduleTargetFields.hidden = activeReminderType !== 'channel';
+    reminderTimeInput.required = activeReminderType === 'dm';
+    scheduleGuildInput.required = activeReminderType === 'channel';
+    scheduleChannelInput.required = activeReminderType === 'channel';
+    scheduleLocalTimeInput.required = activeReminderType === 'channel';
+    if (activeReminderType === 'dm') {
+      reminderTimeInput.value = localDatetimeValue(reminder.endTime);
+      reminderTimeInput.min = localDatetimeValue(Date.now() + 60_000);
+    } else {
+      fillScheduleGuilds(reminder?.guildId || guildsData[0]?.id || '');
+      scheduleLocalTimeInput.value = reminder?.localTime || '06:00';
+      scheduleTimeZone.textContent = `Time zone: ${activeScheduleTimeZone}`;
+      if (scheduleGuildInput.value) await loadScheduleChannels(scheduleGuildInput.value, reminder?.channelId || '');
+    }
+    reminderEditError.hidden = true;
+    reminderEditOverlay.classList.add('show');
+    reminderMessageInput.focus();
+  }
+  function openReminderCancel(reminder) {
+    activeReminderId = reminder.id;
+    document.getElementById('reminderCancelMessage').textContent = `Cancel “${reminder.message}”?`;
+    reminderCancelOverlay.classList.add('show');
+    document.getElementById('btnKeepReminder')?.focus();
+  }
+  document.getElementById('btnRefreshReminders')?.addEventListener('click', loadReminders);
+  document.getElementById('btnAddSchedule')?.addEventListener('click', () => openReminderEdit());
+  scheduleGuildInput?.addEventListener('change', () => loadScheduleChannels(scheduleGuildInput.value));
+  document.getElementById('btnCancelReminderEdit')?.addEventListener('click', () => closeReminderOverlay(reminderEditOverlay));
+  document.getElementById('btnKeepReminder')?.addEventListener('click', () => closeReminderOverlay(reminderCancelOverlay));
+  reminderEditOverlay?.addEventListener('click', event => { if (event.target === reminderEditOverlay) closeReminderOverlay(reminderEditOverlay); });
+  reminderCancelOverlay?.addEventListener('click', event => { if (event.target === reminderCancelOverlay) closeReminderOverlay(reminderCancelOverlay); });
+  reminderEditForm?.addEventListener('submit', async event => {
+    event.preventDefault();
+    const endTime = new Date(reminderTimeInput.value).getTime();
+    if (activeReminderType === 'dm' && (!Number.isSafeInteger(endTime) || endTime <= Date.now())) {
+      reminderEditError.textContent = 'Reminder time must be in the future.';
+      reminderEditError.hidden = false;
+      return;
+    }
+    const button = document.getElementById('btnSaveReminderEdit');
+    button.disabled = true;
+    reminderEditError.hidden = true;
+    try {
+      const channelPayload = {
+        targetType: 'channel',
+        message: reminderMessageInput.value,
+        guildId: scheduleGuildInput.value,
+        channelId: scheduleChannelInput.value,
+        localTime: scheduleLocalTimeInput.value,
+        timeZone: activeScheduleTimeZone,
+      };
+      await reminderRequest(activeReminderId ? `/api/reminders/${activeReminderId}` : '/api/reminders', {
+        method: activeReminderId ? 'PUT' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(activeReminderType === 'channel'
+          ? channelPayload
+          : { targetType: 'dm', message: reminderMessageInput.value, endTime }),
+      });
+      closeReminderOverlay(reminderEditOverlay);
+      await loadReminders();
+    } catch (error) {
+      reminderEditError.textContent = error.message;
+      reminderEditError.hidden = false;
+    } finally {
+      button.disabled = false;
+    }
+  });
+  document.getElementById('btnConfirmReminderCancel')?.addEventListener('click', async event => {
+    event.target.disabled = true;
+    try {
+      await reminderRequest(`/api/reminders/${activeReminderId}`, { method: 'DELETE' });
+      closeReminderOverlay(reminderCancelOverlay);
+      await loadReminders();
+    } catch (error) {
+      closeReminderOverlay(reminderCancelOverlay);
+      setReminderStatus(error.message, true);
+    } finally {
+      event.target.disabled = false;
+    }
+  });
   document.getElementById('btnBackToServers')?.addEventListener('click', () => {
     dashboardLayout.classList.add('hidden');
     serverPickerView.classList.remove('hidden');
@@ -126,7 +324,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (!guilds?.length) { serverGrid.innerHTML = '<div class="empty-state">No manageable servers found.</div>'; return; }
     guilds.forEach(g => {
       const b = BADGE[g.permissionTier] || BADGE.manage_server;
-      const iconHtml = g.icon ? `<img class="server-icon" src="${esc(g.icon)}" alt="${esc(g.name)}" loading="lazy"/>` : `<div class="server-icon-ph">${g.name.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase()}</div>`;
+      const initials = String(g.name || '').split(' ').map(word => word[0]).join('').slice(0, 2).toUpperCase();
+      const iconHtml = g.icon ? `<img class="server-icon" src="${esc(g.icon)}" alt="${esc(g.name)}" loading="lazy"/>` : `<div class="server-icon-ph">${esc(initials)}</div>`;
       const card = document.createElement('div');
       card.className = 'server-card'; card.dataset.guildId = g.id;
       card.innerHTML = `${iconHtml}<div class="server-info"><div class="server-name">${esc(g.name)}</div><div class="server-meta"><span class="server-members">${I.users} ${fmtNum(g.memberCount)}</span><span class="perm-badge ${b.cls}">${b.label}</span></div></div>`;
@@ -142,7 +341,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (updateUrl) pushRoute(guild.id, initialSection);
     const iconSrc = guild.icon || '';
     sidebarServerInfo.innerHTML = iconSrc ? `<img src="${esc(iconSrc)}" alt=""/>` : '';
-    sidebarServerInfo.innerHTML += `<div><div class="ss-name">${esc(guild.name)}</div><div class="ss-id">${guild.id}</div></div>`;
+    sidebarServerInfo.innerHTML += `<div><div class="ss-name">${esc(guild.name)}</div><div class="ss-id">${esc(guild.id)}</div></div>`;
     sidebarNav.innerHTML = '';
     SECTIONS.filter(s => !s.adminOnly || ['owner', 'administrator'].includes(guild.permissionTier)).forEach((s) => {
       const btn = document.createElement('button');
@@ -161,7 +360,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         guildRoles = gd.roles || [];
       }
     } catch {  }
-    buildAllSections();
+    prepareDashboardSections();
     wireBannerPickers();
     await loadConfig(guild.id);
     switchSection(initialSection, false);
@@ -171,67 +370,28 @@ document.addEventListener('DOMContentLoaded', async () => {
     sidebarNav.querySelectorAll('.sidebar-item').forEach(b => b.classList.toggle('active', b.dataset.section === id));
     contentArea.querySelectorAll('.content-section').forEach(s => s.classList.toggle('active', s.id === 'sec-' + id));
     const actionBar = document.querySelector('.action-bar');
-    if (actionBar) actionBar.style.display = ['transcripts', 'learn'].includes(id) ? 'none' : 'flex';
+    actionBar?.classList.toggle('hidden', ['transcripts', 'learn'].includes(id));
     if (updateUrl) pushRoute(currentGuildId, id);
     if (id === 'transcripts') loadTranscripts();
     if (id === 'learn') loadLearnEntries();
   }
-  function makeChannelPicker(id, label, hint, filterTypes = null) {
-    const filteredChannels = filterTypes ? guildChannels.filter(c => filterTypes.includes(c.type)) : guildChannels;
-    return `<div class="form-group"><label class="field-label">${label}</label><div class="picker-wrap" data-picker-id="${id}" data-picker-type="channel"><div class="picker-display" tabindex="0"><span class="ph">Select a channel...</span><span class="selected-text hidden"></span>${I.chevron}</div><div class="picker-dropdown"><input type="text" class="picker-search" placeholder="Search channels..."/><div class="picker-options">${filteredChannels.map(c => `<div class="picker-option" data-value="${c.id}"><span class="ch-icon">${CHANNEL_ICONS[c.type] || '#'}</span><span class="ch-name">${esc(c.name)}</span></div>`).join('')}</div></div></div>${hint ? `<span class="field-hint">${hint}</span>` : ''}</div>`;
+  function modalOverlay() {
+    let overlay = document.getElementById('modalOverlay');
+    if (!overlay) {
+      overlay = document.createElement('div');
+      overlay.id = 'modalOverlay';
+      overlay.className = 'modal-overlay';
+      document.body.appendChild(overlay);
+    }
+    return overlay;
   }
-  function makeRolePicker(id, label, hint) {
-    return `<div class="form-group"><label class="field-label">${label}</label><div class="picker-wrap" data-picker-id="${id}" data-picker-type="role"><div class="picker-display" tabindex="0"><span class="ph">Select a role...</span><span class="selected-text hidden"></span>${I.chevron}</div><div class="picker-dropdown"><input type="text" class="picker-search" placeholder="Search roles..."/><div class="picker-options">${guildRoles.map(r => `<div class="picker-option" data-value="${r.id}"><span class="role-dot" style="background:${r.color}"></span><span class="role-name">${esc(r.name)}</span></div>`).join('')}</div></div></div>${hint ? `<span class="field-hint">${hint}</span>` : ''}</div>`;
-  }
-  function makeMultiRolePicker(id, label, hint) {
-    return `<div class="form-group"><label class="field-label">${label}</label><div class="picker-wrap" data-picker-id="${id}" data-picker-type="multi-role"><div class="picker-multi-display" tabindex="0"><span class="ph">Click to add roles...</span></div><div class="picker-dropdown"><input type="text" class="picker-search" placeholder="Search roles..."/><div class="picker-options">${guildRoles.map(r => `<div class="picker-option" data-value="${r.id}"><span class="role-dot" style="background:${r.color}"></span><span class="role-name">${esc(r.name)}</span></div>`).join('')}</div></div></div>${hint ? `<span class="field-hint">${hint}</span>` : ''}</div>`;
-  }
-  function makeInput(id, label, ph, hint, type = 'text', val = '') {
-    const valAttr = val ? ` value="${val}"` : '';
-    return `<div class="form-group"><label class="field-label">${label}</label><input type="${type}" id="${id}" class="text-input" placeholder="${ph}"${valAttr}/>${hint ? `<span class="field-hint">${hint}</span>` : ''}</div>`;
-  }
-  function makeTextarea(id, label, ph, hint, rows = 3) {
-    return `<div class="form-group"><label class="field-label">${label}</label><textarea id="${id}" class="text-input" placeholder="${ph}" rows="${rows}"></textarea>${hint ? `<span class="field-hint">${hint}</span>` : ''}</div>`;
-  }
-  function makeColorPicker(id, label, def = '#5865F2') {
-    return `<div class="form-group"><label class="field-label">${label}</label><div class="color-row"><div class="color-dot" id="${id}Dot" style="background:${def}" data-color-for="${id}"></div><input type="color" id="${id}Color" value="${def}"/><input type="text" id="${id}" class="text-input" placeholder="${def}" value="${def}" style="flex:1"/></div></div>`;
-  }
-  function makeToggle(id, label, desc, icon, checked = true) {
-    return `<div class="toggle-group"><div class="toggle-info">${icon}<div><div class="toggle-label">${label}</div><div class="toggle-desc">${desc}</div></div></div><label class="toggle-switch"><input type="checkbox" id="${id}" ${checked ? 'checked' : ''}/><span class="toggle-slider"></span></label></div>`;
-  }
-  function makeSelect(id, label, options, hint = '') {
-    const opts = options.map(o => `<option value="${o.value}">${o.label}</option>`).join('');
-    return `<div class="form-group"><label class="field-label">${label}</label><select id="${id}" class="select-input">${opts}</select>${hint ? `<span class="field-hint">${hint}</span>` : ''}</div>`;
-  }
-  function makeBannerPicker(id, label, mode) {
-    const urls = [
-      'https://cdn.koya.gg/gallery/l/9tQ5kUy.png', 'https://cdn.koya.gg/gallery/l/es49qwK.png', 'https://cdn.koya.gg/gallery/l/PZb54xG.png',
-      'https://cdn.koya.gg/gallery/l/e7wNTbc.png', 'https://cdn.koya.gg/gallery/l/epBvRPS.png', 'https://cdn.koya.gg/gallery/l/e32QKfw.png',
-      'https://cdn.koya.gg/gallery/l/UBITUg8.png', 'https://cdn.koya.gg/gallery/l/jh0brcw.png', 'https://cdn.koya.gg/gallery/l/6mWYs87.png',
-      'https://cdn.koya.gg/gallery/l/y06fE4T.png', 'https://cdn.koya.gg/gallery/l/vbOPkZ4.png', 'https://cdn.koya.gg/gallery/l/W26rNNb.png'
-    ];
-    const thumbs = urls.map((u, index) => `<button type="button" class="banner-thumb-button" aria-label="Use suggested background ${index + 1}" data-banner-target="${id}" data-banner-mode="${mode}" data-banner-url="${u}"><img class="banner-thumb" src="/api/proxy-image?url=${encodeURIComponent(u)}" alt="Suggested background ${index + 1}" loading="lazy"/></button>`).join('');
-    return `<div class="form-group">
-      <label class="field-label">${label}</label>
-      <div class="discord-preview" data-discord-preview="${mode}">
-        <img class="discord-preview-avatar" src="/api/bot-avatar" alt="NexBucket"/>
-        <div class="discord-preview-body">
-          <div class="discord-preview-author">NexBucket <span>APP</span></div>
-          <div class="discord-preview-message" data-preview-message="${mode}"></div>
-          <div class="banner-preview-wrap">
-            <img id="${id}_preview" class="banner-preview" alt="${mode} banner preview" data-banner-preview="${mode}"/>
-            <div class="banner-preview-status" data-preview-status="${mode}">Loading preview...</div>
-          </div>
-        </div>
-      </div>
-      <input type="text" id="${id}" class="text-input" placeholder="https://..." data-banner-input="${id}" data-banner-mode="${mode}"/>
-      <details class="banner-gallery-details">
-        <summary><span class="banner-gallery-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg></span><span class="banner-gallery-copy"><strong>Choose from gallery</strong><small>Suggested backgrounds</small></span>${I.chevron}</summary>
-        <div class="banner-gallery-grid">
-          ${thumbs}
-        </div>
-      </details>
-    </div>`;
+
+  function showTemplateModal(templateId) {
+    const overlay = modalOverlay();
+    const template = document.getElementById(templateId);
+    overlay.replaceChildren(template.content.cloneNode(true));
+    overlay.classList.add('show');
+    return overlay;
   }
   const previewState = new Map();
   function previewFields(mode) {
@@ -316,132 +476,60 @@ document.addEventListener('DOMContentLoaded', async () => {
     const guideBtn = e.target.closest('[data-guide]');
     if (guideBtn) window.showGuideModal(guideBtn.dataset.guide);
   });
-  function buildAllSections() {
+  function prepareDashboardSections() {
     const form = document.getElementById('configForm');
-    form.innerHTML = '';
-    form.innerHTML += `<div class="content-section active" id="sec-general"><div class="section-card"><div class="section-card-title">${I.gear} General Configuration</div>${makeRolePicker('autoRoleId', 'Auto-Role', 'Automatically assigned to new members.')}</div></div>`;
-    if (['owner', 'administrator'].includes(currentGuild?.permissionTier)) {
-      form.innerHTML += `<div class="content-section" id="sec-learn"><div class="section-card">
-        <div class="learn-heading"><div><div class="section-card-title">${I.chat} Learn / Auto Responder</div><span class="field-hint">Create text, image, or combined replies. Administrator permission required.</span></div><button type="button" id="btnAddLearn" class="btn-add-type">${I.plus} Add response</button></div>
-        <input id="learnSearch" class="text-input learn-search" type="search" placeholder="Search triggers or responses..." aria-label="Search learned responses"/>
-        <div id="learnList" class="learn-list"><div class="empty-state">Open this section to load responses.</div></div>
-      </div></div>`;
-    }
-    form.innerHTML += `<div class="content-section" id="sec-welcome"><div class="section-card"><div class="section-card-title">${I.chat} Welcome Messages</div>
-      ${makeChannelPicker('welcomeChannel', 'Welcome Channel', 'Channel where welcome messages are sent.', [0, 5])}
-      ${makeTextarea('welcomeMessageContent', 'Welcome Message Text', 'Welcome {user} to **{server}**!', 'Use {user} for mention, {server} for server name. Sent as text above the banner.', 2)}
-      <hr class="divider"/>
-      <div class="subsection-title">${I.monitor} Banner Image</div>
-      ${makeInput('welcome_text', 'Banner Title Text', 'WELCOME', 'Large text overlaid on the welcome banner image.')}
-      ${makeBannerPicker('welcome_bg', 'Banner Background URL', 'welcome')}
-    </div></div>`;
-    form.innerHTML += `<div class="content-section" id="sec-goodbye"><div class="section-card"><div class="section-card-title">${I.door} Goodbye Messages</div>
-      ${makeChannelPicker('goodbyeChannel', 'Goodbye Channel', 'Channel where goodbye messages are sent.', [0, 5])}
-      ${makeTextarea('goodbyeMessageContent', 'Goodbye Message Text', '{user} has left **{server}**.', 'Use {user} for mention, {server} for server name.', 2)}
-      <hr class="divider"/>
-      <div class="subsection-title">${I.monitor} Banner Image</div>
-      ${makeInput('goodbye_text', 'Banner Title Text', 'GOOD BYE', 'Large text overlaid on the goodbye banner image.')}
-      ${makeBannerPicker('goodbye_bg', 'Banner Background URL', 'goodbye')}
-    </div></div>`;
-    form.innerHTML += `<div class="content-section" id="sec-ticket"><div class="section-card"><div class="section-card-title">${I.ticket} Ticket Support System</div>
-      <div class="subsection-title">${I.gear} System Channels & Roles</div>
-      ${makeChannelPicker('ticketCategoryId', 'Ticket Category', 'Category under which ticket channels are created.', [4])}
-      ${makeMultiRolePicker('ticketStaffRoleIds', 'Support Staff Roles', 'Roles that can manage and view tickets.')}
-      ${makeChannelPicker('ticketTranscriptChannel', 'Transcript Log Channel', 'Channel for ticket transcript logs.', [0, 5])}
-      ${makeChannelPicker('ticketReviewChannel', 'Review/Rating Channel', 'Channel where ticket reviews are posted.', [0, 5])}
-      <hr class="divider"/>
-      <div class="subsection-title">${I.chat} Panel Appearance</div>
-      ${makeInput('panelTitle', 'Panel Embed Title', '🎫 Support Center', '')}
-      ${makeTextarea('panelDescription', 'Panel Embed Description', 'Welcome to the support system...', 'Displayed in the panel embed body.')}
-      ${makeInput('panelFooter', 'Panel Embed Footer', 'NexBucket Support System', '')}
-      ${makeColorPicker('panelColor', 'Panel Embed Color', '#ff90ba')}
-      ${makeInput('panelImageUrl', 'Panel Image URL', 'https://...', 'Image displayed in the panel embed.')}
-      ${makeInput('panelSelectPlaceholder', 'Select Menu Placeholder', '🎫 Select support type...', 'Placeholder text in the ticket type dropdown.')}
-      <hr class="divider"/>
-      <div class="subsection-title">${I.ticket} Ticket Embed & Buttons</div>
-      ${makeColorPicker('ticketEmbedColor', 'Ticket Embed Color', '#5865F2')}
-      <div class="form-row">${makeInput('embedAuthorName', 'Embed Author Name', 'NexBucket Support', '')}<div class="form-group"><label class="field-label">Embed Author URL</label><input type="text" id="embedAuthorUrl" class="text-input" placeholder="https://..."/></div></div>
-      <div class="form-row-3">${makeInput('closeButtonLabel', 'Close Button Label', '🔒 Close Ticket', '')}${makeInput('claimButtonLabel', 'Claim Button Label', '✋ Claim Ticket', '')}${makeInput('forceCloseButtonLabel', 'Force Close Label', '⚡ Force Close', '')}</div>
-      <hr class="divider"/>
-      <div class="subsection-title">${I.chat} System Messages</div>
-      ${makeTextarea('ticketGreetingMessage', 'Ticket Greeting Message', 'Hello {user}, a staff member will assist you shortly!', 'Use {user} for mention. Sent when ticket opens.', 2)}
-      ${makeTextarea('staffOnlineMessage', 'Staff Online Message', '✅ {count} staff members online: {staffs}', 'Use {count} and {staffs} placeholders.', 2)}
-      ${makeTextarea('staffOfflineMessage', 'Staff Offline Message', '⚠️ No staff members are online...', 'Shown when no staff is online.', 2)}
-      ${makeTextarea('dmMessageOnClose', 'DM Message On Close', 'Thank you for using our support system...', 'Use {channel} placeholder. Sent as DM.', 2)}
-      ${makeInput('transcriptFooter', 'Transcript Footer Text', 'NexBucket Ticket System', '')}
-      <hr class="divider"/>
-      <div class="subsection-title">${I.gear} Feature Toggles</div>
-      ${makeToggle('enableRating', 'Ticket Rating System', 'Let users rate their ticket support experience.', I.ticket, true)}
-      ${makeToggle('enableClaim', 'Staff Claiming', 'Allow staff to claim tickets.', I.shield, true)}
-      ${makeToggle('lockClaimedTicket', 'Lock Claimed Tickets', 'Only the claiming staff can respond after claiming.', I.shield, false)}
-      <hr class="divider"/>
-      <div class="subsection-title">${I.plus} Ticket Categories</div>
-      <div id="ticketTypeList" class="ticket-type-list"></div>
-      <button type="button" id="btnAddTicketType" class="btn-add-type">${I.plus} Add Ticket Category</button>
-    </div></div>`;
-    form.innerHTML += `<div class="content-section" id="sec-jtc"><div class="section-card"><div class="section-card-title">${I.speaker} Join to Create — Dynamic Voice Channels</div>
-      ${makeChannelPicker('jtcHubChannelId', 'Master Hub Voice Channel', 'Members join this channel to create a temp room.', [2])}
-      ${makeChannelPicker('jtcCategoryId', 'Temp Voice Category', 'Category where temporary voice channels are created.', [4])}
-      ${makeInput('jtcDefaultName', 'Default Temp Voice Name', "🔊 {username}'s Room", 'Supported placeholders: {username}, {displayName}.', 'text')}
-      <div class="form-row">
-        ${makeInput('jtcDefaultLimit', 'Default User Limit', '0', '0 means unlimited. Range: 0–99.', 'number')}
-        ${makeInput('jtcDefaultBitrate', 'Default Bitrate (kbps)', '64', 'Range: 8–96 kbps, subject to server boost limit.', 'number')}
-      </div>
-      ${makeToggle('jtcDefaultLocked', 'Lock New Temp Channels', 'New rooms start locked for other members.', I.shield, false)}
-    </div></div>`;
-    form.innerHTML += `<div class="content-section" id="sec-mod"><div class="section-card"><div class="section-card-title">${I.shield} Security & Moderation</div>
-      ${makeToggle('antiSpamEnabled', 'Anti-Spam Protection', 'Detect and punish rapid message spamming.', I.shield, true)}
-      ${makeToggle('antiLinkEnabled', 'Anti-Link Filter', 'Delete messages with Discord invites or external links.', I.shield, true)}
-      ${makeToggle('antiRaidEnabled', 'Anti-Raid System', 'Detect and block coordinated mass-join attacks.', I.shield, true)}
-      ${makeToggle('antiBotKickEnabled', 'Rogue Bot Auto-Kick', 'Auto-kick unauthorized bots.', I.shield, true)}
-      <hr class="divider"/>
-      <div class="subsection-title">${I.shield} Banned Words Filter (Auto Mod)</div>
-      ${makeToggle('badWordsFilterEnabled', 'Enable Banned Words Filter', 'Automatically delete messages containing specific words.', I.chat, false)}
-      ${makeTextarea('badWords', 'Banned Words List', 'fuck, bitch, shit...', 'Enter words separated by commas.', 3)}
-      ${makeSelect('badWordsPunishment', 'Punishment Action', [
-        { value: 'delete', label: 'Delete Message Only' },
-        { value: 'warn', label: 'Delete & Warn User' },
-        { value: 'timeout10', label: 'Delete & Timeout 10 Minutes' },
-        { value: 'timeout60', label: 'Delete & Timeout 1 Hour' },
-        { value: 'kick', label: 'Delete & Kick User' },
-        { value: 'ban', label: 'Delete & Ban User' }
-      ], 'Action taken when a user sends a banned word.')}
-      <hr class="divider"/>
-      <div class="subsection-title">${I.chat} Prefix Commands (Moderation)</div>
-      ${makeToggle('enablePrefixCommands', 'Enable Prefix Commands', 'Allow using ban, kick, mute, etc. via text commands.', I.chat, true)}
-      <div class="form-row">
-        ${makeInput('modPrefix', 'Command Prefix', '!', 'Special character to trigger commands (e.g. !, ?, +)')}
-        ${makeInput('warnThreshold', 'Warning Threshold', '3', 'Number of warns before auto-ban.', 'number')}
-      </div>
-      ${makeChannelPicker('modLogChannel', 'Moderation Log Channel', 'Channel for moderation action logs.', [0, 5])}
-    </div></div>`;
-    form.innerHTML += `<div class="content-section" id="sec-bank"><div class="section-card"><div class="section-card-title">${I.card} VietQR & PayOS Banking</div>
-      <div class="subsection-title">${I.card} Bank Account</div>
-      <div class="form-row-3">${makeInput('bankBin', 'Bank BIN Code', '970422', 'MBBank: 970422, VCB: 970436')}${makeInput('bankAccountNo', 'Account Number', '', '')}${makeInput('bankAccountName', 'Account Owner', 'NGUYEN VAN A', '')}</div>
-      <hr class="divider"/><div class="subsection-title" style="display:flex;justify-content:space-between;align-items:center;"><span>${I.shield} PayOS</span><button type="button" class="btn-add-type" style="width:auto;padding:4px 12px;font-size:.75rem;" data-guide="payos">❓ ${window.NexI18n?.t('guide_btn') || 'Setup Guide'}</button></div>
-      <div class="form-row-3">${makeInput('payosClientId', 'Client ID', '', '')}${makeInput('payosApiKey', 'API Key', '', '', 'password')}${makeInput('payosChecksumKey', 'Checksum Key', '', '', 'password')}</div>
-      <hr class="divider"/><div class="subsection-title" style="display:flex;justify-content:space-between;align-items:center;"><span>${I.card} Card2K <span id="cardConfigStatus" class="perm-badge">Checking</span></span><button type="button" class="btn-add-type" style="width:auto;padding:4px 12px;font-size:.75rem;" data-guide="card2k">❓ ${window.NexI18n?.t('guide_btn') || 'Setup Guide'}</button></div>
-      <div class="form-row-3">${makeInput('cardPartnerId', 'Partner ID', '', '')}${makeInput('cardPartnerKey', 'Partner Key', '', 'Để trống để giữ key đã lưu; gõ __CLEAR__ để xoá.', 'password')}${makeInput('cardDomain', 'Domain', 'card2k.com', 'Chỉ nhập hostname HTTPS.')}</div>
-      ${makeChannelPicker('bankNotifChannel', 'Payment Notification Channel', '', [0, 5])}
-    </div></div>`;
-    form.innerHTML += `<div class="content-section" id="sec-status"><div class="section-card"><div class="section-card-title">${I.monitor} Minecraft & Server Status</div>
-      <div class="field-hint">Refresh interval is controlled globally by UPDATE_INTERVAL.</div>
-      <hr class="divider"/>
-      <div class="subsection-title">${I.monitor} Tracked Servers</div>
-      <div id="statusServersList" class="ticket-type-list" style="min-height:10px;"></div>
-      <button type="button" id="btnAddStatusServer" class="btn-add-type">${I.plus} Add Tracked Server</button>
-    </div></div>`;
-    form.innerHTML += `<div class="content-section" id="sec-stats"><div class="section-card"><div class="section-card-title">${I.users} Server Stats Channels</div>
-      ${makeChannelPicker('statsCategoryId', 'Stats Category', 'Category containing stat channels.', [4])}
-      <div class="form-row">${makeChannelPicker('statsAllMembersId', 'All Members Channel', '', [2])}${makeChannelPicker('statsHumansId', 'Humans Channel', '', [2])}</div>
-      <div class="form-row">${makeChannelPicker('statsStaffOnlineId', 'Staff Online Channel', '', [2])}${makeChannelPicker('statsBotCountId', 'Bot Count Channel', '', [2])}</div>
-    </div></div>`;
-    form.innerHTML += `<div class="content-section" id="sec-transcripts"><div class="section-card"><div class="section-card-title">${I.ticket} Ticket Transcripts</div><div id="transcriptListArea" style="min-height:100px;"><div class="empty-state">Click to load transcripts...</div></div></div></div>`;
+    const template = document.getElementById('dashboardSectionsTemplate');
+    form.replaceChildren(template.content.cloneNode(true));
+    const learnSection = document.getElementById('sec-learn');
+    if (learnSection) learnSection.hidden = !['owner', 'administrator'].includes(currentGuild?.permissionTier);
+    populatePickerOptions();
     initAllPickers();
     initColorPickers();
     initTicketTypeManager();
     initStatusServerManager();
     initLearnManager();
+  }
+  const PICKER_CHANNEL_TYPES = {
+    welcomeChannel: [0, 5], goodbyeChannel: [0, 5], ticketCategoryId: [4],
+    ticketTranscriptChannel: [0, 5], ticketReviewChannel: [0, 5],
+    jtcHubChannelId: [2], jtcCategoryId: [4], jtcLfmChannelId: [0, 5],
+    modLogChannel: [0, 5], bankNotifChannel: [0, 5], statsCategoryId: [4],
+    statsAllMembersId: [2], statsHumansId: [2], statsStaffOnlineId: [2],
+    statsBotCountId: [2], msChannel: [0, 5],
+  };
+  function populatePickerOptions(root = document) {
+    root.querySelectorAll('.picker-wrap').forEach(wrap => {
+      const options = wrap.querySelector('.picker-options');
+      if (!options) return;
+      options.replaceChildren();
+      const type = wrap.dataset.pickerType;
+      const allowedTypes = PICKER_CHANNEL_TYPES[wrap.dataset.pickerId];
+      const source = type === 'channel'
+        ? guildChannels.filter(channel => !allowedTypes || allowedTypes.includes(channel.type))
+        : guildRoles;
+      for (const item of source) {
+        const option = document.createElement('div');
+        option.className = 'picker-option';
+        option.dataset.value = item.id;
+        if (type === 'channel') {
+          const icon = document.createElement('span');
+          icon.className = 'ch-icon';
+          icon.textContent = { 0: '#', 2: '🔊', 4: '▾', 5: '📣', 13: '🎙', 15: '☷' }[item.type] || '#';
+          const name = document.createElement('span');
+          name.className = 'ch-name';
+          name.textContent = item.name;
+          option.append(icon, name);
+        } else {
+          const dot = document.createElement('span');
+          dot.className = 'role-dot';
+          const name = document.createElement('span');
+          name.className = 'role-name';
+          name.textContent = item.name;
+          option.append(dot, name);
+        }
+        options.appendChild(option);
+      }
+    });
   }
   function initAllPickers() {
     document.querySelectorAll('.picker-wrap').forEach(wrap => {
@@ -459,7 +547,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       });
       search?.addEventListener('input', () => {
         const q = search.value.toLowerCase();
-        options.forEach(o => { o.style.display = (o.textContent.toLowerCase().includes(q)) ? '' : 'none'; });
+        options.forEach(o => o.classList.toggle('hidden', !o.textContent.toLowerCase().includes(q)));
       });
       if (type === 'multi-role') {
         options.forEach(o => o.addEventListener('click', e => {
@@ -540,8 +628,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       const colorInput = document.getElementById(id + 'Color');
       const textInput = document.getElementById(id);
       dot.addEventListener('click', () => colorInput?.click());
-      colorInput?.addEventListener('input', () => { const v = colorInput.value; if (textInput) textInput.value = v; dot.style.background = v; });
-      textInput?.addEventListener('input', () => { const v = textInput.value; if (/^#[0-9A-Fa-f]{6}$/.test(v)) { if (colorInput) colorInput.value = v; dot.style.background = v; }});
+      colorInput?.addEventListener('input', () => { if (textInput) textInput.value = colorInput.value; });
+      textInput?.addEventListener('input', () => { const v = textInput.value; if (/^#[0-9A-Fa-f]{6}$/.test(v) && colorInput) colorInput.value = v; });
     });
   }
   let ticketTypes = [];
@@ -637,34 +725,29 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
   function showLearnModal(originalTrigger = null) {
     const current = originalTrigger ? learnEntries[originalTrigger] : null;
-    let overlay = document.getElementById('modalOverlay');
-    if (!overlay) { overlay = document.createElement('div'); overlay.id = 'modalOverlay'; overlay.className = 'modal-overlay'; document.body.appendChild(overlay); }
-    overlay.innerHTML = `<div class="modal learn-modal"><h3>${current ? 'Edit' : 'Add'} Learned Response</h3>
-      ${makeInput('learnTriggerInput', 'Trigger', 'hello', 'Matched anywhere in a message.', 'text', esc(originalTrigger || ''))}
-      <div id="learnDuplicateWarning" class="learn-warning" hidden>This trigger already exists.</div>
-      ${makeTextarea('learnResponseInput', 'Response Text', 'Optional when an image is selected', 'Maximum 2,000 characters.', 4)}
-      <div class="form-group"><label class="field-label">Response Image</label><input id="learnImageInput" class="learn-image-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif"/><label class="learn-image-upload" for="learnImageInput"><span class="learn-image-upload-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg></span><span class="learn-image-upload-copy"><strong>Choose an image</strong><small>PNG, JPEG, WebP, or GIF · Up to 5 MB</small><span id="learnImageFileName" class="learn-image-file-name">No image selected</span></span><span class="learn-image-upload-action">Browse</span></label></div>
-      <label class="learn-remove-image" ${current?.imageUrl ? '' : 'hidden'}><input id="learnRemoveImage" type="checkbox"/> Remove current image</label>
-      <div class="discord-preview learn-preview"><img class="discord-preview-avatar" src="/api/bot-avatar" alt="NexBucket"/><div class="discord-preview-body"><div class="discord-preview-author">NexBucket <span>APP</span></div><div id="learnPreviewText" class="discord-preview-message"></div><img id="learnPreviewImage" class="learn-preview-image" alt="Response image preview"/></div></div>
-      <div id="learnModalError" class="learn-warning" hidden></div>
-      <div class="modal-actions"><button type="button" class="btn-modal" id="btnCancelLearn">Cancel</button><button type="button" class="btn-modal primary" id="btnSaveLearn">Save</button></div></div>`;
-    overlay.classList.add('show');
+    const overlay = showTemplateModal('learnModalTemplate');
+    overlay.querySelector('#learnModalTitle').textContent = `${current ? 'Edit' : 'Add'} Learned Response`;
     const triggerInput = overlay.querySelector('#learnTriggerInput');
     const responseInput = overlay.querySelector('#learnResponseInput');
     const imageInput = overlay.querySelector('#learnImageInput');
     const imageFileName = overlay.querySelector('#learnImageFileName');
+    const imageDropZone = overlay.querySelector('#learnImageDropZone');
+    const imageError = overlay.querySelector('#learnImageError');
     const removeImage = overlay.querySelector('#learnRemoveImage');
     const duplicateWarning = overlay.querySelector('#learnDuplicateWarning');
     const previewText = overlay.querySelector('#learnPreviewText');
     const previewImage = overlay.querySelector('#learnPreviewImage');
     const errorBox = overlay.querySelector('#learnModalError');
     const saveButton = overlay.querySelector('#btnSaveLearn');
+    triggerInput.value = originalTrigger || '';
     responseInput.value = current?.response || '';
+    overlay.querySelector('#learnRemoveImageLabel').hidden = !current?.imageUrl;
     let previewUrl = '';
+    let selectedFile = null;
     const clearPreviewUrl = () => { if (previewUrl) URL.revokeObjectURL(previewUrl); previewUrl = ''; };
     const normalizedTrigger = value => value.trim().toLowerCase();
     const renderPreview = () => {
-      previewText.textContent = responseInput.value.trim() || (imageInput.files[0] || (current?.imageUrl && !removeImage.checked) ? '' : 'Response preview');
+      previewText.textContent = responseInput.value.trim() || (selectedFile || (current?.imageUrl && !removeImage.checked) ? '' : 'Response preview');
       const source = previewUrl || (current?.imageUrl && !removeImage.checked ? current.imageUrl : '');
       previewImage.src = source;
       previewImage.hidden = !source;
@@ -675,19 +758,60 @@ document.addEventListener('DOMContentLoaded', async () => {
       duplicateWarning.hidden = !duplicate;
       saveButton.disabled = duplicate;
     };
+    const selectLearnImage = file => {
+      imageError.hidden = true;
+      imageError.textContent = '';
+      if (!file) {
+        selectedFile = null;
+        clearPreviewUrl();
+        imageFileName.textContent = 'No image selected';
+        imageFileName.classList.remove('selected');
+        renderPreview();
+        return;
+      }
+      if (!['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(file.type)) {
+        imageError.textContent = 'Choose a PNG, JPEG, WebP, or GIF image.';
+        imageError.hidden = false;
+        return;
+      }
+      if (file.size > 5 * 1024 * 1024) {
+        imageError.textContent = 'Image must be 5 MB or smaller.';
+        imageError.hidden = false;
+        return;
+      }
+      selectedFile = file;
+      clearPreviewUrl();
+      previewUrl = URL.createObjectURL(file);
+      imageFileName.textContent = file.name;
+      imageFileName.classList.add('selected');
+      removeImage.checked = false;
+      renderPreview();
+    };
     triggerInput.addEventListener('input', checkDuplicate);
     responseInput.addEventListener('input', renderPreview);
     removeImage.addEventListener('change', renderPreview);
-    imageInput.addEventListener('change', () => {
-      clearPreviewUrl();
-      const file = imageInput.files[0];
-      imageFileName.textContent = file?.name || 'No image selected';
-      imageFileName.classList.toggle('selected', Boolean(file));
-      if (file) {
-        previewUrl = URL.createObjectURL(file);
-        removeImage.checked = false;
+    imageInput.addEventListener('change', () => selectLearnImage(imageInput.files[0]));
+    for (const eventName of ['dragenter', 'dragover']) {
+      imageDropZone.addEventListener(eventName, event => {
+        event.preventDefault();
+        if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+        imageDropZone.classList.add('is-dragover');
+      });
+    }
+    for (const eventName of ['dragleave', 'drop']) {
+      imageDropZone.addEventListener(eventName, event => {
+        event.preventDefault();
+        imageDropZone.classList.remove('is-dragover');
+      });
+    }
+    imageDropZone.addEventListener('drop', event => {
+      const files = [...(event.dataTransfer?.files || [])];
+      if (files.length !== 1) {
+        imageError.textContent = 'Drop exactly one image.';
+        imageError.hidden = false;
+        return;
       }
-      renderPreview();
+      selectLearnImage(files[0]);
     });
     const close = () => { clearPreviewUrl(); overlay.classList.remove('show'); };
     overlay.querySelector('#btnCancelLearn').addEventListener('click', close);
@@ -697,10 +821,9 @@ document.addEventListener('DOMContentLoaded', async () => {
       saveButton.disabled = true;
       let uploadedPath = '';
       try {
-        const file = imageInput.files[0];
+        const file = selectedFile;
         let imagePath = removeImage.checked ? '' : (current?.imagePath || '');
         if (file) {
-          if (file.size > 5 * 1024 * 1024) throw new Error('Image must be 5 MB or smaller');
           const uploaded = await learnRequest(`/api/guilds/${currentGuildId}/learn/image`, {
             method: 'POST', headers: { 'Content-Type': file.type }, body: file,
           });
@@ -730,10 +853,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     renderPreview();
   }
   function confirmDeleteLearn(trigger) {
-    let overlay = document.getElementById('modalOverlay');
-    if (!overlay) { overlay = document.createElement('div'); overlay.id = 'modalOverlay'; overlay.className = 'modal-overlay'; document.body.appendChild(overlay); }
-    overlay.innerHTML = `<div class="modal"><h3>Delete Learned Response</h3><p>Delete trigger <strong>${esc(trigger)}</strong>? This also removes its uploaded image.</p><div class="modal-actions"><button type="button" class="btn-modal" id="btnCancelLearnDelete">Cancel</button><button type="button" class="btn-modal danger" id="btnConfirmLearnDelete">Delete</button></div></div>`;
-    overlay.classList.add('show');
+    const overlay = showTemplateModal('learnDeleteModalTemplate');
+    overlay.querySelector('#learnDeleteTrigger').textContent = trigger;
     overlay.querySelector('#btnCancelLearnDelete').addEventListener('click', () => overlay.classList.remove('show'));
     overlay.querySelector('#btnConfirmLearnDelete').addEventListener('click', async event => {
       event.target.disabled = true;
@@ -758,52 +879,42 @@ document.addEventListener('DOMContentLoaded', async () => {
     const list = document.getElementById('ticketTypeList');
     if (!list) return;
     list.innerHTML = '';
-    if (ticketTypes.length === 0) { list.innerHTML = '<div class="empty-state" style="padding:14px">No ticket categories defined yet.</div>'; return; }
+    if (ticketTypes.length === 0) { list.innerHTML = '<div class="empty-state empty-state-compact">No ticket categories defined yet.</div>'; return; }
     ticketTypes.forEach((t, i) => {
       const item = document.createElement('div');
       item.className = 'ticket-type-item';
-      item.innerHTML = `<span class="tt-emoji">${renderEmoji(t.emoji || '🎫')}</span><div class="tt-info"><div class="tt-label">${esc(t.label || 'Untitled')}</div><div class="tt-desc">${esc(t.description || '')}</div></div><div class="tt-actions"><button type="button" class="tt-edit" data-idx="${i}" title="Edit Category" style="background:transparent; border:none; cursor:pointer; color:var(--text-muted); font-size:16px;">${I.edit}</button><button type="button" class="tt-remove" data-idx="${i}" title="Remove Category">${I.x}</button></div>`;
+      item.innerHTML = `<span class="tt-emoji">${renderEmoji(t.emoji || '🎫')}</span><div class="tt-info"><div class="tt-label">${esc(t.label || 'Untitled')}</div><div class="tt-desc">${esc(t.description || '')}</div></div><div class="tt-actions"><button type="button" class="tt-edit" data-idx="${i}" title="Edit Category">${I.edit}</button><button type="button" class="tt-remove" data-idx="${i}" title="Remove Category">${I.x}</button></div>`;
       item.querySelector('.tt-edit').addEventListener('click', () => showEditTicketTypeModal(i));
       item.querySelector('.tt-remove').addEventListener('click', () => { ticketTypes.splice(i, 1); renderTicketTypes(); });
       list.appendChild(item);
     });
   }
-  function showEditTicketTypeModal(idx) {
-    const t = ticketTypes[idx];
-    let overlay = document.getElementById('modalOverlay');
-    if (!overlay) { overlay = document.createElement('div'); overlay.id = 'modalOverlay'; overlay.className = 'modal-overlay'; document.body.appendChild(overlay); }
-    overlay.innerHTML = `<div class="modal"><h3>Edit Ticket Category</h3>${makeInput('ttId', 'Category ID / Prefix', 'general', 'Used for channel names (e.g. general-0001)', 'text', esc(t.id || t.value || t.channelPrefix || ''))}${makeInput('ttLabel', 'Label', 'General Support', '', 'text', esc(t.label || ''))}${makeInput('ttEmoji', 'Emoji', '🎫', '', 'text', esc(t.emoji || ''))}${makeInput('ttDescription', 'Description', 'Get help with general questions.', '', 'text', esc(t.description || ''))}<div class="modal-actions"><button class="btn-modal" id="btnCancelModal">Cancel</button><button class="btn-modal primary" id="btnConfirmModal">Save</button></div></div>`;
-    overlay.classList.add('show');
+  function showTicketTypeModal(idx = null) {
+    const current = idx === null ? null : ticketTypes[idx];
+    const overlay = showTemplateModal('ticketTypeModalTemplate');
+    overlay.querySelector('#ticketTypeModalTitle').textContent = current ? 'Edit Ticket Category' : 'Add Ticket Category';
+    overlay.querySelector('#btnConfirmModal').textContent = current ? 'Save' : 'Add';
+    overlay.querySelector('#ttId').value = current?.id || current?.value || current?.channelPrefix || '';
+    overlay.querySelector('#ttLabel').value = current?.label || '';
+    overlay.querySelector('#ttEmoji').value = current?.emoji || '';
+    overlay.querySelector('#ttDescription').value = current?.description || '';
     overlay.querySelector('#btnCancelModal').addEventListener('click', () => overlay.classList.remove('show'));
     overlay.querySelector('#btnConfirmModal').addEventListener('click', () => {
-      const id = document.getElementById('ttId')?.value?.trim() || document.getElementById('ttLabel')?.value?.trim().toLowerCase().replace(/\s+/g, '_');
-      const label = document.getElementById('ttLabel')?.value?.trim();
-      const emoji = document.getElementById('ttEmoji')?.value?.trim() || '🎫';
-      const description = document.getElementById('ttDescription')?.value?.trim() || '';
+      const label = overlay.querySelector('#ttLabel').value.trim();
+      const id = overlay.querySelector('#ttId').value.trim() || label.toLowerCase().replace(/\s+/g, '_');
+      const emoji = overlay.querySelector('#ttEmoji').value.trim() || '🎫';
+      const description = overlay.querySelector('#ttDescription').value.trim();
       if (!label) return;
-      ticketTypes[idx] = { ...t, id, label, emoji, description, channelPrefix: id };
+      const entry = { ...(current || {}), id, label, emoji, description, channelPrefix: id };
+      if (idx === null) ticketTypes.push(entry);
+      else ticketTypes[idx] = entry;
       renderTicketTypes();
       overlay.classList.remove('show');
     });
+    overlay.addEventListener('click', event => { if (event.target === overlay) overlay.classList.remove('show'); });
   }
-  function showAddTicketTypeModal() {
-    let overlay = document.getElementById('modalOverlay');
-    if (!overlay) { overlay = document.createElement('div'); overlay.id = 'modalOverlay'; overlay.className = 'modal-overlay'; document.body.appendChild(overlay); }
-    overlay.innerHTML = `<div class="modal"><h3>Add Ticket Category</h3>${makeInput('ttId', 'Category ID / Prefix', 'general', 'Used for channel names (e.g. general-0001)')}${makeInput('ttLabel', 'Label', 'General Support', '')}${makeInput('ttEmoji', 'Emoji', '🎫', '')}${makeInput('ttDescription', 'Description', 'Get help with general questions.', '')}<div class="modal-actions"><button class="btn-modal" id="btnCancelModal">Cancel</button><button class="btn-modal primary" id="btnConfirmModal">Add</button></div></div>`;
-    overlay.classList.add('show');
-    overlay.querySelector('#btnCancelModal').addEventListener('click', () => overlay.classList.remove('show'));
-    overlay.querySelector('#btnConfirmModal').addEventListener('click', () => {
-      const id = document.getElementById('ttId')?.value?.trim() || document.getElementById('ttLabel')?.value?.trim().toLowerCase().replace(/\s+/g, '_');
-      const label = document.getElementById('ttLabel')?.value?.trim();
-      const emoji = document.getElementById('ttEmoji')?.value?.trim() || '🎫';
-      const description = document.getElementById('ttDescription')?.value?.trim() || '';
-      if (!label) return;
-      ticketTypes.push({ id, label, emoji, description, channelPrefix: id });
-      renderTicketTypes();
-      overlay.classList.remove('show');
-    });
-    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.classList.remove('show'); });
-  }
+  function showEditTicketTypeModal(idx) { showTicketTypeModal(idx); }
+  function showAddTicketTypeModal() { showTicketTypeModal(); }
   function initStatusServerManager() {
     document.getElementById('btnAddStatusServer')?.addEventListener('click', () => showAddStatusServerModal());
     renderStatusServers();
@@ -851,7 +962,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const list = document.getElementById('statusServersList');
     if (!list) return;
     list.innerHTML = '';
-    if (statusServers.length === 0) { list.innerHTML = '<div class="empty-state" style="padding:14px">No servers tracked yet.</div>'; return; }
+    if (statusServers.length === 0) { list.innerHTML = '<div class="empty-state empty-state-compact">No servers tracked yet.</div>'; return; }
     statusServers.forEach((s, i) => {
       const item = document.createElement('div');
       item.className = 'ticket-type-item';
@@ -862,10 +973,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
   function showAddStatusServerModal() {
-    let overlay = document.getElementById('modalOverlay');
-    if (!overlay) { overlay = document.createElement('div'); overlay.id = 'modalOverlay'; overlay.className = 'modal-overlay'; document.body.appendChild(overlay); }
-    overlay.innerHTML = `<div class="modal"><h3>Add Tracked Server</h3>${makeInput('msIp', 'Server IP', 'play.example.com or play.example.com:25570', '')}${makeInput('msPort', 'Server Port', '25565 (optional)', 'Leave blank when the IP already contains a port.', 'number')}${makeChannelPicker('msChannel', 'Update Channel', '', [0, 5])}<div class="modal-actions"><button class="btn-modal" id="btnCancelModal">Cancel</button><button class="btn-modal primary" id="btnConfirmModal">Add</button></div></div>`;
-    overlay.classList.add('show');
+    const overlay = showTemplateModal('statusServerModalTemplate');
+    populatePickerOptions(overlay);
 
     const wrap = overlay.querySelector('.picker-wrap[data-picker-id="msChannel"]');
     const dropdown = wrap?.querySelector('.picker-dropdown');
@@ -882,9 +991,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
     search?.addEventListener('input', () => {
       const query = search.value.toLowerCase();
-      options.forEach(option => {
-        option.style.display = option.textContent.toLowerCase().includes(query) ? '' : 'none';
-      });
+      options.forEach(option => option.classList.toggle('hidden', !option.textContent.toLowerCase().includes(query)));
     });
     options.forEach(option => option.addEventListener('click', (event) => {
       event.stopPropagation();
@@ -922,42 +1029,66 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
 
-  window.showGuideModal = function(type) {
-    const t = window.NexI18n ? window.NexI18n.t.bind(window.NexI18n) : (k) => k;
-    let overlay = document.getElementById('modalOverlay');
-    if (!overlay) { overlay = document.createElement('div'); overlay.id = 'modalOverlay'; overlay.className = 'modal-overlay'; document.body.appendChild(overlay); }
-
-    const baseUrl = window.location.origin;
-    const isPayos = type === 'payos';
-    const title = t(isPayos ? 'guide_title_payos' : 'guide_title_card2k');
-    const steps = t(isPayos ? 'guide_payos_steps' : 'guide_card2k_steps');
-    const webhookUrl = isPayos ? `${baseUrl}/api/webhooks/payos` : `${baseUrl}/api/webhooks/card2k`;
-    const copyText = t('guide_copy');
-
-    let stepsHtml = '<ol class="guide-steps">';
-    if (Array.isArray(steps)) {
-      steps.forEach(step => {
-        stepsHtml += `<li>${step}`;
-        if (step.includes('Webhook') || step.includes('Callback')) {
-          stepsHtml += `<div class="guide-webhook-url"><code>${webhookUrl}</code><button type="button" data-copy="${webhookUrl}" data-copied-label="${t('guide_copied')}" data-copy-label="${copyText}">${copyText}</button></div>`;
-        }
-        stepsHtml += '</li>';
-      });
+  function appendGuideStepContent(item, value) {
+    const template = document.createElement('template');
+    template.innerHTML = String(value || '');
+    for (const node of [...template.content.childNodes]) {
+      if (node.nodeType === Node.TEXT_NODE) {
+        item.appendChild(document.createTextNode(node.textContent));
+        continue;
+      }
+      if (node.nodeType !== Node.ELEMENT_NODE) continue;
+      if (node.tagName === 'STRONG') {
+        const strong = document.createElement('strong');
+        strong.textContent = node.textContent;
+        item.appendChild(strong);
+      } else if (node.tagName === 'A' && /^https:\/\/(payos\.vn|card2k\.com)\/?$/i.test(node.href)) {
+        const link = document.createElement('a');
+        link.href = node.href;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.textContent = node.textContent;
+        item.appendChild(link);
+      } else {
+        item.appendChild(document.createTextNode(node.textContent));
+      }
     }
-    stepsHtml += '</ol>';
+  }
 
-    overlay.innerHTML = `<div class="modal" style="max-width:560px;"><h3>${title}</h3>${stepsHtml}<div class="modal-actions"><button class="btn-modal primary" id="btnCloseGuide">${t('cancel') === 'cancel' ? 'Close' : 'Đóng'}</button></div></div>`;
-    overlay.classList.add('show');
-    overlay.querySelector('#btnCloseGuide').addEventListener('click', () => overlay.classList.remove('show'));
-    overlay.querySelectorAll('[data-copy]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        navigator.clipboard.writeText(btn.dataset.copy).then(() => {
-          btn.textContent = btn.dataset.copiedLabel;
-          setTimeout(() => { btn.textContent = btn.dataset.copyLabel; }, 2000);
+  window.showGuideModal = function(type) {
+    const t = window.NexI18n ? window.NexI18n.t.bind(window.NexI18n) : key => key;
+    const overlay = showTemplateModal('guideModalTemplate');
+    const isPayos = type === 'payos';
+    const steps = t(isPayos ? 'guide_payos_steps' : 'guide_card2k_steps');
+    const webhookUrl = `${window.location.origin}/api/webhooks/${isPayos ? 'payos' : 'card2k'}`;
+    const copyText = t('guide_copy');
+    overlay.querySelector('#guideModalTitle').textContent = t(isPayos ? 'guide_title_payos' : 'guide_title_card2k');
+    overlay.querySelector('#btnCloseGuide').textContent = t('cancel') === 'cancel' ? 'Close' : 'Đóng';
+    const list = overlay.querySelector('#guideSteps');
+    for (const step of Array.isArray(steps) ? steps : []) {
+      const item = document.createElement('li');
+      appendGuideStepContent(item, step);
+      if (step.includes('Webhook') || step.includes('Callback')) {
+        const row = document.createElement('div');
+        row.className = 'guide-webhook-url';
+        const code = document.createElement('code');
+        code.textContent = webhookUrl;
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = copyText;
+        button.addEventListener('click', () => {
+          navigator.clipboard.writeText(webhookUrl).then(() => {
+            button.textContent = t('guide_copied');
+            setTimeout(() => { button.textContent = copyText; }, 2000);
+          });
         });
-      });
-    });
-    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.classList.remove('show'); });
+        row.append(code, button);
+        item.appendChild(row);
+      }
+      list.appendChild(item);
+    }
+    overlay.querySelector('#btnCloseGuide').addEventListener('click', () => overlay.classList.remove('show'));
+    overlay.addEventListener('click', event => { if (event.target === overlay) overlay.classList.remove('show'); });
   };
   async function loadConfig(guildId, attempt = 0) {
     showStatus(attempt ? 'Database waking up, retrying...' : 'Loading configuration...', 'info');
@@ -1014,10 +1145,19 @@ document.addEventListener('DOMContentLoaded', async () => {
       renderTicketTypes();
       setPickerValue('jtcHubChannelId', c.jtcConfig?.hubChannelId);
       setPickerValue('jtcCategoryId', c.jtcConfig?.categoryId);
+      setPickerValue('jtcLfmChannelId', c.jtcConfig?.lfmChannelId);
       setVal('jtcDefaultName', c.jtcConfig?.defaultName || "🔊 {username}'s Room");
+      setVal('jtcDefaultStatus', c.jtcConfig?.defaultStatus || '');
       setVal('jtcDefaultLimit', String(c.jtcConfig?.defaultLimit ?? 0));
       setVal('jtcDefaultBitrate', String(Math.round((c.jtcConfig?.defaultBitrate || 64000) / 1000)));
+      const regionSelect = document.getElementById('jtcDefaultRegion');
+      if (regionSelect) {
+        regionSelect.innerHTML = '<option value="">Automatic</option>' + (c.voiceRegions || []).map(region => `<option value="${esc(region.id)}">${esc(region.name)}${region.optimal ? ' (Recommended)' : ''}</option>`).join('');
+        regionSelect.value = c.jtcConfig?.defaultRegion || '';
+      }
       setChecked('jtcDefaultLocked', c.jtcConfig?.defaultLocked === true);
+      setChecked('jtcDefaultHidden', c.jtcConfig?.defaultHidden === true);
+      setChecked('jtcDefaultNsfw', c.jtcConfig?.defaultNsfw === true);
       setChecked('antiSpamEnabled', c.modConfig?.antiSpam !== false);
       setChecked('antiLinkEnabled', c.modConfig?.antiLink !== false);
       setChecked('antiRaidEnabled', c.modConfig?.antiRaid !== false);
@@ -1108,10 +1248,15 @@ document.addEventListener('DOMContentLoaded', async () => {
       jtcConfig: {
         hubChannelId: getPickerValue('jtcHubChannelId'),
         categoryId: getPickerValue('jtcCategoryId'),
+        lfmChannelId: getPickerValue('jtcLfmChannelId'),
         defaultName: getVal('jtcDefaultName') || "🔊 {username}'s Room",
         defaultLimit: Number(getVal('jtcDefaultLimit') || 0),
         defaultLocked: isChecked('jtcDefaultLocked'),
+        defaultHidden: isChecked('jtcDefaultHidden'),
         defaultBitrate: Number(getVal('jtcDefaultBitrate') || 64) * 1000,
+        defaultStatus: getVal('jtcDefaultStatus'),
+        defaultRegion: getVal('jtcDefaultRegion'),
+        defaultNsfw: isChecked('jtcDefaultNsfw'),
       },
       modConfig: {
         antiSpam: isChecked('antiSpamEnabled'),
@@ -1184,8 +1329,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     setVal(id, color);
     const cInput = document.getElementById(id + 'Color');
     if (cInput && /^#[0-9A-Fa-f]{6}$/.test(color)) cInput.value = color;
-    const dot = document.getElementById(id + 'Dot');
-    if (dot) dot.style.background = color;
   }
   function showStatus(msg, type) { if (saveStatus) { saveStatus.textContent = msg; saveStatus.className = `save-status ${type}`; } }
   function esc(s) { if (!s) return ''; const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
@@ -1198,11 +1341,11 @@ document.addEventListener('DOMContentLoaded', async () => {
       const name = match[2];
       const id = match[3];
       const ext = animated ? 'gif' : 'png';
-      return `<img src="https://cdn.discordapp.com/emojis/${id}.${ext}" alt="${esc(name)}" style="width:22px;height:22px;vertical-align:middle;object-fit:contain" />`;
+      return `<img src="https://cdn.discordapp.com/emojis/${id}.${ext}" alt="${esc(name)}" class="ticket-emoji-image" />`;
     }
     return esc(raw);
   }
-  window.addEventListener('popstate', (e) => {
+  window.addEventListener('popstate', () => {
     const route = parseRoute();
     if (route.serverId && guildsData.length) {
       const guild = guildsData.find(g => g.id === route.serverId);
@@ -1216,10 +1359,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   function parseMentions(str) {
     if (!str) return '';
     return esc(str)
-      .replace(/&lt;@!?(\d+)&gt;/g, '<span style="background:var(--brand-experiment-15a);color:var(--brand-experiment);padding:0 4px;border-radius:3px;">@User</span>')
-      .replace(/&lt;@&amp;(\d+)&gt;/g, '<span style="background:var(--brand-experiment-15a);color:var(--brand-experiment);padding:0 4px;border-radius:3px;">@Role</span>')
-      .replace(/&lt;#(\d+)&gt;/g, '<span style="background:var(--brand-experiment-15a);color:var(--brand-experiment);padding:0 4px;border-radius:3px;">#channel</span>')
-      .replace(/&lt;(a?):(\w+):(\d+)&gt;/g, (_, animated, name, id) => `<img src="https://cdn.discordapp.com/emojis/${id}.${animated ? 'gif' : 'png'}" alt=":${name}:" style="width:18px;height:18px;vertical-align:middle;"/>`);
+      .replace(/&lt;@!?(\d+)&gt;/g, '<span class="discord-mention">@User</span>')
+      .replace(/&lt;@&amp;(\d+)&gt;/g, '<span class="discord-mention">@Role</span>')
+      .replace(/&lt;#(\d+)&gt;/g, '<span class="discord-mention">#channel</span>')
+      .replace(/&lt;(a?):(\w+):(\d+)&gt;/g, (_, animated, name, id) => `<img src="https://cdn.discordapp.com/emojis/${id}.${animated ? 'gif' : 'png'}" alt=":${name}:" class="discord-emoji"/>`);
   }
 
   async function loadTranscripts(page = 1) {
@@ -1241,7 +1384,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       });
       let html = '';
       for (const [date, items] of Object.entries(grouped)) {
-        html += `<div style="margin-bottom:24px;"><div style="font-size:13px;font-weight:600;color:var(--text-m);text-transform:uppercase;margin-bottom:8px;letter-spacing:0.5px;">${esc(date)}</div>`;
+        html += `<div class="transcript-group"><div class="transcript-date">${esc(date)}</div>`;
         items.forEach(t => {
           const time = new Date(t.created_at).toLocaleTimeString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh', hour: '2-digit', minute: '2-digit' });
           let metaHtml = `Created at ${time}`;
@@ -1251,17 +1394,17 @@ document.addEventListener('DOMContentLoaded', async () => {
           if (t.claimed_by) {
             metaHtml += ` • Claimed by ${/^\d+$/.test(t.claimed_by) ? parseMentions('<@' + t.claimed_by + '>') : esc(t.claimed_by)}`;
           }
-          html += `<div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--r-md);margin-bottom:6px;">`;
-          html += `<div style="display:flex;flex-direction:column;gap:2px;"><span style="font-weight:600;color:var(--text);">#${esc(t.ticket_name)}</span><span style="font-size:12px;color:var(--text-m);">${metaHtml}</span></div>`;
-          html += `<a href="/transcript/${esc(t.id)}" target="_blank" style="padding:6px 16px;background:var(--accent);color:#fff;border-radius:var(--r-md);font-size:13px;font-weight:600;text-decoration:none;white-space:nowrap;">View</a>`;
+          html += `<div class="transcript-row">`;
+          html += `<div class="transcript-info"><span class="transcript-name">#${esc(t.ticket_name)}</span><span class="transcript-meta">${metaHtml}</span></div>`;
+          html += `<a href="/transcript/${esc(t.id)}" target="_blank" rel="noopener noreferrer" class="transcript-view">View</a>`;
           html += `</div>`;
         });
         html += `</div>`;
       }
       if (!Array.isArray(payload) && payload.totalPages > 1) {
-        html += `<div style="display:flex;align-items:center;justify-content:center;gap:12px;margin-top:16px;">`;
+        html += `<div class="transcript-pagination">`;
         html += `<button type="button" class="btn-back" data-transcript-page="${payload.page - 1}" ${payload.page <= 1 ? 'disabled' : ''}>Previous</button>`;
-        html += `<span style="color:var(--text-m);font-size:13px;">Page ${payload.page} of ${payload.totalPages} • ${payload.total} transcripts</span>`;
+        html += `<span class="transcript-page-label">Page ${payload.page} of ${payload.totalPages} • ${payload.total} transcripts</span>`;
         html += `<button type="button" class="btn-back" data-transcript-page="${payload.page + 1}" ${payload.page >= payload.totalPages ? 'disabled' : ''}>Next</button>`;
         html += `</div>`;
       }

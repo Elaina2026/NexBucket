@@ -1,5 +1,6 @@
 import { supabase } from '../../database/supabaseClient.js';
 import crypto from 'crypto';
+import { hashTranscriptPassword } from '../../dashboard/dashboardUtils.js';
 
 
 
@@ -90,13 +91,13 @@ export async function createWebTranscript(channel, closedBy, creatorId) {
     }
 
     const transcriptId = crypto.randomUUID();
-    const password = crypto.randomBytes(5).toString('hex');
+    const password = crypto.randomBytes(16).toString('hex');
 
     const { error } = await supabase.from('ticket_transcripts').insert({
       id: transcriptId,
       guild_id: channel.guildId,
       ticket_name: channel.name,
-      password: password,
+      password: hashTranscriptPassword(password),
       closed_by: closedBy,
       creator_id: creatorId || '',
       claimed_by: claimedBy || '',

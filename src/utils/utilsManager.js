@@ -1,65 +1,8 @@
 import { EmbedBuilder } from './embed.js';
 import { MessageFlags, PermissionFlagsBits, ActionRowBuilder, StringSelectMenuBuilder, AttachmentBuilder } from 'discord.js';
 import ms from 'ms';
-import { supabase } from '../database/supabaseClient.js';
-async function getReminders(now = Date.now()) {
-  if (!supabase) return [];
-  try {
-    const { data } = await supabase
-      .from('reminders')
-      .select('id, user_id, message, end_time, created_at, done')
-      .eq('done', false)
-      .lte('end_time', now)
-      .order('end_time', { ascending: true })
-      .limit(100);
-    if (!data) return [];
-    return data.map(r => ({
-      id: r.id,
-      userId: r.user_id,
-      message: r.message,
-      endTime: r.end_time,
-      createdAt: r.created_at,
-      done: r.done
-    }));
-  } catch { return []; }
-}
-async function addReminder(r) {
-  if (!supabase) return;
-  await supabase.from('reminders').insert({
-    user_id: r.userId,
-    message: r.message,
-    end_time: r.endTime,
-    created_at: r.createdAt,
-    done: false
-  });
-}
-async function markReminderDone(id) {
-  if (!supabase) return;
-  await supabase.from('reminders').update({ done: true }).eq('id', id);
-}
-export async function checkReminders(client) {
-  const now = Date.now();
-  const data = await getReminders(now);
-  for (let i = 0; i < data.length; i++) {
-    const r = data[i];
-    if (!r.done && now >= r.endTime) {
-      try {
-        const user = await client.users.fetch(r.userId).catch(() => null);
-        if (user) {
-          const embed = new EmbedBuilder()
-            .setTitle('⏰ Reminder')
-            .setColor('#5865F2')
-            .setDescription(`**${r.message}**`)
-            .setTimestamp(r.createdAt);
-          await user.send({ embeds: [embed] });
-        }
-      } catch (e) {
-        console.error('[Remind] Cannot send DM', e);
-      }
-      await markReminderDone(r.id);
-    }
-  }
-}
+import { addReminder } from './reminderManager.js';
+export { checkReminders } from './reminderManager.js';
 import { saveBotRoles, isBotOwner, getBotRoles } from './permissionManager.js';
 import { addToBlacklist, removeFromBlacklist } from './blacklistManager.js';
 async function applyBotRolesOverwrites(channel, guildId, perms) {
@@ -700,7 +643,7 @@ export async function handleBotGuideSelect(interaction) {
       break;
     case 'guide_jtc':
       title = '🔊 Join To Create Guide';
-      description = `**Setup**\n\`/setup-jtc\` — Create the voice hub.\n\n**Room Controls**\nOwners can rename, lock, limit, or change bitrate from the control panel.\n\n**Admin Commands**\n\`!vlock / !vunlock\`, \`!vlimit <number>\`, \`!vmute / !vunmute @user\`, \`!dc @user\`.`;
+      description = `**Setup**\n\`/setup-jtc\` — Create the voice hub, then configure Category and LFM channel in the web dashboard.\n\n**Room Controls**\nOwners can change name, limit, status, game, bitrate, region and NSFW; post LFM; lock, ghost, permit, reject, invite or transfer the room.\n\n**Profiles**\nUse **Save Current**, **Load Settings**, or **Dashboard** in the room panel. Profiles are private and saved separately for each server.`;
       break;
     case 'guide_giveaway':
       title = '🎁 Giveaway Guide';

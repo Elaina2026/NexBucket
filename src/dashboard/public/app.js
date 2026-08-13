@@ -24,15 +24,11 @@ function initTabs() {
   btns.forEach(btn => {
     btn.addEventListener('click', () => {
       btns.forEach(b => b.classList.remove('active'));
-      contents.forEach(c => {
-        c.classList.remove('active');
-        c.style.display = 'none';
-      });
+      contents.forEach(c => c.classList.remove('active'));
       btn.classList.add('active');
       const target = document.getElementById(btn.dataset.tab);
       if (target) {
         target.classList.add('active');
-        target.style.display = 'block';
         if (btn.dataset.tab === 'tab-ai-models') fetchAiModels();
       }
     });
@@ -236,13 +232,13 @@ function renderServices(data) {
     card.className = 'service-card';
     card.innerHTML = `
       <div class="service-header">
-        <span class="service-name">${icon} ${svc.name}</span>
+        <span class="service-name">${icon} ${escapeHTML(svc.name)}</span>
         <span class="service-status ${textClass}">
           <span class="dot ${dotClass}"></span>
           ${statusLabel}
         </span>
       </div>
-      <p class="service-desc">${svc.description}</p>
+      <p class="service-desc">${escapeHTML(svc.description)}</p>
       <div class="uptime-bar-wrap">
         <div class="uptime-bars">${barsHTML}</div>
         <div class="uptime-labels">
@@ -259,8 +255,13 @@ async function refreshAll() {
   if (isRefreshing) return;
   isRefreshing = true;
   const timerEl = document.getElementById('refreshBadge');
-  const originalHtml = timerEl?.innerHTML || '';
-  if (timerEl) timerEl.innerHTML = '<span style="color:var(--text-muted)">Syncing...</span>';
+  const originalContent = timerEl ? [...timerEl.childNodes] : [];
+  if (timerEl) {
+    const syncing = document.createElement('span');
+    syncing.className = 'syncing-label';
+    syncing.textContent = 'Syncing...';
+    timerEl.replaceChildren(syncing);
+  }
   try {
     const [health, services] = await Promise.all([
       fetchJSON('/api/health'),
@@ -269,7 +270,7 @@ async function refreshAll() {
     renderHealth(health);
     renderServices(services);
   } finally {
-    if (timerEl) timerEl.innerHTML = originalHtml;
+    if (timerEl) timerEl.replaceChildren(...originalContent);
     isRefreshing = false;
   }
 }

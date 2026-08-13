@@ -10,6 +10,7 @@ import {
   normalizeIpOrDomain,
   parseRdapDomain,
   probeProtocol,
+  registrationSource,
   resolvePublicTarget,
 } from '../network/networkLookup.js';
 
@@ -32,6 +33,7 @@ test('DNS lookup keeps partial records when another resolver fails', async () =>
     resolveTxt: async () => [['v=spf1', ' -all']],
     resolveCname: async () => { throw missing; },
     resolveCaa: async () => { throw new Error('Resolver unavailable'); },
+    resolveDs: async () => [{ keyTag: 123, algorithm: 13, digestType: 2, digest: 'ABC' }],
     resolveSoa: async () => ({ nsname: 'ns1.example.com', hostmaster: 'hostmaster.example.com', serial: 1 }),
   };
   const records = await lookupDnsRecords('example.com', resolver);
@@ -40,6 +42,7 @@ test('DNS lookup keeps partial records when another resolver fails', async () =>
   assert.deepEqual(records.TXT.values, ['v=spf1 -all']);
   assert.equal(records.AAAA.error, null);
   assert.equal(records.CAA.error, 'Resolver unavailable');
+  assert.deepEqual(records.DS.values, ['123 13 2 ABC']);
 });
 
 test('RDAP parsing extracts registration data without exposing contacts', () => {
@@ -77,7 +80,7 @@ test('RDAP uses direct Verisign endpoints for com and net domains', async () => 
 test('domain lookup returns DNS data when RDAP times out', async () => {
   const missing = Object.assign(new Error('missing'), { code: 'ENODATA' });
   const resolver = Object.fromEntries([
-    'resolve4', 'resolve6', 'resolveMx', 'resolveNs', 'resolveTxt', 'resolveCname', 'resolveCaa', 'resolveSoa',
+    'resolve4', 'resolve6', 'resolveMx', 'resolveNs', 'resolveTxt', 'resolveCname', 'resolveCaa', 'resolveDs', 'resolveSoa',
   ].map(method => [method, async () => method === 'resolve4' ? ['8.8.8.8'] : Promise.reject(missing)]));
   const result = await lookupDomain('example.com', {
     resolver,
@@ -85,7 +88,32 @@ test('domain lookup returns DNS data when RDAP times out', async () => {
   });
   assert.equal(result.rdap, null);
   assert.equal(result.rdapError, 'Timed out');
+  assert.equal(result.dnssec, 'Unsigned');
   assert.deepEqual(result.records.A.values, ['8.8.8.8']);
+});
+
+test('.vn uses the official manual registry source and DNS DS without RDAP requests', async () => {
+  const missing = Object.assign(new Error('missing'), { code: 'ENODATA' });
+  let fetchCalls = 0;
+  const resolver = Object.fromEntries([
+    'resolve4', 'resolve6', 'resolveMx', 'resolveNs', 'resolveTxt', 'resolveCname', 'resolveCaa', 'resolveDs', 'resolveSoa',
+  ].map(method => [method, async () => {
+    if (method === 'resolve4') return ['172.67.154.27', '104.21.4.102'];
+    if (method === 'resolveNs') return ['gigi.ns.cloudflare.com', 'lennox.ns.cloudflare.com'];
+    if (method === 'resolveDs') return [{ keyTag: 2371, algorithm: 13, digestType: 2, digest: 'ABC' }];
+    throw missing;
+  }]));
+  const result = await lookupDomain('ELAINA2026.IO.VN.', {
+    resolver,
+    fetchImpl: async () => { fetchCalls++; throw new Error('must not fetch'); },
+  });
+  assert.equal(result.domain, 'elaina2026.io.vn');
+  assert.deepEqual(registrationSource(result.domain), result.registrationSource);
+  assert.equal(result.registrationSource.label, 'VNNIC');
+  assert.equal(result.registrationSource.type, 'manual');
+  assert.equal(result.rdapError, null);
+  assert.equal(result.dnssec, 'Signed');
+  assert.equal(fetchCalls, 0);
 });
 
 test('public target resolution blocks direct and DNS-resolved internal addresses', async () => {

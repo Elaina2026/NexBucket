@@ -62,21 +62,19 @@
 
 
     <div id="accessDenied" class="hero-card hidden">
-      <div class="hero-icon" style="background:linear-gradient(135deg,#f04747,#ff6b6b)">
+      <div class="hero-icon admin-danger-icon">
         <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5" width="36" height="36">
           <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
         </svg>
       </div>
       <h2>Access Denied</h2>
-      <p>This panel is restricted to the bot owner. Please <a href="/api/auth/login"
-          style="color:var(--accent)">login</a> with the owner account.</p>
+      <p>This panel is restricted to the bot owner. Please <a href="/api/auth/login" class="text-accent">login</a> with the owner account.</p>
     </div>
 
     <div id="adminContent" class="hidden">
       <div class="layout-grid">
         <nav class="sidebar" id="sidebar">
-          <div class="sidebar-server-info"
-            style="padding-bottom:10px; border-bottom:1px solid var(--border); margin-bottom:10px;">
+          <div class="sidebar-server-info admin-sidebar-heading">
             <div class="server-avatar">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
@@ -130,9 +128,8 @@
 
         <section class="content-area" id="contentArea">
           <div class="content-section active" id="sec-overview">
-            <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px;" class="bento-overview-layout">
-              <div class="bento-card bento-overview-left"
-                style="display:flex; flex-direction:column; min-height:300px;">
+            <div class="bento-overview-layout admin-grid-2">
+              <div class="bento-card bento-overview-left admin-growth-card">
                 <h3 class="bento-title">
                   <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <polyline points="23 6 13.5 15.5 8.5 10.5 1 18" />
@@ -140,25 +137,24 @@
                   </svg>
                   Server & User Growth
                 </h3>
-                <div class="chart-wrap" id="growthChart"
-                  style="flex:1; display:flex; flex-direction:column; justify-content:center;">
+                <div class="chart-wrap admin-growth-chart" id="growthChart">
                   <div class="empty-state">Loading growth data...</div>
                 </div>
               </div>
 
-              <div class="bento-overview-right" style="display:flex; flex-direction:column; gap:16px;">
-                <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; flex:1;">
-                  <div class="bento-card" style="display:flex; flex-direction:column; justify-content:space-between; position:relative; overflow:hidden; padding-bottom:0;">
-                    <div style="padding-bottom:15px;">
-                      <div style="font-size:14px; color:var(--text-s);">Servers</div>
-                      <div style="font-size:36px; font-weight:800; color:var(--text); margin:5px 0;" id="sGuilds">—</div>
-                      <div style="font-size:13px; font-weight:600; color:var(--green); display:flex; align-items:center; gap:4px;">
+              <div class="bento-overview-right admin-column-gap">
+                <div class="admin-grid-2-fill">
+                  <div class="bento-card admin-stat-card">
+                    <div class="admin-stat-body">
+                      <div class="admin-stat-label">Servers</div>
+                      <div class="admin-stat-value-xl" id="sGuilds">—</div>
+                      <div class="admin-stat-positive-row">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg>
                         <span id="sGuildsGrowth">0%</span> This Week
                       </div>
                     </div>
-                    <div style="margin-left:-20px; margin-right:-20px;">
-                      <svg viewBox="0 0 100 30" preserveAspectRatio="none" style="width:100%; height:40px; display:block;">
+                    <div class="admin-sparkline-wrap">
+                      <svg viewBox="0 0 100 30" preserveAspectRatio="none" class="admin-sparkline">
                         <path d="M0 30 L20 20 L40 25 L60 10 L80 15 L100 5" fill="none" stroke="var(--accent)" stroke-width="2" />
                         <linearGradient id="grad1" x1="0" y1="0" x2="0" y2="1">
                           <stop offset="0%" stop-color="var(--accent)" stop-opacity="0.2"/>
@@ -168,17 +164,17 @@
                       </svg>
                     </div>
                   </div>
-                  <div class="bento-card" style="display:flex; flex-direction:column; justify-content:space-between; position:relative; overflow:hidden; padding-bottom:0;">
-                    <div style="padding-bottom:15px;">
-                      <div style="font-size:14px; color:var(--text-s);">Total Users</div>
-                      <div style="font-size:36px; font-weight:800; color:var(--text); margin:5px 0;" id="sUsers">—</div>
-                      <div style="font-size:13px; font-weight:600; color:var(--green); display:flex; align-items:center; gap:4px;">
+                  <div class="bento-card admin-stat-card">
+                    <div class="admin-stat-body">
+                      <div class="admin-stat-label">Total Users</div>
+                      <div class="admin-stat-value-xl" id="sUsers">—</div>
+                      <div class="admin-stat-positive-row">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg>
                         <span id="sUsersGrowth">0%</span> This Week
                       </div>
                     </div>
-                    <div style="margin-left:-20px; margin-right:-20px;">
-                      <svg viewBox="0 0 100 30" preserveAspectRatio="none" style="width:100%; height:40px; display:block;">
+                    <div class="admin-sparkline-wrap">
+                      <svg viewBox="0 0 100 30" preserveAspectRatio="none" class="admin-sparkline">
                         <path d="M0 30 L20 22 L40 28 L60 15 L80 10 L100 2" fill="none" stroke="#43b581" stroke-width="2" />
                         <linearGradient id="grad2" x1="0" y1="0" x2="0" y2="1">
                           <stop offset="0%" stop-color="#43b581" stop-opacity="0.2"/>
@@ -190,15 +186,15 @@
                   </div>
                 </div>
 
-                <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; flex:1;">
-                  <div class="bento-card" style="display:flex; flex-direction:column; justify-content:space-between; position:relative; overflow:hidden; padding-bottom:0;">
-                    <div style="padding-bottom:15px;">
-                      <div style="font-size:14px; color:var(--text-s);">Uptime</div>
-                      <div style="font-size:24px; font-weight:800; color:var(--text); margin:5px 0;" id="sUptime">—</div>
-                      <div style="font-size:13px; font-weight:600; color:var(--green);">Online</div>
+                <div class="admin-grid-2-fill">
+                  <div class="bento-card admin-stat-card">
+                    <div class="admin-stat-body">
+                      <div class="admin-stat-label">Uptime</div>
+                      <div class="admin-stat-value-md" id="sUptime">—</div>
+                      <div class="admin-stat-positive">Online</div>
                     </div>
-                    <div style="margin-left:-20px; margin-right:-20px;">
-                      <svg viewBox="0 0 100 30" preserveAspectRatio="none" style="width:100%; height:40px; display:block;">
+                    <div class="admin-sparkline-wrap">
+                      <svg viewBox="0 0 100 30" preserveAspectRatio="none" class="admin-sparkline">
                         <path d="M0 10 L20 10 L40 10 L60 10 L80 10 L100 10" fill="none" stroke="#faa61a" stroke-width="2" />
                         <linearGradient id="grad3" x1="0" y1="0" x2="0" y2="1">
                           <stop offset="0%" stop-color="#faa61a" stop-opacity="0.2"/>
@@ -208,14 +204,14 @@
                       </svg>
                     </div>
                   </div>
-                  <div class="bento-card" style="display:flex; flex-direction:column; justify-content:space-between; position:relative; overflow:hidden; padding-bottom:0;">
-                    <div style="padding-bottom:15px;">
-                      <div style="font-size:14px; color:var(--text-s);">Latency</div>
-                      <div style="font-size:24px; font-weight:800; color:var(--text); margin:5px 0;" id="sPing">—</div>
-                      <div style="font-size:13px; font-weight:600; color:var(--green);">Excellent</div>
+                  <div class="bento-card admin-stat-card">
+                    <div class="admin-stat-body">
+                      <div class="admin-stat-label">Latency</div>
+                      <div class="admin-stat-value-md" id="sPing">—</div>
+                      <div class="admin-stat-positive">Excellent</div>
                     </div>
-                    <div style="margin-left:-20px; margin-right:-20px;">
-                      <svg viewBox="0 0 100 30" preserveAspectRatio="none" style="width:100%; height:40px; display:block;">
+                    <div class="admin-sparkline-wrap">
+                      <svg viewBox="0 0 100 30" preserveAspectRatio="none" class="admin-sparkline">
                         <path d="M0 25 L10 22 L20 26 L30 15 L40 24 L50 20 L60 25 L70 18 L80 22 L90 26 L100 20" fill="none" stroke="#f04747" stroke-width="2" />
                         <linearGradient id="grad4" x1="0" y1="0" x2="0" y2="1">
                           <stop offset="0%" stop-color="#f04747" stop-opacity="0.2"/>
@@ -238,7 +234,7 @@
                 </svg>
                 Security Events Log
               </div>
-              <div id="securityFeed" class="security-feed bento-scroll" style="max-height: 600px;">
+              <div id="securityFeed" class="security-feed bento-scroll admin-scroll-tall">
                 <div class="empty-state">Loading security log...</div>
               </div>
             </div>
@@ -253,7 +249,7 @@
                 </svg>
                 Active Dashboard Sessions
               </div>
-              <div id="sessionsList" class="sessions-list bento-scroll" style="max-height: 600px;">
+              <div id="sessionsList" class="sessions-list bento-scroll admin-scroll-tall">
                 <div class="empty-state">Loading sessions...</div>
               </div>
             </div>
@@ -277,94 +273,76 @@
                 System Health & Storage
               </div>
 
-              <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:20px;"
-                class="bento-system-layout">
-                <div class="bento-card bento-sys-left"
-                  style="display:flex; flex-direction:column; justify-content:space-between; min-height: 200px;">
+              <div class="bento-system-layout admin-system-grid">
+                <div class="bento-card bento-sys-left admin-system-monitor">
                   <div>
-                    <div
-                      style="font-size:12px; color:var(--text-m); text-transform:uppercase; font-weight:600; letter-spacing:0.5px; margin-bottom:10px;">
+                    <div class="admin-overline">
                       SYSTEM MONITOR</div>
-                    <div style="font-size:14px; color:var(--text-s);">CPU Usage</div>
-                    <div style="font-size:48px; font-weight:800; color:var(--text); margin: 5px 0;" id="cpuUsage">0%
+                    <div class="admin-stat-label">CPU Usage</div>
+                    <div class="admin-system-value-xl" id="cpuUsage">0%
                     </div>
-                    <div style="font-size:12px; color:var(--text-m);" id="cpuModel">Loading...</div>
-                    <div class="progress-bar-bg"
-                      style="height:6px; background:var(--bg-tertiary); border-radius:3px; margin-top:15px; overflow:hidden;">
-                      <div class="progress-bar-fill" id="cpuBar" style="height:100%; width:0%; transition:width 0.5s;">
-                      </div>
-                    </div>
+                    <div class="admin-muted-small" id="cpuModel">Loading...</div>
+                    <progress class="progress-meter progress-meter-sm" id="cpuBar" max="100" value="0"></progress>
                   </div>
 
-                  <div style="margin-top:20px;">
-                    <svg viewBox="0 0 200 60" style="width:100%; height:80px; overflow:visible;">
+                  <div class="admin-chart-margin">
+                    <svg viewBox="0 0 200 60" class="admin-system-chart">
                       <path d="M0 50 L40 40 L80 45 L120 20 L160 30 L200 0" fill="none" stroke="var(--accent)"
                         stroke-width="4" stroke-linecap="round" stroke-linejoin="round" />
                     </svg>
                   </div>
                 </div>
 
-                <div class="bento-sys-right" style="display:flex; flex-direction:column; gap:16px;">
-                  <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; flex:1;">
-                    <div class="bento-card" style="display:flex; flex-direction:column; justify-content:center;">
-                      <div style="font-size:14px; color:var(--text-s);">Uptime</div>
-                      <div style="font-size:26px; font-weight:800; color:var(--text); margin: 5px 0;" id="sysUptime">—
+                <div class="bento-sys-right admin-column-gap">
+                  <div class="admin-grid-2-fill">
+                    <div class="bento-card admin-center-card">
+                      <div class="admin-stat-label">Uptime</div>
+                      <div class="admin-system-value" id="sysUptime">—
                       </div>
                     </div>
-                    <div class="bento-card" style="display:flex; flex-direction:column; justify-content:center;">
-                      <div style="font-size:14px; color:var(--text-s);">Latency</div>
-                      <div style="font-size:26px; font-weight:800; color:var(--green); margin: 5px 0;" id="sysPing">—
+                    <div class="bento-card admin-center-card">
+                      <div class="admin-stat-label">Latency</div>
+                      <div class="admin-system-value admin-system-value-good" id="sysPing">—
                       </div>
                     </div>
                   </div>
 
-                  <div class="bento-card" style="display:flex; flex-direction:column; justify-content:center;">
-                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                  <div class="bento-card admin-center-card">
+                    <div class="admin-between">
                       <div>
-                        <div style="font-size:14px; color:var(--text-s);">RAM Usage</div>
-                        <div style="font-size:24px; font-weight:800; color:var(--text); margin: 5px 0;" id="ramUsage">0
+                        <div class="admin-stat-label">RAM Usage</div>
+                        <div class="admin-stat-value-md" id="ramUsage">0
                           / 0 GB</div>
-                        <div style="font-size:12px; color:var(--text-m);">Process: <span id="ramProcess">0 MB</span>
+                        <div class="admin-muted-small">Process: <span id="ramProcess">0 MB</span>
                         </div>
                       </div>
-                      <div style="display:flex; align-items:center;">
-                        <div
-                          style="width:24px; height:24px; border-radius:50%; background:linear-gradient(135deg, #faa61a, #f57731); box-shadow:-2px 0 5px rgba(0,0,0,0.2); position:relative; z-index:1;">
+                      <div class="admin-avatar-stack">
+                        <div class="admin-stack-dot admin-stack-dot-orange">
                         </div>
-                        <div
-                          style="width:24px; height:24px; border-radius:50%; background:linear-gradient(135deg, #5865F2, #4FACFE); box-shadow:-2px 0 5px rgba(0,0,0,0.2); position:relative; z-index:2; margin-left:-8px;">
+                        <div class="admin-stack-dot admin-stack-dot-blue">
                         </div>
-                        <div
-                          style="width:24px; height:24px; border-radius:50%; background:linear-gradient(135deg, #43b581, #219653); box-shadow:-2px 0 5px rgba(0,0,0,0.2); position:relative; z-index:3; margin-left:-8px;">
+                        <div class="admin-stack-dot admin-stack-dot-green">
                         </div>
                       </div>
                     </div>
-                    <div class="progress-bar-bg"
-                      style="height:6px; background:var(--bg-tertiary); border-radius:3px; margin-top:15px; overflow:hidden;">
-                      <div class="progress-bar-fill" id="ramBar" style="height:100%; width:0%; transition:width 0.5s;">
-                      </div>
-                    </div>
+                    <progress class="progress-meter progress-meter-sm" id="ramBar" max="100" value="0"></progress>
                   </div>
                 </div>
               </div>
 
-              <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:16px;">
+              <div class="admin-storage-grid">
                 <div class="bento-card">
                   <h3 class="bento-title">Disk Storage</h3>
-                  <div style="font-size:32px; font-weight:800; color:var(--text); margin: 10px 0;" id="diskUsage">0 / 0
+                  <div class="admin-storage-value" id="diskUsage">0 / 0
                     GB</div>
-                  <div style="font-size:12px; color:var(--text-m);" id="diskStatus">Loading...</div>
-                  <div class="progress-bar-bg"
-                    style="height:8px; background:var(--bg-tertiary); border-radius:4px; margin-top:15px; overflow:hidden;">
-                    <div class="progress-bar-fill" id="diskBar" style="height:100%; width:0%; transition:width 0.5s;">
-                    </div>
-                  </div>
+                  <div class="admin-muted-small" id="diskStatus">Loading...</div>
+                  <progress class="progress-meter" id="diskBar" max="100" value="0"></progress>
                 </div>
 
                 <div class="bento-card">
                   <h3 class="bento-title">Database Storage</h3>
-                  <div style="font-size:32px; font-weight:800; color:var(--text); margin: 10px 0;" id="dbSize">—</div>
-                  <div style="font-size:12px; color:var(--text-m);" id="dbStatus">Loading...</div>
+                  <div class="admin-storage-value" id="dbSize">—</div>
+                  <div class="admin-muted-small" id="dbStatus">Loading...</div>
                 </div>
               </div>
             </div>

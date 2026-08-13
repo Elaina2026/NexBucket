@@ -41,11 +41,6 @@ function safeHttpUrl(value, allowedHosts = []) {
     }
 }
 
-function safeColor(value, fallback = 'inherit') {
-    const color = String(value || '');
-    return /^#[0-9a-f]{6}$/i.test(color) ? color : fallback;
-}
-
 function parseMarkdown(text, msg = {}) {
     if (!text) return '';
     let html = escapeHTML(text);
@@ -68,9 +63,7 @@ function parseMarkdown(text, msg = {}) {
         msg.mentions.roles.forEach(r => {
         if (!/^\d+$/.test(String(r?.id || ''))) return;
         const regex = new RegExp(`&lt;@&amp;${r.id}&gt;`, 'g');
-        const color = r.color === '#000000' ? '' : safeColor(r.color, '');
-        const style = color ? `style="color: ${color}; background-color: ${color}20;"` : '';
-        html = html.replace(regex, `<span class="mention" ${style}>@${escapeHTML(r.name)}</span>`);
+        html = html.replace(regex, `<span class="mention">@${escapeHTML(r.name)}</span>`);
         });
     }
     if (Array.isArray(msg.mentions.channels)) {
@@ -113,7 +106,6 @@ function renderMessage(value) {
     const botTag = author.bot ? '<span class="message-bot-tag">BOT</span>' : '';
     const avatarUrl = safeHttpUrl(author.avatar, ['cdn.discordapp.com', 'media.discordapp.net'])
         || 'https://cdn.discordapp.com/embed/avatars/0.png';
-    const authorColor = author.color === '#000000' ? 'inherit' : safeColor(author.color);
 
     let attachmentsHtml = '';
     if (Array.isArray(msg.attachments) && msg.attachments.length > 0) {
@@ -134,10 +126,6 @@ function renderMessage(value) {
     if (Array.isArray(msg.embeds) && msg.embeds.length > 0) {
     msg.embeds.forEach(value => {
         const emb = value && typeof value === 'object' ? value : {};
-        const numericColor = Number(emb.color);
-        const colorHex = Number.isInteger(numericColor) && numericColor >= 0 && numericColor <= 0xffffff
-            ? `#${numericColor.toString(16).padStart(6, '0')}`
-            : '#202225';
         let authorHtml = '';
         if (emb.author) {
         const authorIcon = safeHttpUrl(emb.author.icon_url, ['cdn.discordapp.com', 'media.discordapp.net']);
@@ -177,7 +165,7 @@ function renderMessage(value) {
 
         embedsHtml += `
         <div class="embed-wrapper">
-            <div class="embed-color-pill" style="background-color: ${colorHex}"></div>
+            <div class="embed-color-pill"></div>
             <div class="embed-inner">
             ${authorHtml}
             ${titleHtml}
@@ -195,7 +183,7 @@ function renderMessage(value) {
         <img src="${escapeHTML(avatarUrl)}" alt="" data-avatar-fallback/>
         </div>
         <div class="message-header">
-        <span class="message-author" style="color: ${authorColor}">${escapeHTML(author.username || 'Unknown User')}</span>
+        <span class="message-author">${escapeHTML(author.username || 'Unknown User')}</span>
         ${botTag}
         <span class="message-timestamp">${timeStr}</span>
         </div>

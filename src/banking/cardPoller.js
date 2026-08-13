@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { supabase } from '../database/supabaseClient.js';
+import { getSupabaseBackoffDelay, isSupabaseUnavailable, supabase } from '../database/supabaseClient.js';
 import { inspectCardConfig } from './cardConfig.js';
 import { getSection } from '../database/guildSettings.js';
 import { applyCardResult, PENDING_STATUSES, isFinalStatus, shouldExpirePending } from './cardResult.js';
@@ -29,16 +29,24 @@ const BACKOFF_TIERS = [
 
 const lastCheckedAt = new Map();
 let emptyPolls = 0;
+let databaseFailures = 0;
 let nextDatabasePollAt = 0;
+let nextDatabaseErrorLogAt = 0;
 
 export function getEmptyPollDelay(emptyCount) {
     if (!Number.isSafeInteger(emptyCount) || emptyCount <= 0) return POLL_INTERVAL_MS;
     return Math.min(POLL_INTERVAL_MS * (2 ** Math.min(emptyCount, 4)), EMPTY_BACKOFF_MAX_MS);
 }
 
+export function getDatabaseFailureDelay(failureCount) {
+    return getSupabaseBackoffDelay(failureCount, POLL_INTERVAL_MS, 5 * 60 * 1000);
+}
+
 export function wakeCardStatusPoller() {
     emptyPolls = 0;
+    databaseFailures = 0;
     nextDatabasePollAt = 0;
+    nextDatabaseErrorLogAt = 0;
 }
 
 function shouldCheckNow(requestId, ageMs, now) {
@@ -97,10 +105,19 @@ async function pollPendingCards(client) {
         .limit(BATCH_SIZE);
 
     if (error) {
-        console.error('[Card2K Poller] Failed to load pending transactions:', error.message);
-        nextDatabasePollAt = now + POLL_INTERVAL_MS;
+        databaseFailures++;
+        const delay = isSupabaseUnavailable(error)
+            ? getDatabaseFailureDelay(databaseFailures)
+            : POLL_INTERVAL_MS;
+        nextDatabasePollAt = now + delay;
+        if (now >= nextDatabaseErrorLogAt) {
+            console.error(`[Card2K Poller] Failed to load pending transactions; retrying in ${Math.ceil(delay / 1000)}s:`, error.message);
+            nextDatabaseErrorLogAt = now + Math.max(delay, 5 * 60 * 1000);
+        }
         return;
     }
+    databaseFailures = 0;
+    nextDatabaseErrorLogAt = 0;
     if (!pending || pending.length === 0) {
         emptyPolls++;
         nextDatabasePollAt = now + getEmptyPollDelay(emptyPolls);

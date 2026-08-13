@@ -41,6 +41,31 @@ test('DNS embed keeps partial lookup errors readable', () => {
   assert.ok(embed.data.fields.length <= 5);
 });
 
+test('.vn DNS embed points to VNNIC without an Unknown registration table', () => {
+  const embed = createDnsEmbed({
+    domain: 'elaina2026.io.vn',
+    rdap: null,
+    rdapError: null,
+    dnssec: 'Unsigned',
+    registrationSource: {
+      type: 'manual', label: 'VNNIC', url: 'https://vnnic.vn/whois-information/',
+      message: 'VNNIC does not publish a machine-readable RDAP service for .vn. Use the official VNNIC lookup.',
+    },
+    records: {
+      A: { values: ['172.67.154.27'], error: null },
+      AAAA: { values: [], error: null },
+      MX: { values: [], error: null },
+      NS: { values: ['gigi.ns.cloudflare.com'], error: null },
+      CNAME: { values: [], error: null },
+    },
+  }, { user });
+  const registration = embed.data.fields.find(field => field.name === 'Registration source');
+  assert.match(registration.value, /VNNIC/);
+  assert.match(registration.value, /DNSSEC.*Unsigned/);
+  assert.doesNotMatch(registration.value, /Registrar:.*Unknown|Created:.*Unknown|Expires:.*Unknown/);
+  assert.match(embed.data.footer.text, /VNNIC & DNS/);
+});
+
 test('check embed summarizes both protocols and resolved addresses', () => {
   const embed = createCheckEmbed({
     target: 'example.com',

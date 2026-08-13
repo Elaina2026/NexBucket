@@ -13,7 +13,7 @@ import axios from 'axios';
 dotenv.config({ override: true });
 import ConfigManager from '../ticket/configManager.js';
 import { getWelcomeConfig, renderWelcomeBanner } from '../welcome/welcomeManager.js';
-import { getJtcSettings, normalizeJtcConfig, setJtcSettingsCache } from '../utils/jtcManager.js';
+import { formatJtcChannelName, getJtcProfile, getJtcSettings, normalizeJtcConfig, normalizeJtcProfile, saveJtcProfile, setJtcSettingsCache } from '../utils/jtcManager.js';
 import { getIncidents } from '../utils/errorHandler.js';
 import { getAllServicesStatus, getOverallStatus } from '../utils/uptimeTracker.js';
 import { getBankConfig } from '../banking/bankManager.js';
@@ -26,13 +26,21 @@ import { applyCardResult } from '../banking/cardResult.js';
 import { supabase } from '../database/supabaseClient.js';
 import { encryptToken, decryptToken, generateCsrfToken, sanitizePayload } from '../utils/securityUtils.js';
 import { LEARN_IMAGE_MAX_BYTES, validateLearnImage } from '../utils/learnImage.js';
+import { PermissionFlagsBits } from 'discord.js';
+import { addChannelSchedule, cancelPendingReminder, listPendingReminders, updateChannelSchedule, updatePendingReminder } from '../utils/reminderManager.js';
+import { createBackgroundJob } from '../runtime/backgroundJob.js';
 import {
     cookieHeader,
+    dashboardAllowedOrigins,
     isAllowedImageUrl,
     isSecureDashboardUrl,
     parseCookies,
     pickKey,
     safeEqualString,
+    serializeTranscript,
+    verifyTranscriptPassword,
+    createSessionRevokeToken,
+    parseSessionRevokeToken,
 } from './dashboardUtils.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -105,6 +113,13 @@ export function startDashboard(client) {
         legacyHeaders: false,
         handler: rateLimitHandler,
     });
+    const transcriptLimiter = rateLimit({
+        windowMs: 10 * 60 * 1000,
+        max: 30,
+        standardHeaders: true,
+        legacyHeaders: false,
+        handler: rateLimitHandler,
+    });
     app.use((req, res, next) => {
         res.setHeader('X-Frame-Options', 'DENY');
         res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -113,7 +128,7 @@ export function startDashboard(client) {
         res.setHeader('Content-Security-Policy', [
             "default-src 'self'",
             "script-src 'self' https://static.cloudflareinsights.com",
-            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+            "style-src 'self' https://fonts.googleapis.com",
             "font-src 'self' https://fonts.gstatic.com",
             "img-src 'self' data: blob: https://cdn.discordapp.com https://media.discordapp.net https://img.vietqr.io https://*.supabase.co",
             "connect-src 'self' https://cloudflareinsights.com",
@@ -127,18 +142,14 @@ export function startDashboard(client) {
         res.removeHeader('X-Powered-By');
         next();
     });
-    const allowedOrigins = [
-        `http://localhost:${port}`,
-        `http://127.0.0.1:${port}`,
-        dashboardOrigin
-    ].filter(Boolean);
+    const allowedOrigins = dashboardAllowedOrigins(dashboardOrigin, port);
     app.use(cors({
         origin: function(origin, callback) {
             if (!origin) return callback(null, true);
             if (allowedOrigins.includes(origin)) return callback(null, true);
             callback(new Error('CORS: DASHBOARD_URL not configured or origin not allowed'));
         },
-        methods: ['GET', 'POST'],
+        methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
         allowedHeaders: ['Content-Type', 'Authorization'],
         credentials: true,
         maxAge: 86400,
@@ -147,6 +158,11 @@ export function startDashboard(client) {
     app.use(express.urlencoded({ extended: true, limit: '1mb' }));
     app.use('/api', apiLimiter);
     app.use('/api/auth', authLimiter);
+    app.use('/api/transcript', transcriptLimiter);
+    app.use('/api', (req, res, next) => {
+        res.setHeader('Cache-Control', 'no-store');
+        next();
+    });
     app.use((req, res, next) => {
         if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)
             || req.path.startsWith('/api/webhooks/')) return next();
@@ -158,8 +174,8 @@ export function startDashboard(client) {
     });
     const sourcePublicPath = path.join(__dirname, 'public');
     const builtPublicPath = path.join(__dirname, '..', '..', 'dist', 'dashboard', 'public');
-    app.use(express.static(builtPublicPath, { maxAge: 0, etag: true }));
-    app.use(express.static(sourcePublicPath, { maxAge: 0, etag: true }));
+    app.use(express.static(builtPublicPath, { maxAge: 0, etag: true, dotfiles: 'deny' }));
+    app.use(express.static(sourcePublicPath, { maxAge: 0, etag: true, dotfiles: 'deny' }));
     app.get('/favicon.ico', (req, res) => {
         if (!client || !client.user) return res.status(404).end();
         res.redirect(client.user.displayAvatarURL({ extension: 'png', size: 128 }));
@@ -273,6 +289,9 @@ export function startDashboard(client) {
     app.get('/dashboard/:serverId/:section', (req, res) => {
         res.sendFile(path.join(sourcePublicPath, 'index.html'));
     });
+    app.get('/jtc/:guildId', (req, res) => {
+        res.sendFile(path.join(sourcePublicPath, 'jtc-profile.html'));
+    });
     app.get('/', (req, res) => {
         res.sendFile(path.join(sourcePublicPath, 'index.html'));
     });
@@ -341,7 +360,12 @@ export function startDashboard(client) {
         const clientId = process.env.CLIENT_ID;
         const redirectUri = encodeURIComponent(`${dashboardOrigin}/api/auth/callback`);
         const state = generateCsrfToken();
-        res.setHeader('Set-Cookie', cookieHeader('oauth_state', state, { maxAge: 600, secure: secureCookies }));
+        const requestedReturn = typeof req.query.returnTo === 'string' ? req.query.returnTo : '';
+        const returnTo = /^\/(?:jtc\/\d{17,20}|dashboard(?:\/\d{17,20}(?:\/[\w-]+)?)?)$/.test(requestedReturn) ? requestedReturn : '/';
+        res.setHeader('Set-Cookie', [
+            cookieHeader('oauth_state', state, { maxAge: 600, secure: secureCookies }),
+            cookieHeader('oauth_return', returnTo, { maxAge: 600, secure: secureCookies }),
+        ]);
         const oauthUrl = `https://discord.com/api/oauth2/authorize?client_id=${clientId}&redirect_uri=${redirectUri}&response_type=code&scope=identify%20guilds&state=${state}`;
         res.redirect(oauthUrl);
     });
@@ -392,9 +416,15 @@ export function startDashboard(client) {
             });
             if (sessionError) throw sessionError;
             res.append('Set-Cookie', cookieHeader('session_id', sessionId, { maxAge: 604800, secure: secureCookies }));
-            res.redirect('/');
+            res.append('Set-Cookie', cookieHeader('oauth_return', '', { maxAge: 0, secure: secureCookies }));
+            const returnTo = /^\/(?:jtc\/\d{17,20}|dashboard(?:\/\d{17,20}(?:\/[\w-]+)?)?)$/.test(cookies.oauth_return || '') ? cookies.oauth_return : '/';
+            res.redirect(returnTo);
         } catch (err) {
-            console.error('[Dashboard Auth Callback Error]:', err.response?.data || err.message);
+            console.error('[Dashboard Auth Callback Error]:', {
+                status: err.response?.status || null,
+                code: err.code || null,
+                message: err.message || 'OAuth callback failed',
+            });
             res.status(500).send('❌ OAuth Login Error: Failed to complete authentication with Discord.');
         }
     });
@@ -404,10 +434,15 @@ export function startDashboard(client) {
         if (!isSessionId(sessionId) || !supabase) return null;
         let { data: session, error } = await supabase
             .from('user_sessions')
-            .select('*')
+            .select('session_id, user_id, username, discriminator, avatar, access_token_encrypted, refresh_token_encrypted, expires_at, created_at, updated_at')
             .eq('session_id', sessionId)
             .maybeSingle();
         if (error || !session) return null;
+        const createdAt = new Date(session.created_at).getTime();
+        if (!Number.isFinite(createdAt) || Date.now() - createdAt > 7 * 24 * 60 * 60 * 1000) {
+            await supabase.from('user_sessions').delete().eq('session_id', sessionId);
+            return null;
+        }
 
         if (new Date(session.expires_at) < new Date()) {
             const refreshToken = decryptToken(session.refresh_token_encrypted);
@@ -516,6 +551,166 @@ export function startDashboard(client) {
             sendInternalError(res, err, 'API request failed');
         }
     });
+    app.get('/api/guilds/:guildId/jtc-profile', async (req, res) => {
+        try {
+            const auth = await getAuthenticatedUser(req);
+            if (!auth) return res.status(401).json({ error: 'Unauthorized' });
+            const guild = client.guilds.cache.get(req.params.guildId);
+            if (!guild) return res.status(404).json({ error: 'Guild not found' });
+            const member = await getGuildMember(guild, auth.session.user_id);
+            if (!member) return res.status(403).json({ error: 'You must be a member of this server' });
+            const config = await getJtcSettings(guild.id, true);
+            if (!config.hubChannelId) return res.status(409).json({ error: 'JTC is not configured for this server' });
+            const profile = await getJtcProfile(guild.id, auth.session.user_id, true)
+                || normalizeJtcProfile({
+                    name: formatJtcChannelName(config.defaultName, member),
+                    limit: config.defaultLimit,
+                    bitrate: config.defaultBitrate,
+                    status: config.defaultStatus,
+                    rtcRegion: config.defaultRegion,
+                    isLocked: config.defaultLocked,
+                    isHidden: config.defaultHidden,
+                    isNsfw: config.defaultNsfw,
+                }, guild.maximumBitrate || 96000);
+            const regions = await client.fetchVoiceRegions();
+            res.setHeader('Cache-Control', 'no-store');
+            res.json({
+                guild: { id: guild.id, name: guild.name, icon: guild.iconURL({ size: 128 }) || '' },
+                profile,
+                maximumBitrate: guild.maximumBitrate || 96000,
+                regions: [...regions.values()].filter(region => !region.deprecated).map(region => ({ id: region.id, name: region.name, optimal: region.optimal })),
+            });
+        } catch (error) {
+            sendInternalError(res, error, 'JTC profile load failed');
+        }
+    });
+    app.put('/api/guilds/:guildId/jtc-profile', async (req, res) => {
+        try {
+            const auth = await getAuthenticatedUser(req);
+            if (!auth) return res.status(401).json({ error: 'Unauthorized' });
+            const guild = client.guilds.cache.get(req.params.guildId);
+            if (!guild) return res.status(404).json({ error: 'Guild not found' });
+            const member = await getGuildMember(guild, auth.session.user_id);
+            if (!member) return res.status(403).json({ error: 'You must be a member of this server' });
+            const config = await getJtcSettings(guild.id, true);
+            if (!config.hubChannelId) return res.status(409).json({ error: 'JTC is not configured for this server' });
+            const cleanBody = sanitizePayload(req.body);
+            const regions = await client.fetchVoiceRegions();
+            const requestedRegion = String(cleanBody.rtcRegion || '');
+            if (requestedRegion && !regions.has(requestedRegion)) return res.status(400).json({ error: 'Invalid voice region' });
+            const profile = normalizeJtcProfile(cleanBody, guild.maximumBitrate || 96000);
+            if (!profile.name) return res.status(400).json({ error: 'Channel name is required' });
+            const saved = await saveJtcProfile(guild.id, auth.session.user_id, profile, guild.maximumBitrate || 96000);
+            res.json({ success: true, profile: saved });
+        } catch (error) {
+            if (error instanceof TypeError || error instanceof RangeError) return res.status(400).json({ error: error.message });
+            sendInternalError(res, error, 'JTC profile save failed');
+        }
+    });
+    const serializeReminder = reminder => {
+        const guild = reminder.guildId ? client.guilds.cache.get(reminder.guildId) : null;
+        const channel = reminder.channelId ? guild?.channels.cache.get(reminder.channelId) : null;
+        return {
+            id: reminder.id,
+            message: reminder.message,
+            endTime: reminder.endTime,
+            createdAt: reminder.createdAt,
+            targetType: reminder.targetType,
+            guildId: reminder.guildId,
+            guildName: guild?.name || null,
+            channelId: reminder.channelId,
+            channelName: channel?.name || null,
+            recurrence: reminder.recurrence,
+            timeZone: reminder.timeZone,
+            localTime: reminder.localTime,
+        };
+    };
+    async function validateScheduleTarget(guildId, channelId, userId, res) {
+        const guild = client.guilds.cache.get(String(guildId || ''));
+        if (!guild) {
+            res.status(404).json({ error: 'Guild not found in bot cache' });
+            return null;
+        }
+        const member = await getGuildMember(guild, userId);
+        if (!member?.permissions.has(PermissionFlagsBits.Administrator)
+            && !member?.permissions.has(PermissionFlagsBits.ManageGuild)) {
+            res.status(403).json({ error: 'Administrator or Manage Server permission required' });
+            return null;
+        }
+        const channel = guild.channels.cache.get(String(channelId || ''));
+        if (!channel?.isTextBased() || !channel.isSendable()) {
+            res.status(400).json({ error: 'Select a sendable text channel' });
+            return null;
+        }
+        const botMember = guild.members.me;
+        const permissions = botMember ? channel.permissionsFor(botMember) : null;
+        if (!permissions?.has(PermissionFlagsBits.ViewChannel) || !permissions.has(PermissionFlagsBits.SendMessages)) {
+            res.status(409).json({ error: 'The bot cannot view or send messages in this channel' });
+            return null;
+        }
+        return { guild, channel };
+    }
+    app.get('/api/reminders', async (req, res) => {
+        try {
+            const auth = await getAuthenticatedUser(req);
+            if (!auth) return res.status(401).json({ error: 'Unauthorized' });
+            const reminders = await listPendingReminders(auth.session.user_id);
+            res.json({ reminders: reminders.map(serializeReminder) });
+        } catch (error) {
+            if (error instanceof TypeError || error instanceof RangeError) return res.status(400).json({ error: error.message });
+            sendInternalError(res, error, 'Reminder list failed');
+        }
+    });
+    app.post('/api/reminders', async (req, res) => {
+        try {
+            const auth = await getAuthenticatedUser(req);
+            if (!auth) return res.status(401).json({ error: 'Unauthorized' });
+            if (!await validateScheduleTarget(req.body?.guildId, req.body?.channelId, auth.session.user_id, res)) return;
+            const reminder = await addChannelSchedule({
+                userId: auth.session.user_id,
+                message: req.body?.message,
+                guildId: req.body?.guildId,
+                channelId: req.body?.channelId,
+                localTime: req.body?.localTime,
+                timeZone: req.body?.timeZone,
+            });
+            res.status(201).json({ reminder: serializeReminder(reminder) });
+        } catch (error) {
+            if (error instanceof TypeError || error instanceof RangeError) return res.status(400).json({ error: error.message });
+            sendInternalError(res, error, 'Schedule creation failed');
+        }
+    });
+    app.put('/api/reminders/:id', async (req, res) => {
+        try {
+            const auth = await getAuthenticatedUser(req);
+            if (!auth) return res.status(401).json({ error: 'Unauthorized' });
+            const isChannel = req.body?.targetType === 'channel';
+            if (isChannel && !await validateScheduleTarget(req.body?.guildId, req.body?.channelId, auth.session.user_id, res)) return;
+            const reminder = isChannel
+                ? await updateChannelSchedule(req.params.id, auth.session.user_id, req.body)
+                : await updatePendingReminder(req.params.id, auth.session.user_id, {
+                    message: req.body?.message,
+                    endTime: Number(req.body?.endTime),
+                });
+            if (!reminder) return res.status(409).json({ error: 'Reminder is unavailable, has another type, or is already being processed' });
+            res.json({ reminder: serializeReminder(reminder) });
+        } catch (error) {
+            if (error instanceof TypeError || error instanceof RangeError) return res.status(400).json({ error: error.message });
+            sendInternalError(res, error, 'Reminder update failed');
+        }
+    });
+    app.delete('/api/reminders/:id', async (req, res) => {
+        try {
+            const auth = await getAuthenticatedUser(req);
+            if (!auth) return res.status(401).json({ error: 'Unauthorized' });
+            const deleted = await cancelPendingReminder(req.params.id, auth.session.user_id);
+            if (!deleted) return res.status(409).json({ error: 'Reminder is unavailable or already being processed' });
+            res.json({ success: true });
+        } catch (error) {
+            if (error instanceof TypeError || error instanceof RangeError) return res.status(400).json({ error: error.message });
+            sendInternalError(res, error, 'Reminder cancellation failed');
+        }
+    });
     app.post('/api/auth/logout', async (req, res) => {
         try {
             const cookies = parseCookies(req);
@@ -542,7 +737,19 @@ export function startDashboard(client) {
             if (!guild) return res.status(404).json({ error: 'Guild not found in bot cache' });
             const channels = guild.channels.cache
                 .filter(c => [0, 2, 4, 5, 13, 15].includes(c.type))
-                .map(c => ({ id: c.id, name: c.name, type: c.type, parentId: c.parentId, position: c.position }))
+                .map(c => {
+                    const botPermissions = guild.members.me ? c.permissionsFor(guild.members.me) : null;
+                    return {
+                        id: c.id,
+                        name: c.name,
+                        type: c.type,
+                        parentId: c.parentId,
+                        position: c.position,
+                        botCanSend: c.isTextBased() && c.isSendable()
+                            && botPermissions?.has(PermissionFlagsBits.ViewChannel)
+                            && botPermissions.has(PermissionFlagsBits.SendMessages),
+                    };
+                })
                 .sort((a, b) => a.position - b.position);
             const roles = guild.roles.cache
                 .filter(r => r.id !== guild.id)
@@ -793,6 +1000,7 @@ export function startDashboard(client) {
                 }
             }
             const guild = client.guilds.cache.get(guildId);
+            const voiceRegions = await client.fetchVoiceRegions();
             const configVersion = Number(settings.version || 0);
             const serverBanner = guild?.bannerURL({ size: 1024 }) || '';
 
@@ -811,6 +1019,7 @@ export function startDashboard(client) {
                     goodbyeBg: welcomeConfig.goodbyeBg || '',
                 },
                 jtcConfig,
+                voiceRegions: [...voiceRegions.values()].filter(region => !region.deprecated).map(region => ({ id: region.id, name: region.name, optimal: region.optimal })),
                 modConfig,
                 bankConfig: {
                     bankBin: bankConfig.bankBin || '',
@@ -893,6 +1102,7 @@ export function startDashboard(client) {
             if (!validRole(autoroleId)) return res.status(400).json({ error: 'Invalid auto-role' });
             if (!validChannelType(jtcConfig.hubChannelId, [2])) return res.status(400).json({ error: 'JTC hub must be a voice channel' });
             if (!validChannelType(jtcConfig.categoryId, [4])) return res.status(400).json({ error: 'JTC category must be a category channel' });
+            if (!validChannelType(jtcConfig.lfmChannelId, [0, 5])) return res.status(400).json({ error: 'JTC LFM must be a text or announcement channel' });
             for (const id of [welcomeConfig.welcomeChannel, welcomeConfig.goodbyeChannel, bankConfig.notificationChannelId, statsConfig.categoryId, statsConfig.allMembersChannelId, statsConfig.humansChannelId, statsConfig.staffOnlineChannelId, statsConfig.botCountChannelId]) {
                 if (!validChannel(id)) return res.status(400).json({ error: 'Invalid channel in configuration' });
             }
@@ -900,10 +1110,19 @@ export function startDashboard(client) {
             const invalidPlaceholders = [...jtcName.matchAll(/\{([^}]+)\}/g)].some(match => !['username', 'displayName'].includes(match[1]));
             const jtcLimit = Number(jtcConfig.defaultLimit);
             const jtcBitrate = Number(jtcConfig.defaultBitrate);
+            const jtcStatus = String(jtcConfig.defaultStatus || '');
+            const jtcRegion = String(jtcConfig.defaultRegion || '');
             if (!jtcName || jtcName.length > 100 || invalidPlaceholders) return res.status(400).json({ error: 'Invalid JTC default name' });
             if (!Number.isInteger(jtcLimit) || jtcLimit < 0 || jtcLimit > 99) return res.status(400).json({ error: 'JTC limit must be between 0 and 99' });
             if (!Number.isInteger(jtcBitrate) || jtcBitrate < 8000 || jtcBitrate > (guild?.maximumBitrate || 96000)) return res.status(400).json({ error: 'Invalid JTC bitrate for this server' });
-            if (typeof jtcConfig.defaultLocked !== 'boolean') return res.status(400).json({ error: 'Invalid JTC lock setting' });
+            if (jtcStatus.length > 500) return res.status(400).json({ error: 'JTC status must be 500 characters or fewer' });
+            if (jtcRegion) {
+                const voiceRegions = await client.fetchVoiceRegions();
+                if (!voiceRegions.has(jtcRegion)) return res.status(400).json({ error: 'Invalid JTC voice region' });
+            }
+            for (const key of ['defaultLocked', 'defaultHidden', 'defaultNsfw']) {
+                if (typeof jtcConfig[key] !== 'boolean') return res.status(400).json({ error: `Invalid JTC ${key} setting` });
+            }
             const normalizedServers = [];
             for (const server of servers) {
                 if (!validChannel(server.channelId) || typeof server.ip !== 'string') {
@@ -1267,7 +1486,7 @@ export function startDashboard(client) {
             if (!supabase) return res.json([]);
             const { data, error } = await supabase
                 .from('bot_growth_snapshots')
-                .select('*')
+                .select('id, timestamp, guild_count, user_count, memory_mb, avg_ping')
                 .order('timestamp', { ascending: true })
                 .limit(200);
             if (error) throw error;
@@ -1285,20 +1504,30 @@ export function startDashboard(client) {
                 .order('updated_at', { ascending: false })
                 .limit(50);
             if (error) throw error;
-            res.json(data || []);
+            const revokeSecret = process.env.ENCRYPTION_SECRET;
+            if (!revokeSecret) throw new Error('ENCRYPTION_SECRET must be set');
+            res.json((data || []).map(session => ({
+                user_id: session.user_id,
+                username: session.username,
+                avatar: session.avatar,
+                updated_at: session.updated_at,
+                expires_at: session.expires_at,
+                revoke_token: createSessionRevokeToken(session.session_id, revokeSecret),
+            })));
         } catch (err) {
             sendInternalError(res, err, 'API request failed');
         }
     });
-    app.post('/api/admin/sessions/:id/revoke', requireAdmin, async (req, res) => {
+    app.post('/api/admin/sessions/revoke', requireAdmin, async (req, res) => {
         try {
             if (!supabase) return res.status(500).json({ error: 'No database' });
-            if (!isSessionId(req.params.id)) return res.status(400).json({ error: 'Invalid session ID' });
-            const { error } = await supabase.from('user_sessions').delete().eq('session_id', req.params.id);
+            const sessionId = parseSessionRevokeToken(req.body?.token, process.env.ENCRYPTION_SECRET);
+            if (!isSessionId(sessionId)) return res.status(400).json({ error: 'Invalid or expired revoke token' });
+            const { error } = await supabase.from('user_sessions').delete().eq('session_id', sessionId);
             if (error) throw error;
             const forwardedFor = req.headers['x-forwarded-for'];
             const ip = (Array.isArray(forwardedFor) ? forwardedFor[0] : forwardedFor)?.split(',')[0]?.trim() || req.socket.remoteAddress;
-            logSecurityEvent('SESSION_REVOKE', ip, req.headers['user-agent'], `Revoked session: ${req.params.id}`);
+            logSecurityEvent('SESSION_REVOKE', ip, req.headers['user-agent'], 'Revoked dashboard session');
             res.json({ success: true });
         } catch (err) {
             sendInternalError(res, err, 'API request failed');
@@ -1309,7 +1538,7 @@ export function startDashboard(client) {
             if (!supabase) return res.json([]);
             const { data, error } = await supabase
                 .from('security_logs')
-                .select('*')
+                .select('id, timestamp, event_type, ip_address, user_agent, details')
                 .order('timestamp', { ascending: false })
                 .limit(100);
             if (error) throw error;
@@ -1320,22 +1549,22 @@ export function startDashboard(client) {
     });
     async function saveGrowthSnapshot() {
         if (!supabase) return;
-        try {
-            let totalUsers = 0;
-            client.guilds.cache.forEach(g => { totalUsers += g.memberCount; });
-            await supabase.from('bot_growth_snapshots').insert([{
-                guild_count: client.guilds.cache.size,
-                user_count: totalUsers,
-                memory_mb: +(process.memoryUsage().heapUsed / 1024 / 1024).toFixed(2),
-                avg_ping: client.ws.ping,
-            }]);
-            console.log('[Admin] Growth snapshot saved.');
-        } catch (err) {
-            console.error('[Admin] Failed to save growth snapshot:', err.message);
-        }
+        let totalUsers = 0;
+        client.guilds.cache.forEach(g => { totalUsers += g.memberCount; });
+        const { error } = await supabase.from('bot_growth_snapshots').insert([{
+            guild_count: client.guilds.cache.size,
+            user_count: totalUsers,
+            memory_mb: +(process.memoryUsage().heapUsed / 1024 / 1024).toFixed(2),
+            avg_ping: client.ws.ping,
+        }]);
+        if (error) throw error;
+        console.log('[Admin] Growth snapshot saved.');
     }
-    setTimeout(() => saveGrowthSnapshot(), 30000);
-    setInterval(() => saveGrowthSnapshot(), 6 * 60 * 60 * 1000);
+    const growthSnapshotJob = createBackgroundJob('Admin Growth Snapshot', saveGrowthSnapshot);
+    const growthStartupTimer = setTimeout(() => { growthSnapshotJob.run(); }, 30000);
+    growthStartupTimer.unref?.();
+    const growthInterval = setInterval(() => { growthSnapshotJob.run(); }, 6 * 60 * 60 * 1000);
+    growthInterval.unref?.();
     app.get('/transcript/:id', (req, res) => {
         res.sendFile(path.join(sourcePublicPath, 'transcript.html'));
     });
@@ -1382,7 +1611,7 @@ export function startDashboard(client) {
 
             const { data, error } = await supabase
                 .from('ticket_transcripts')
-                .select('*')
+                .select('id, guild_id, ticket_name, password, closed_by, claimed_by, creator_id, messages, created_at, expires_at')
                 .eq('id', id)
                 .maybeSingle();
             if (error || !data) return res.status(404).json({ error: 'Transcript not found or expired' });
@@ -1400,7 +1629,7 @@ export function startDashboard(client) {
 
             }
 
-            if (!hasAdminBypass && data.password && !safeEqualString(data.password, transcriptPassword)) {
+            if (!hasAdminBypass && data.password && !verifyTranscriptPassword(data.password, transcriptPassword)) {
                 return res.status(401).json({
                     error: 'Incorrect password or you do not have permission to access.',
                     meta: {
@@ -1410,20 +1639,19 @@ export function startDashboard(client) {
                 });
             }
 
-            res.json(data);
+            res.json(serializeTranscript(data));
         } catch (err) {
             res.status(500).json({ error: 'Internal Server Error' });
         }
     });
 
-    setInterval(async () => {
+    const transcriptCleanupJob = createBackgroundJob('Transcript Cleanup', async () => {
         if (!supabase) return;
-        try {
-            await supabase.from('ticket_transcripts').delete().lt('expires_at', new Date().toISOString());
-        } catch (err) {
-            console.error('[Transcript Cleanup] Error:', err);
-        }
-    }, 24 * 60 * 60 * 1000);
+        const { error } = await supabase.from('ticket_transcripts').delete().lt('expires_at', new Date().toISOString());
+        if (error) throw error;
+    });
+    const transcriptCleanupTimer = setInterval(() => { transcriptCleanupJob.run(); }, 24 * 60 * 60 * 1000);
+    transcriptCleanupTimer.unref?.();
 
     app.listen(port, () => {
         const baseUrl = process.env.DASHBOARD_URL || `http://localhost:${port}`;

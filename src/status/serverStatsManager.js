@@ -1,32 +1,30 @@
 import { ChannelType, PermissionFlagsBits, SlashCommandBuilder, MessageFlags } from 'discord.js';
 import { supabase } from '../database/supabaseClient.js';
 import { getSection, saveSection } from '../database/guildSettings.js';
+import { scheduleBackgroundJob } from '../runtime/backgroundJob.js';
 
 export async function getStatsConfig() {
   if (!supabase) return {};
-  try {
-    const { data, error } = await supabase
-      .from('guild_settings')
-      .select('guild_id, server_stats');
-    if (error) throw error;
-    const config = {};
-    if (data) {
-      data.forEach(row => {
-        const s = row.server_stats;
-        if (s && s.categoryId) {
-          config[row.guild_id] = {
-            categoryId: s.categoryId,
-            allMembersChannelId: s.allMembersId,
-            humansChannelId: s.humansId,
-            staffOnlineChannelId: s.staffOnlineId,
-            botCountChannelId: s.botCountId,
-          };
-        }
-      });
-    }
-    return config;
+  const { data, error } = await supabase
+    .from('guild_settings')
+    .select('guild_id, server_stats');
+  if (error) throw error;
+  const config = {};
+  if (data) {
+    data.forEach(row => {
+      const s = row.server_stats;
+      if (s && s.categoryId) {
+        config[row.guild_id] = {
+          categoryId: s.categoryId,
+          allMembersChannelId: s.allMembersId,
+          humansChannelId: s.humansId,
+          staffOnlineChannelId: s.staffOnlineId,
+          botCountChannelId: s.botCountId,
+        };
+      }
+    });
   }
-  catch { return {}; }
+  return config;
 }
 
 export async function getStatsConfigForGuild(guildId) {
@@ -160,11 +158,10 @@ export function startServerStatsUpdater(client) {
     const guildIds = Object.keys(config);
     for (const guildId of guildIds) {
       const guild = client.guilds.cache.get(guildId);
-      if (guild) {
-        await updateServerStatsForGuild(guild, config[guildId]);
-      }
+      if (guild) await updateServerStatsForGuild(guild, config[guildId]);
     }
   };
-  runUpdate();
-  setInterval(runUpdate, 600000);
+  const job = scheduleBackgroundJob('ServerStats', runUpdate, 600000);
+  job.run();
+  return job;
 }

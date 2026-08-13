@@ -1,7 +1,17 @@
-import { ChannelType, PermissionFlagsBits, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle, MessageFlags } from 'discord.js';
+import {
+  ActionRowBuilder,
+  ActivityType,
+  ButtonBuilder,
+  ButtonStyle,
+  ChannelType,
+  MessageFlags,
+  PermissionFlagsBits,
+  StringSelectMenuBuilder,
+} from 'discord.js';
 import { EmbedBuilder } from './embed.js';
 import { supabase } from '../database/supabaseClient.js';
 import { getSection, saveSection } from '../database/guildSettings.js';
+
 export const JTCEmojis = {
   NAME: '<:name:1535994083594604594>',
   LIMIT: '<:limit_128x128:1535992819712397372>',
@@ -14,15 +24,21 @@ export const JTCEmojis = {
   KICK: '<:kick_128x128:1535992817980022834>',
   BITRATE: '<:bitrate_128x128:1535992812636737587>',
   TRANSFER: '<:transfer_128x128:1535992827274600528>',
-  SAVE: '<:save_128x128:1535992804394663997>'
+  SAVE: '<:save_128x128:1535992804394663997>',
 };
+
 export const DEFAULT_JTC_CONFIG = Object.freeze({
   hubChannelId: '',
   categoryId: '',
+  lfmChannelId: '',
   defaultName: "🔊 {username}'s Room",
   defaultLimit: 0,
   defaultLocked: false,
+  defaultHidden: false,
   defaultBitrate: 64000,
+  defaultStatus: '',
+  defaultRegion: '',
+  defaultNsfw: false,
 });
 
 export function normalizeJtcConfig(value = {}) {
@@ -33,10 +49,31 @@ export function normalizeJtcConfig(value = {}) {
     ...value,
     hubChannelId: String(value.hubChannelId || ''),
     categoryId: String(value.categoryId || ''),
+    lfmChannelId: String(value.lfmChannelId || ''),
     defaultName: String(value.defaultName || DEFAULT_JTC_CONFIG.defaultName).slice(0, 100),
     defaultLimit: Number.isInteger(limit) && limit >= 0 && limit <= 99 ? limit : DEFAULT_JTC_CONFIG.defaultLimit,
     defaultLocked: value.defaultLocked === true,
+    defaultHidden: value.defaultHidden === true,
     defaultBitrate: Number.isInteger(bitrate) && bitrate >= 8000 ? bitrate : DEFAULT_JTC_CONFIG.defaultBitrate,
+    defaultStatus: String(value.defaultStatus || '').slice(0, 500),
+    defaultRegion: String(value.defaultRegion || '').slice(0, 32),
+    defaultNsfw: value.defaultNsfw === true,
+  };
+}
+
+export function normalizeJtcProfile(value = {}, maximumBitrate = 96000) {
+  const limit = Number(value.limit);
+  const bitrate = Number(value.bitrate);
+  const maxBitrate = Number.isInteger(maximumBitrate) && maximumBitrate >= 8000 ? maximumBitrate : 96000;
+  return {
+    name: String(value.name || '').trim().slice(0, 100),
+    limit: Number.isInteger(limit) && limit >= 0 && limit <= 99 ? limit : 0,
+    bitrate: Number.isInteger(bitrate) && bitrate >= 8000 && bitrate <= maxBitrate ? bitrate : Math.min(64000, maxBitrate),
+    status: String(value.status || '').trim().slice(0, 500),
+    rtcRegion: String(value.rtcRegion || '').trim().slice(0, 32),
+    isLocked: value.isLocked === true,
+    isHidden: value.isHidden === true,
+    isNsfw: value.isNsfw === true,
   };
 }
 
@@ -45,6 +82,10 @@ export function formatJtcChannelName(template, member) {
     .replaceAll('{username}', member.user.username)
     .replaceAll('{displayName}', member.displayName || member.user.displayName || member.user.username)
     .slice(0, 100);
+}
+
+export function selectJtcSuccessor(members, previousOwnerId) {
+  return [...members.values()].find(member => !member.user.bot && member.id !== previousOwnerId) || null;
 }
 
 let jtcConfigCache = null;
@@ -65,8 +106,7 @@ export async function saveJtcSettings(guildId, patch) {
   const current = await getJtcSettings(guildId, true);
   const config = normalizeJtcConfig({ ...current, ...patch });
   await saveSection(guildId, 'jtc', config);
-  jtcConfigCache ||= {};
-  jtcConfigCache[guildId] = config;
+  setJtcSettingsCache(guildId, config);
   return config;
 }
 
@@ -78,7 +118,7 @@ export async function getJtcConfig(forceRefresh = false) {
   const { data, error } = await supabase.from('guild_settings').select('guild_id, jtc');
   if (error) throw error;
   jtcConfigCache = {};
-  for (const row of (data || [])) jtcConfigCache[row.guild_id] = normalizeJtcConfig(row.jtc);
+  for (const row of data || []) jtcConfigCache[row.guild_id] = normalizeJtcConfig(row.jtc);
   return Object.fromEntries(Object.entries(jtcConfigCache).map(([guildId, config]) => [guildId, config.hubChannelId]));
 }
 
@@ -87,102 +127,245 @@ export async function saveJtcConfig(data) {
     await saveJtcSettings(guildId, { hubChannelId });
   }
 }
+
 export async function setJtcHub(guildId, hubChannelId) {
   if (!guildId) return;
-  try {
-    await saveJtcSettings(guildId, { hubChannelId: hubChannelId || '' });
-  } catch (err) {
-    console.error('[JTC] Failed to save hub channel:', err.message || err);
-    throw err;
-  }
+  await saveJtcSettings(guildId, { hubChannelId: hubChannelId || '' });
 }
+
 let hasLoadedActive = false;
-global.JTC_ACTIVE_MEMORY = global.JTC_ACTIVE_MEMORY || {};
+global.JTC_ACTIVE_MEMORY ||= {};
 export async function getJtcActive() {
-  if (hasLoadedActive) return global.JTC_ACTIVE_MEMORY;
-  if (!supabase) return global.JTC_ACTIVE_MEMORY;
-  try {
-    const { data } = await supabase.from('jtc_active').select('*');
-    const active = {};
-    if (data) {
-      data.forEach(row => {
-        if (!active[row.guild_id]) active[row.guild_id] = {};
-        active[row.guild_id][row.channel_id] = { ownerId: row.owner_id, members: [] };
-      });
-    }
-    global.JTC_ACTIVE_MEMORY = active;
-    hasLoadedActive = true;
-    return active;
-  } catch {
-    hasLoadedActive = true;
-    return global.JTC_ACTIVE_MEMORY;
+  if (hasLoadedActive || !supabase) return global.JTC_ACTIVE_MEMORY;
+  const { data, error } = await supabase.from('jtc_active').select('*');
+  if (error) throw error;
+  const active = {};
+  for (const row of data || []) {
+    active[row.guild_id] ||= {};
+    active[row.guild_id][row.channel_id] = {
+      ownerId: row.owner_id,
+      controlMessageId: row.control_message_id || '',
+      status: row.status || '',
+      lastLfmAt: Number(row.last_lfm_at || 0),
+    };
   }
+  global.JTC_ACTIVE_MEMORY = active;
+  hasLoadedActive = true;
+  return active;
 }
-export async function saveJtcActive(data) {
+
+export async function saveJtcActive(data, guildId = null) {
   global.JTC_ACTIVE_MEMORY = data;
   if (!supabase) return;
-  try {
-    const rows = [];
-    for (const [guildId, channels] of Object.entries(data)) {
-      const channelIds = Object.keys(channels);
-      for (const [channelId, info] of Object.entries(channels)) {
-        rows.push({ guild_id: guildId, channel_id: channelId, owner_id: info.ownerId });
-      }
-      if (channelIds.length > 0) {
-        await supabase.from('jtc_active')
-          .delete()
-          .eq('guild_id', guildId)
-          .not('channel_id', 'in', `(${channelIds.join(',')})`);
-      } else {
-        await supabase.from('jtc_active').delete().eq('guild_id', guildId);
-      }
-    }
-    if (rows.length > 0) {
-      const { error } = await supabase.from('jtc_active').upsert(rows);
+  const guildIds = guildId ? [guildId] : Object.keys(data);
+  for (const currentGuildId of guildIds) {
+    const rows = Object.entries(data[currentGuildId] || {}).map(([channelId, info]) => ({
+      guild_id: currentGuildId,
+      channel_id: channelId,
+      owner_id: info.ownerId,
+      control_message_id: info.controlMessageId || null,
+      status: info.status || null,
+      last_lfm_at: Number(info.lastLfmAt || 0),
+    }));
+    if (!rows.length) {
+      const { error } = await supabase.from('jtc_active').delete().eq('guild_id', currentGuildId);
       if (error) throw error;
+      continue;
     }
-  } catch (e) {
-    console.error('[JTC] Error syncing active channels to Supabase:', e.message);
+
+    const { error: upsertError } = await supabase.from('jtc_active').upsert(rows);
+    if (upsertError) throw upsertError;
+
+    const { data: persisted, error: selectError } = await supabase.from('jtc_active')
+      .select('channel_id').eq('guild_id', currentGuildId);
+    if (selectError) throw selectError;
+    const currentIds = new Set(rows.map(row => row.channel_id));
+    const staleIds = (persisted || []).map(row => row.channel_id).filter(channelId => !currentIds.has(channelId));
+    if (staleIds.length) {
+      const { error: deleteError } = await supabase.from('jtc_active').delete().in('channel_id', staleIds);
+      if (deleteError) throw deleteError;
+    }
   }
 }
-let jtcProfilesCache = null;
-export async function getJtcProfiles() {
-  if (jtcProfilesCache) return jtcProfilesCache;
-  if (!supabase) return {};
-  try {
-    const { data } = await supabase.from('jtc_profiles').select('*');
-    jtcProfilesCache = {};
-    if (data) {
-      data.forEach(row => {
-        jtcProfilesCache[row.user_id] = {
-          name: row.name,
-          limit: row.limit,
-          bitrate: row.bitrate,
-          isLocked: row.is_locked,
-          isHidden: row.is_hidden
-        };
-      });
-    }
-    return jtcProfilesCache;
-  } catch {
-    if (!jtcProfilesCache) jtcProfilesCache = {};
-    return jtcProfilesCache;
+
+const jtcProfileCache = new Map();
+const profileKey = (guildId, userId) => `${guildId}:${userId}`;
+const profileFromRow = row => normalizeJtcProfile({
+  name: row.name,
+  limit: row.limit,
+  bitrate: row.bitrate,
+  status: row.status,
+  rtcRegion: row.rtc_region,
+  isLocked: row.is_locked,
+  isHidden: row.is_hidden,
+  isNsfw: row.is_nsfw,
+});
+
+export async function getJtcProfile(guildId, userId, forceRefresh = false) {
+  const key = profileKey(guildId, userId);
+  if (!forceRefresh && jtcProfileCache.has(key)) return { ...jtcProfileCache.get(key) };
+  if (!supabase) return null;
+
+  let { data, error } = await supabase.from('jtc_profiles')
+    .select('*').eq('guild_id', guildId).eq('user_id', userId).maybeSingle();
+  if (error) throw error;
+  if (!data) {
+    ({ data, error } = await supabase.from('jtc_profiles')
+      .select('*').eq('guild_id', '').eq('user_id', userId).maybeSingle());
+    if (error) throw error;
   }
+  if (!data) return null;
+  const profile = profileFromRow(data);
+  jtcProfileCache.set(key, profile);
+  return { ...profile };
 }
-export async function saveJtcProfiles(data) {
-  jtcProfilesCache = data;
-  if (!supabase) return;
-  for (const [userId, profile] of Object.entries(data)) {
-    supabase.from('jtc_profiles').upsert({
+
+export async function saveJtcProfile(guildId, userId, value, maximumBitrate = 96000) {
+  const profile = normalizeJtcProfile(value, maximumBitrate);
+  if (!profile.name) throw new TypeError('Channel name is required.');
+  if (supabase) {
+    const { error } = await supabase.from('jtc_profiles').upsert({
+      guild_id: guildId,
       user_id: userId,
       name: profile.name,
       limit: profile.limit,
       bitrate: profile.bitrate,
+      status: profile.status || null,
+      rtc_region: profile.rtcRegion || null,
       is_locked: profile.isLocked,
-      is_hidden: profile.isHidden
-    }).catch(() => {});
+      is_hidden: profile.isHidden,
+      is_nsfw: profile.isNsfw,
+    }, { onConflict: 'guild_id,user_id' });
+    if (error) throw error;
+  }
+  jtcProfileCache.set(profileKey(guildId, userId), profile);
+  return { ...profile };
+}
+
+export async function setJtcVoiceStatus(channel, status) {
+  const normalized = String(status || '').trim().slice(0, 500);
+  if (typeof channel.setStatus === 'function') await channel.setStatus(normalized || null);
+  else await channel.client.rest.put(`/channels/${channel.id}/voice-status`, { body: { status: normalized || null } });
+  return normalized;
+}
+
+export async function applyJtcProfile(channel, profile) {
+  const value = normalizeJtcProfile(profile, channel.guild.maximumBitrate || 96000);
+  await channel.edit({
+    name: value.name || channel.name,
+    userLimit: value.limit,
+    bitrate: value.bitrate,
+    rtcRegion: value.rtcRegion || null,
+    nsfw: value.isNsfw,
+  }, 'Applied JTC profile');
+  await channel.permissionOverwrites.edit(channel.guild.id, {
+    Connect: value.isLocked ? false : null,
+    ViewChannel: value.isHidden ? false : null,
+  }, { reason: 'Applied JTC profile' });
+  await setJtcVoiceStatus(channel, value.status);
+  return value;
+}
+
+function dashboardUrl(guildId) {
+  try {
+    const url = new URL(process.env.DASHBOARD_URL || '');
+    if (!['http:', 'https:'].includes(url.protocol)) return '';
+    return new URL(`/jtc/${guildId}`, url).toString();
+  } catch {
+    return '';
   }
 }
+
+export function buildJtcDashboard(channel, member) {
+  const channelId = channel.id;
+  const embed = new EmbedBuilder()
+    .setTitle('⚙️ Your temporary voice channel')
+    .setDescription(`Owner: ${member}\nUse the menus below to manage settings and permissions.\nSaved profiles apply only to this server.`)
+    .setColor('#5865F2')
+    .setThumbnail(member.user.displayAvatarURL());
+  const settingsMenu = new StringSelectMenuBuilder()
+    .setCustomId(`jtc_settings:${channelId}`)
+    .setPlaceholder('Change channel settings')
+    .addOptions([
+      { label: 'Name', description: 'Change the channel name', value: 'name', emoji: JTCEmojis.NAME },
+      { label: 'Limit', description: 'Change the member limit', value: 'limit', emoji: JTCEmojis.LIMIT },
+      { label: 'Status', description: 'Change the voice status', value: 'status', emoji: JTCEmojis.STATUS },
+      { label: 'Game', description: 'Use your current game as the name', value: 'game', emoji: '🎮' },
+      { label: 'LFM', description: 'Post that you are looking for members', value: 'lfm', emoji: '👥' },
+      { label: 'Bitrate', description: 'Change the channel bitrate', value: 'bitrate', emoji: JTCEmojis.BITRATE },
+      { label: 'Region', description: 'Change the voice region', value: 'region', emoji: '🌐' },
+      { label: 'Text Chat', description: 'Open the channel text chat', value: 'text', emoji: '💬' },
+      { label: 'NSFW', description: 'Toggle age restriction', value: 'nsfw', emoji: '⚠️' },
+      { label: 'Claim', description: 'Claim a room whose owner left', value: 'claim', emoji: '👑' },
+    ]);
+  const permissionsMenu = new StringSelectMenuBuilder()
+    .setCustomId(`jtc_permissions:${channelId}`)
+    .setPlaceholder('Change channel permissions')
+    .addOptions([
+      { label: 'Lock', description: 'Prevent others from joining', value: 'lock', emoji: JTCEmojis.LOCK },
+      { label: 'Unlock', description: 'Allow others to join', value: 'unlock', emoji: JTCEmojis.UNLOCK },
+      { label: 'Permit', description: 'Allow users or roles', value: 'permit', emoji: '✅' },
+      { label: 'Reject', description: 'Deny and disconnect users or roles', value: 'reject', emoji: JTCEmojis.KICK },
+      { label: 'Invite', description: 'Invite users to the room', value: 'invite', emoji: JTCEmojis.INVITE },
+      { label: 'Ghost', description: 'Hide the channel', value: 'ghost', emoji: JTCEmojis.HIDE },
+      { label: 'Unghost', description: 'Make the channel visible', value: 'unghost', emoji: JTCEmojis.UNHIDE },
+      { label: 'Transfer', description: 'Transfer ownership', value: 'transfer', emoji: JTCEmojis.TRANSFER },
+    ]);
+  const buttons = [
+    new ButtonBuilder().setCustomId(`jtc_btn_load:${channelId}`).setLabel('Load Settings').setEmoji('⚙️').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(`jtc_btn_save:${channelId}`).setLabel('Save Current').setEmoji(JTCEmojis.SAVE).setStyle(ButtonStyle.Secondary),
+  ];
+  const url = dashboardUrl(channel.guild.id);
+  if (url) buttons.push(new ButtonBuilder().setURL(url).setLabel('Dashboard').setStyle(ButtonStyle.Link));
+  return {
+    content: `${member}`,
+    embeds: [embed],
+    components: [
+      new ActionRowBuilder().addComponents(settingsMenu),
+      new ActionRowBuilder().addComponents(permissionsMenu),
+      new ActionRowBuilder().addComponents(buttons),
+    ],
+  };
+}
+
+export async function refreshJtcDashboard(channel, owner) {
+  const active = await getJtcActive();
+  const info = active[channel.guild.id]?.[channel.id];
+  if (!info) return;
+  const payload = buildJtcDashboard(channel, owner);
+  let message = info.controlMessageId
+    ? await channel.messages.fetch(info.controlMessageId).catch(() => null)
+    : null;
+  if (message) await message.edit(payload);
+  else message = await channel.send(payload);
+  info.controlMessageId = message.id;
+  await saveJtcActive(active, channel.guild.id);
+}
+
+export async function updateJtcOwner(channel, previousOwnerId, nextOwner) {
+  const active = await getJtcActive();
+  const info = active[channel.guild.id]?.[channel.id];
+  if (!info) throw new Error('This is not an active JTC channel.');
+  if (previousOwnerId && previousOwnerId !== nextOwner.id) {
+    await channel.permissionOverwrites.edit(previousOwnerId, {
+      MuteMembers: null,
+      DeafenMembers: null,
+      MoveMembers: null,
+    }, { reason: 'JTC ownership transferred' });
+  }
+  await channel.permissionOverwrites.edit(nextOwner.id, {
+    ViewChannel: true,
+    Connect: true,
+    Speak: true,
+    MuteMembers: true,
+    DeafenMembers: true,
+    MoveMembers: true,
+  }, { reason: 'JTC ownership transferred' });
+  info.ownerId = nextOwner.id;
+  await saveJtcActive(active, channel.guild.id);
+  await refreshJtcDashboard(channel, nextOwner);
+}
+
 export async function handleSetupJTC(interaction) {
   if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
     return interaction.reply({ content: '❌ You must be an Administrator to use this command.', flags: MessageFlags.Ephemeral });
@@ -195,62 +378,21 @@ export async function handleSetupJTC(interaction) {
     const hubChannel = await guild.channels.create({
       name: hubName,
       type: ChannelType.GuildVoice,
-      parent: category ? category.id : null,
-      permissionOverwrites: [
-        {
-          id: guild.id,
-          allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.Connect],
-          deny: [PermissionFlagsBits.Speak]
-        }
-      ]
+      parent: category?.id || null,
+      permissionOverwrites: [{
+        id: guild.id,
+        allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.Connect],
+        deny: [PermissionFlagsBits.Speak],
+      }],
     });
-    await saveJtcSettings(guild.id, {
-      hubChannelId: hubChannel.id,
-      categoryId: category?.id || '',
-    });
-    await interaction.editReply(`✅ **Join To Create** system has been setup!\nHub Channel: ${hubChannel}`);
+    await saveJtcSettings(guild.id, { hubChannelId: hubChannel.id, categoryId: category?.id || '' });
+    await interaction.editReply(`✅ **Join To Create** is ready.\nHub Channel: ${hubChannel}`);
   } catch (error) {
     console.error('[setupJTC] Error:', error);
-    await interaction.editReply('❌ An error occurred while setting up the JTC system. Ensure the bot has `Manage Channels` permission.');
+    await interaction.editReply('❌ Setup failed. Check the bot Manage Channels permission and database connection.');
   }
 }
-async function sendJTCDashboard(channel, member) {
-  const embed = new EmbedBuilder()
-    .setTitle('⚙️ Welcome to your temporary voice channel')
-    .setDescription(`Welcome ${member}, you are the owner of this channel.\nControl your channel using the menus below.`)
-    .setColor('#2F3136')
-    .setThumbnail(member.user.displayAvatarURL());
-  const settingsMenu = new StringSelectMenuBuilder()
-    .setCustomId('jtc_settings')
-    .setPlaceholder('Change channel settings')
-    .addOptions([
-      { label: 'Name', description: 'Change the channel name', value: 'setting_name', emoji: JTCEmojis.NAME },
-      { label: 'Status', description: 'Change the voice channel status', value: 'setting_status', emoji: JTCEmojis.STATUS },
-      { label: 'Limit', description: 'Change the channel limit', value: 'setting_limit', emoji: JTCEmojis.LIMIT },
-      { label: 'Bitrate', description: 'Change the channel bitrate', value: 'setting_bitrate', emoji: JTCEmojis.BITRATE }
-    ]);
-  const permissionsMenu = new StringSelectMenuBuilder()
-    .setCustomId('jtc_permissions')
-    .setPlaceholder('Change channel permissions')
-    .addOptions([
-      { label: 'Hide', description: 'Hide the channel from others', value: 'perm_hide', emoji: JTCEmojis.HIDE },
-      { label: 'Unhide', description: 'Make the channel visible', value: 'perm_unhide', emoji: JTCEmojis.UNHIDE },
-      { label: 'Lock', description: 'Lock the channel', value: 'perm_lock', emoji: JTCEmojis.LOCK },
-      { label: 'Unlock', description: 'Unlock the channel', value: 'perm_unlock', emoji: JTCEmojis.UNLOCK },
-      { label: 'Kick', description: 'Kick a user out of the channel', value: 'perm_kick', emoji: JTCEmojis.KICK },
-      { label: 'Transfer', description: 'Transfer ownership to someone else', value: 'perm_transfer', emoji: JTCEmojis.TRANSFER },
-      { label: 'Invite', description: 'Send an invite link', value: 'perm_invite', emoji: JTCEmojis.INVITE }
-    ]);
-  const saveBtn = new ButtonBuilder()
-    .setCustomId('jtc_btn_save')
-    .setLabel('Save Settings')
-    .setEmoji(JTCEmojis.SAVE)
-    .setStyle(ButtonStyle.Primary);
-  const row1 = new ActionRowBuilder().addComponents(settingsMenu);
-  const row2 = new ActionRowBuilder().addComponents(permissionsMenu);
-  const row3 = new ActionRowBuilder().addComponents(saveBtn);
-  await channel.send({ content: `${member}`, embeds: [embed], components: [row1, row2, row3] }).catch(() => {});
-}
+
 export async function handleVoiceStateUpdate(oldState, newState) {
   const guild = newState.guild;
   const member = newState.member;
@@ -258,85 +400,93 @@ export async function handleVoiceStateUpdate(oldState, newState) {
   const config = await getJtcSettings(guild.id);
   const active = await getJtcActive();
   const hubId = config.hubChannelId;
+
   if (newState.channelId === hubId && oldState.channelId !== hubId) {
     try {
-      const configuredCategory = config.categoryId
-        ? guild.channels.cache.get(config.categoryId)
-        : null;
-      const categoryId = configuredCategory?.type === ChannelType.GuildCategory
-        ? configuredCategory.id
-        : newState.channel.parentId;
-      const profiles = await getJtcProfiles();
-      const userProfile = profiles[member.id] || {};
-      const channelName = userProfile.name || formatJtcChannelName(config.defaultName, member);
-      const userLimit = Number.isInteger(userProfile.limit) ? userProfile.limit : config.defaultLimit;
-      const requestedBitrate = Number.isInteger(userProfile.bitrate) ? userProfile.bitrate : config.defaultBitrate;
-      const bitrate = Math.min(Math.max(requestedBitrate, 8000), guild.maximumBitrate || 96000);
+      const configuredCategory = config.categoryId ? guild.channels.cache.get(config.categoryId) : null;
+      const categoryId = configuredCategory?.type === ChannelType.GuildCategory ? configuredCategory.id : newState.channel.parentId;
+      const savedProfile = await getJtcProfile(guild.id, member.id);
+      const profile = savedProfile || normalizeJtcProfile({
+        name: formatJtcChannelName(config.defaultName, member),
+        limit: config.defaultLimit,
+        bitrate: config.defaultBitrate,
+        status: config.defaultStatus,
+        rtcRegion: config.defaultRegion,
+        isLocked: config.defaultLocked,
+        isHidden: config.defaultHidden,
+        isNsfw: config.defaultNsfw,
+      }, guild.maximumBitrate || 96000);
+      if (!profile.name) profile.name = formatJtcChannelName(config.defaultName, member);
       const tempChannel = await guild.channels.create({
-        name: channelName,
+        name: profile.name,
         type: ChannelType.GuildVoice,
         parent: categoryId,
-        userLimit: userLimit,
-        bitrate: bitrate,
+        userLimit: profile.limit,
+        bitrate: profile.bitrate,
+        rtcRegion: profile.rtcRegion || null,
+        nsfw: profile.isNsfw,
         permissionOverwrites: [
           {
             id: guild.id,
-            allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.Connect]
+            allow: [
+              ...(!profile.isLocked ? [PermissionFlagsBits.Connect] : []),
+              ...(!profile.isHidden ? [PermissionFlagsBits.ViewChannel] : []),
+            ],
+            deny: [
+              ...(profile.isLocked ? [PermissionFlagsBits.Connect] : []),
+              ...(profile.isHidden ? [PermissionFlagsBits.ViewChannel] : []),
+            ],
           },
           {
             id: member.id,
-            allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.Connect, PermissionFlagsBits.Speak, PermissionFlagsBits.MuteMembers, PermissionFlagsBits.DeafenMembers, PermissionFlagsBits.MoveMembers]
-          }
-        ]
+            allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.Connect, PermissionFlagsBits.Speak, PermissionFlagsBits.MuteMembers, PermissionFlagsBits.DeafenMembers, PermissionFlagsBits.MoveMembers],
+          },
+        ],
       });
-      const everyoneOverwrite = {};
-      if (userProfile.isLocked === true || (userProfile.isLocked === undefined && config.defaultLocked)) everyoneOverwrite.Connect = false;
-      if (userProfile.isHidden) everyoneOverwrite.ViewChannel = false;
-      if (Object.keys(everyoneOverwrite).length > 0) {
-        await tempChannel.permissionOverwrites.edit(guild.id, everyoneOverwrite).catch(() => {});
-      }
-      await member.voice.setChannel(tempChannel).catch(() => {});
-      if (!active[guild.id]) active[guild.id] = {};
-      active[guild.id][tempChannel.id] = { ownerId: member.id, members: [member.id] };
-      await saveJtcActive(active);
-      await sendJTCDashboard(tempChannel, member);
+      await member.voice.setChannel(tempChannel);
+      active[guild.id] ||= {};
+      active[guild.id][tempChannel.id] = { ownerId: member.id, controlMessageId: '', status: profile.status, lastLfmAt: 0 };
+      await saveJtcActive(active, guild.id);
+      if (profile.status) await setJtcVoiceStatus(tempChannel, profile.status);
+      await refreshJtcDashboard(tempChannel, member);
     } catch (error) {
       console.error('[JTC] Error creating temp channel:', error);
     }
   }
-  if (newState.channelId && newState.channelId !== hubId) {
-    if (active[guild.id] && active[guild.id][newState.channelId]) {
-      const ownerId = active[guild.id][newState.channelId].ownerId;
-      if (member.id !== ownerId && !member.permissions.has(PermissionFlagsBits.Administrator)) {
-        const channel = newState.channel;
-        if (channel) {
-          const everyonePerms = channel.permissionOverwrites.cache.get(guild.id);
-          const isLocked = everyonePerms && everyonePerms.deny.has(PermissionFlagsBits.Connect);
-          const isHidden = everyonePerms && everyonePerms.deny.has(PermissionFlagsBits.ViewChannel);
-          if (isLocked || isHidden) {
-            const memberPerms = channel.permissionOverwrites.cache.get(member.id);
-            const hasExplicitAllow = memberPerms && (memberPerms.allow.has(PermissionFlagsBits.Connect) || memberPerms.allow.has(PermissionFlagsBits.ViewChannel));
-            if (!hasExplicitAllow) {
-              await member.voice.disconnect('Bypassed JTC Lock via Invite Link').catch(() => {});
-              member.send(`❌ You were disconnected from **${channel.name}** because the channel is currently locked or hidden by the owner.`).catch(() => {});
-            }
-          }
-        }
+
+  if (newState.channelId && newState.channelId !== hubId && active[guild.id]?.[newState.channelId]) {
+    const info = active[guild.id][newState.channelId];
+    if (member.id !== info.ownerId && !member.permissions.has(PermissionFlagsBits.Administrator)) {
+      const channel = newState.channel;
+      const everyonePerms = channel.permissionOverwrites.cache.get(guild.id);
+      const restricted = everyonePerms?.deny.has(PermissionFlagsBits.Connect) || everyonePerms?.deny.has(PermissionFlagsBits.ViewChannel);
+      const effective = channel.permissionsFor(member);
+      if (restricted && (!effective?.has(PermissionFlagsBits.Connect) || !effective?.has(PermissionFlagsBits.ViewChannel))) {
+        await member.voice.disconnect('JTC channel is locked or hidden');
+        await member.send(`❌ You cannot access **${channel.name}** because it is locked or hidden.`).catch(() => null);
       }
     }
   }
-  if (oldState.channelId && oldState.channelId !== newState.channelId) {
-    if (active[guild.id] && active[guild.id][oldState.channelId]) {
-      const channel = oldState.channel;
-      const ownerId = active[guild.id][oldState.channelId].ownerId;
-      if (channel && (member.id === ownerId || channel.members.size === 0)) {
-        await channel.delete('JTC Owner Left or Empty').catch(() => {});
-        delete active[guild.id][oldState.channelId];
-        await saveJtcActive(active);
+
+  if (oldState.channelId && oldState.channelId !== newState.channelId && active[guild.id]?.[oldState.channelId]) {
+    const channel = oldState.channel;
+    const info = active[guild.id][oldState.channelId];
+    if (!channel) return;
+    if (channel.members.size === 0) {
+      await channel.delete('JTC channel became empty');
+      delete active[guild.id][oldState.channelId];
+      if (Object.keys(active[guild.id]).length === 0) delete active[guild.id];
+      await saveJtcActive(active, guild.id);
+    } else if (member.id === info.ownerId) {
+      const successor = selectJtcSuccessor(channel.members, info.ownerId);
+      if (successor) {
+        await updateJtcOwner(channel, info.ownerId, successor);
+        await channel.send(`👑 ${successor} is now the room owner because the previous owner left.`);
       }
     }
   }
 }
+
 export async function sweepOrphanedChannels(client) {
   console.log('[JTC] Đang quét kênh JTC mồ côi...');
   const active = await getJtcActive();
@@ -345,24 +495,33 @@ export async function sweepOrphanedChannels(client) {
     const guild = client.guilds.cache.get(guildId);
     if (!guild) {
       delete active[guildId];
+      await saveJtcActive(active, guildId);
       swept++;
       continue;
     }
-    for (const channelId of Object.keys(channels)) {
+    for (const [channelId, info] of Object.entries(channels)) {
       const channel = guild.channels.cache.get(channelId);
       if (!channel) {
         delete active[guildId][channelId];
         swept++;
       } else if (channel.members.size === 0) {
-        await channel.delete('JTC Sweep: Orphaned empty channel').catch(() => {});
+        await channel.delete('JTC sweep: empty channel');
         delete active[guildId][channelId];
         swept++;
+      } else if (!channel.members.has(info.ownerId)) {
+        const successor = selectJtcSuccessor(channel.members, info.ownerId);
+        if (successor) await updateJtcOwner(channel, info.ownerId, successor);
+      } else {
+        const owner = channel.members.get(info.ownerId);
+        await refreshJtcDashboard(channel, owner);
       }
     }
-    if (Object.keys(active[guildId]).length === 0) {
-      delete active[guildId];
-    }
+    if (Object.keys(active[guildId] || {}).length === 0) delete active[guildId];
+    await saveJtcActive(active, guildId);
   }
-  await saveJtcActive(active);
   console.log(`[JTC] Đã dọn ${swept} kênh mồ côi.`);
+}
+
+export function getPlayingActivity(member) {
+  return member.presence?.activities?.find(activity => activity.type === ActivityType.Playing)?.name || '';
 }

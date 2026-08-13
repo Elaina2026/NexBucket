@@ -35,8 +35,7 @@ async function recordChecks(statuses) {
         status,
     }));
     const { error } = await supabase.from('uptime_checks').insert(rows);
-    if (error) console.error(`[UptimeTracker DB Error] ${error.message || 'fetch failed'}`);
-    else historyCache = null;
+    if (!error) historyCache = null;
 }
 
 async function loadRecentHistory() {

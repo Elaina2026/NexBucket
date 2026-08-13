@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#0a0a0f" />
+  <meta name="robots" content="noindex,nofollow" />
+  <title>JTC Profile — NexBucket</title>
+  <link rel="icon" type="image/png" href="/favicon.ico" />
+  <link rel="stylesheet" href="/style.css?v=1.8" />
+  <script src="/theme-init.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-left"><img class="logo-icon-bg" src="/api/bot-avatar" alt="NexBucket avatar" /><span class="topbar-title">NexBucket JTC</span></div>
+    <div class="topbar-right"><a class="nav-btn" href="/">Server Dashboard</a><button id="themeToggle" class="theme-toggle" type="button" aria-label="Toggle color theme"><span aria-hidden="true">◐</span></button></div>
+  </header>
+  <main class="jtc-profile-page">
+    <section class="section-card jtc-profile-card" aria-labelledby="profileTitle">
+      <div class="jtc-profile-heading">
+        <img id="guildIcon" class="jtc-guild-icon hidden" alt="Server icon" />
+        <div><h1 id="profileTitle">Your voice profile</h1><p id="guildName" class="field-hint">Loading server…</p></div>
+      </div>
+      <p class="jtc-profile-intro">These defaults apply only when you create a temporary room in this server. You can still change the active room from Discord.</p>
+      <form id="jtcProfileForm" class="hidden">
+        <div class="form-group"><label class="field-label" for="profileName">Room name</label><input class="text-input" id="profileName" maxlength="100" required /><span class="field-hint">Maximum 100 characters.</span></div>
+        <div class="form-group"><label class="field-label" for="profileStatus">Voice status</label><input class="text-input" id="profileStatus" maxlength="500" /><span class="field-hint">Optional. Leave blank to clear the status.</span></div>
+        <div class="form-row">
+          <div class="form-group"><label class="field-label" for="profileLimit">User limit</label><input class="text-input" id="profileLimit" type="number" min="0" max="99" required /><span class="field-hint">0 means unlimited.</span></div>
+          <div class="form-group"><label class="field-label" for="profileBitrate">Bitrate (kbps)</label><input class="text-input" id="profileBitrate" type="number" min="8" required /><span id="bitrateHint" class="field-hint"></span></div>
+        </div>
+        <div class="form-group"><label class="field-label" for="profileRegion">Voice region</label><select class="select-input" id="profileRegion"><option value="">Automatic</option></select></div>
+        <fieldset class="jtc-toggle-fieldset"><legend>Room access defaults</legend>
+          <label class="toggle-group"><span class="toggle-info"><span><span class="toggle-label">Locked</span><span class="toggle-desc">Deny new connections until permitted.</span></span></span><span class="toggle-switch"><input id="profileLocked" type="checkbox" /><span class="toggle-slider"></span></span></label>
+          <label class="toggle-group"><span class="toggle-info"><span><span class="toggle-label">Hidden</span><span class="toggle-desc">Hide the room until users or roles are permitted.</span></span></span><span class="toggle-switch"><input id="profileHidden" type="checkbox" /><span class="toggle-slider"></span></span></label>
+          <label class="toggle-group"><span class="toggle-info"><span><span class="toggle-label">NSFW</span><span class="toggle-desc">Mark newly created rooms as age-restricted.</span></span></span><span class="toggle-switch"><input id="profileNsfw" type="checkbox" /><span class="toggle-slider"></span></span></label>
+        </fieldset>
+        <div class="jtc-profile-actions"><button id="saveProfile" class="btn-save" type="submit">Save profile</button><span id="profileStatusMessage" class="save-status" role="status" aria-live="polite"></span></div>
+      </form>
+      <div id="profileLoading" class="empty-state">Loading your private JTC profile…</div>
+    </section>
+  </main>
+  <script type="module" src="/jtc-profile.js?v=1.0"></script>
+</body>
+</html>

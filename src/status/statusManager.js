@@ -2,7 +2,7 @@ import { EmbedBuilder } from '../utils/embed.js';
 import NetworkGuard from './mc-banner/network-guard.js';
 import dns from 'node:dns';
 import { AttachmentBuilder, MessageFlags } from 'discord.js';
-import { supabase } from '../database/supabaseClient.js';
+import { isSupabaseUnavailable, supabase } from '../database/supabaseClient.js';
 import { getAllSections, saveSection } from '../database/guildSettings.js';
 import {
     getMinecraftBannerFallback,
@@ -79,7 +79,9 @@ export async function getServers(guildId = null) {
         allServersSnapshot = { servers: structuredClone(servers), expiresAt: now + SERVER_SNAPSHOT_MS };
         return servers;
     } catch (error) {
-        console.error('[Status] Failed to load Minecraft config:', error.message || error);
+        if (!isSupabaseUnavailable(error)) {
+            console.error('[Status] Failed to load Minecraft config:', error.message || error);
+        }
         return [];
     }
 }

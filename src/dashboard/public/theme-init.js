@@ -5,6 +5,6 @@ if(localStorage.getItem('nex-theme')==='light')document.documentElement.setAttri
 document.addEventListener('error', function (e) {
   var el = e.target;
   if (el && el.tagName === 'IMG' && el.hasAttribute('data-hide-on-error')) {
-    el.style.display = 'none';
+    el.hidden = true;
   }
 }, true);

@@ -51,6 +51,9 @@ function dnsValue(type, value) {
   if (type === 'MX') return `${value.priority} ${value.exchange}`;
   if (type === 'TXT') return value.join('');
   if (type === 'CAA') return `${value.critical || 0} ${value.tag} ${value.value}`;
+  if (type === 'DS') {
+    return `${value.keyTag} ${value.algorithm} ${value.digestType} ${value.digest}`;
+  }
   if (type === 'SOA') {
     return `${value.nsname} ${value.hostmaster} (serial ${value.serial})`;
   }
@@ -66,6 +69,7 @@ export async function lookupDnsRecords(domain, resolver = dns) {
     ['TXT', 'resolveTxt'],
     ['CNAME', 'resolveCname'],
     ['CAA', 'resolveCaa'],
+    ['DS', 'resolveDs'],
     ['SOA', 'resolveSoa'],
   ];
 
@@ -123,14 +127,46 @@ export async function lookupRdap(domain, fetchImpl = fetch) {
   return parseRdapDomain(await response.json());
 }
 
+export function registrationSource(domain) {
+  const tld = domain.split('.').at(-1);
+  if (tld === 'vn') {
+    return {
+      type: 'manual',
+      label: 'VNNIC',
+      url: 'https://vnnic.vn/whois-information/',
+      message: 'VNNIC does not publish a machine-readable RDAP service for .vn. Use the official VNNIC lookup.',
+    };
+  }
+  return {
+    type: 'rdap',
+    label: ['com', 'net'].includes(tld) ? 'Verisign RDAP' : 'RDAP',
+    url: '',
+    message: '',
+  };
+}
+
 export async function lookupDomain(domainValue, deps = {}) {
   const domain = normalizeDomain(domainValue);
+  const source = registrationSource(domain);
+  const registrationPromise = source.type === 'manual'
+    ? Promise.resolve({ value: null, error: null })
+    : lookupRdap(domain, deps.fetchImpl).then(value => ({ value, error: null }))
+      .catch(error => ({ value: null, error: error.message || 'RDAP lookup failed' }));
   const [rdapResult, records] = await Promise.all([
-    lookupRdap(domain, deps.fetchImpl).then(value => ({ value, error: null }))
-      .catch(error => ({ value: null, error: error.message || 'RDAP lookup failed' })),
+    registrationPromise,
     lookupDnsRecords(domain, deps.resolver),
   ]);
-  return { domain, rdap: rdapResult.value, rdapError: rdapResult.error, records };
+  const dnssec = records.DS?.error
+    ? 'Unknown'
+    : records.DS?.values.length ? 'Signed' : 'Unsigned';
+  return {
+    domain,
+    rdap: rdapResult.value,
+    rdapError: rdapResult.error,
+    registrationSource: source,
+    dnssec,
+    records,
+  };
 }
 
 function isBlockedNetworkAddress(address) {

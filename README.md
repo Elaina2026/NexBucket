@@ -133,7 +133,7 @@ npm start
 ## Discord application setup
 
 1. Create an application in the [Discord Developer Portal](https://discord.com/developers/applications).
-2. Create its bot user and enable the gateway intents required by the enabled modules.
+2. Create its bot user and enable **Server Members Intent**, **Presence Intent**, and **Message Content Intent**. Presence Intent is required for JTC's Game action.
 3. Set `DISCORD_TOKEN`, `CLIENT_ID`, and `CLIENT_SECRET` in `.env`.
 4. Add the production OAuth2 redirect URL:
 
@@ -148,6 +148,14 @@ http://localhost:3000/api/auth/callback
 ```
 
 The dashboard only exposes guilds where the signed-in user has Administrator or Manage Server permission and the bot is present. Learn management requires Discord Administrator permission.
+
+## Join-to-Create voice rooms
+
+Run `/setup-jtc`, then select the temporary-room category and LFM text channel in the server dashboard. Room owners receive Discord-native controls for name, limit, status, current game, LFM posts, bitrate, region, native text chat, NSFW, claim, lock, permit/reject, invite, visibility, and ownership transfer.
+
+**Save Current** stores the room as the member's private profile for that server. **Load Settings** applies it to an active room. **Dashboard** opens `/jtc/:guildId`, where any authenticated guild member can edit only their own profile; it does not grant access to server administration.
+
+Grant the bot View Channels, Manage Channels, Create Invite, Move Members, Manage Roles, Send Messages, and Embed Links. Enable Presence Intent for automatic Game naming. When an owner leaves, ownership transfers to another non-bot member; the room is deleted only after it becomes empty.
 
 ## Supabase and migrations
 

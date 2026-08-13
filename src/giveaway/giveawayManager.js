@@ -1,6 +1,6 @@
 import { EmbedBuilder } from '../utils/embed.js';
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags } from 'discord.js';
-import { supabase } from '../database/supabaseClient.js';
+import { isSupabaseUnavailable, supabase } from '../database/supabaseClient.js';
 import { parseDuration } from '../moderation/moderationManager.js';
 let lastFetchErrorTime = 0;
 function mapGiveaway(g) {
@@ -29,8 +29,8 @@ async function getGiveaways({ guildId, messageId, ended, endAtMost, limit = 100 
     if (error) {
       const now = Date.now();
       if (now - lastFetchErrorTime > 300000) {
-        const isTimeout = error.code === 'TIMEOUT' || /timed out|fetch failed|paused/i.test(error.message || '');
-        const msg = `[GiveawayManager] Supabase ${isTimeout ? 'temporarily unreachable' : 'fetch error'}: ${error.message || 'Unknown error'}. Retrying next cycle.`;
+        const unavailable = isSupabaseUnavailable(error);
+        const msg = `[GiveawayManager] Supabase ${unavailable ? 'REST API temporarily unreachable' : 'fetch error'}: ${error.message || 'Unknown error'}. Retrying next cycle.`;
         console.error(msg);
         lastFetchErrorTime = now;
       }

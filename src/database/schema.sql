@@ -37,18 +37,27 @@ CREATE TABLE IF NOT EXISTS blacklist (
 );
 
 CREATE TABLE IF NOT EXISTS jtc_profiles (
-  user_id TEXT PRIMARY KEY,
+  guild_id TEXT NOT NULL DEFAULT '',
+  user_id TEXT NOT NULL,
   name TEXT,
   "limit" INTEGER NOT NULL DEFAULT 0 CHECK ("limit" BETWEEN 0 AND 99),
-  bitrate INTEGER NOT NULL DEFAULT 64000 CHECK (bitrate > 0),
+  bitrate INTEGER NOT NULL DEFAULT 64000 CHECK (bitrate >= 8000),
+  status TEXT,
+  rtc_region TEXT,
   is_locked BOOLEAN NOT NULL DEFAULT FALSE,
-  is_hidden BOOLEAN NOT NULL DEFAULT FALSE
+  is_hidden BOOLEAN NOT NULL DEFAULT FALSE,
+  is_nsfw BOOLEAN NOT NULL DEFAULT FALSE,
+  PRIMARY KEY (guild_id, user_id)
 );
+CREATE INDEX IF NOT EXISTS idx_jtc_profiles_user ON jtc_profiles (user_id);
 
 CREATE TABLE IF NOT EXISTS jtc_active (
   channel_id TEXT PRIMARY KEY,
   guild_id TEXT NOT NULL,
-  owner_id TEXT NOT NULL
+  owner_id TEXT NOT NULL,
+  control_message_id TEXT,
+  status TEXT,
+  last_lfm_at BIGINT NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_jtc_active_guild ON jtc_active (guild_id);
 
@@ -88,9 +97,22 @@ CREATE TABLE IF NOT EXISTS reminders (
   message TEXT NOT NULL,
   end_time BIGINT NOT NULL,
   created_at BIGINT NOT NULL,
-  done BOOLEAN NOT NULL DEFAULT FALSE
+  done BOOLEAN NOT NULL DEFAULT FALSE,
+  processing_at BIGINT,
+  target_type TEXT NOT NULL DEFAULT 'dm' CHECK (target_type IN ('dm', 'channel')),
+  guild_id TEXT,
+  channel_id TEXT,
+  recurrence TEXT CHECK (recurrence IS NULL OR recurrence = 'daily'),
+  time_zone TEXT,
+  local_time TEXT CHECK (local_time IS NULL OR local_time ~ '^(?:[01][0-9]|2[0-3]):[0-5][0-9]$'),
+  CHECK (
+    (target_type = 'dm' AND guild_id IS NULL AND channel_id IS NULL AND recurrence IS NULL AND time_zone IS NULL AND local_time IS NULL)
+    OR
+    (target_type = 'channel' AND guild_id IS NOT NULL AND channel_id IS NOT NULL AND recurrence = 'daily' AND time_zone IS NOT NULL AND local_time IS NOT NULL)
+  )
 );
 CREATE INDEX IF NOT EXISTS idx_reminders_pending ON reminders (end_time) WHERE done = FALSE;
+CREATE INDEX IF NOT EXISTS idx_reminders_user_pending ON reminders (user_id, end_time) WHERE done = FALSE;
 
 CREATE TABLE IF NOT EXISTS user_economy (
   user_id TEXT PRIMARY KEY,

@@ -150,8 +150,8 @@ function renderGrowthChart(data) {
   });
   wrap.innerHTML = `
     <div class="chart-legend">
-      <span class="legend-item"><span class="legend-dot" style="background:var(--accent)"></span>Servers (${guilds[guilds.length-1]})</span>
-      <span class="legend-item"><span class="legend-dot" style="background:var(--green)"></span>Users (${fmtNum(users[users.length-1])})</span>
+      <span class="legend-item"><span class="legend-dot legend-dot-accent"></span>Servers (${guilds[guilds.length-1]})</span>
+      <span class="legend-item"><span class="legend-dot legend-dot-green"></span>Users (${fmtNum(users[users.length-1])})</span>
     </div>
     <svg viewBox="0 0 ${W} ${H}" class="growth-svg">
       ${gridLines}
@@ -180,15 +180,19 @@ function renderSessions(data) {
       </div>
       <div class="session-actions">
         <span class="session-status ${isExpired ? 'expired' : 'active'}">${isExpired ? 'Expired' : 'Active'}</span>
-        ${!isExpired ? `<button class="btn-revoke" data-session-id="${esc(s.session_id)}">Revoke</button>` : ''}
+        ${!isExpired ? `<button class="btn-revoke" data-revoke-token="${esc(s.revoke_token)}">Revoke</button>` : ''}
       </div>
     </div>`;
   }).join('');
 }
-async function revokeSession(sessionId) {
+async function revokeSession(token) {
   if (!confirm('Revoke this session? The user will be logged out.')) return;
   try {
-    const r = await fetch(`/api/admin/sessions/${sessionId}/revoke`, { method: 'POST' });
+    const r = await fetch('/api/admin/sessions/revoke', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token }),
+    });
     if (r.ok) refreshAll();
     else alert('Failed to revoke session');
   } catch { alert('Network error'); }
@@ -223,7 +227,7 @@ function renderSystemStats(sys) {
   document.getElementById('cpuUsage').textContent = (sys.cpu.processUsagePercent).toFixed(1) + '%';
   document.getElementById('cpuModel').textContent = sys.cpu.model;
   const cpuBar = document.getElementById('cpuBar');
-  if (cpuBar) cpuBar.style.width = Math.min(100, sys.cpu.processUsagePercent) + '%';
+  if (cpuBar) cpuBar.value = Math.min(100, sys.cpu.processUsagePercent);
 
   const gbTotal = (sys.ram.total / 1073741824).toFixed(1);
   const gbUsed = ((sys.ram.total - sys.ram.free) / 1073741824).toFixed(1);
@@ -231,7 +235,7 @@ function renderSystemStats(sys) {
   document.getElementById('ramUsage').textContent = `${gbUsed} / ${gbTotal} GB`;
   document.getElementById('ramProcess').textContent = (sys.ram.process / 1048576).toFixed(1) + ' MB';
   const ramBar = document.getElementById('ramBar');
-  if (ramBar) ramBar.style.width = Math.min(100, ramPercent) + '%';
+  if (ramBar) ramBar.value = Math.min(100, ramPercent);
 
   if (sys.disk.total > 0) {
     const dGbTotal = (sys.disk.total / 1073741824).toFixed(1);
@@ -240,7 +244,7 @@ function renderSystemStats(sys) {
     document.getElementById('diskUsage').textContent = `${dGbUsed} / ${dGbTotal} GB`;
     document.getElementById('diskStatus').textContent = 'Primary Drive';
     const diskBar = document.getElementById('diskBar');
-    if (diskBar) diskBar.style.width = Math.min(100, diskPercent) + '%';
+    if (diskBar) diskBar.value = Math.min(100, diskPercent);
   } else {
     document.getElementById('diskUsage').textContent = 'N/A';
   }
@@ -282,7 +286,7 @@ function start() {
 
   document.getElementById('sessionsList')?.addEventListener('click', (e) => {
     const btn = e.target.closest('.btn-revoke');
-    if (btn) revokeSession(btn.dataset.sessionId);
+    if (btn) revokeSession(btn.dataset.revokeToken);
   });
   const timerEl = document.getElementById('refreshTimer');
   countdown = REFRESH_SEC;

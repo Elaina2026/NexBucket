@@ -1,20 +1,6 @@
 export {};
 
 const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-if (!reduceMotion) {
-  let scrollFrame = 0;
-  window.addEventListener('scroll', () => {
-    if (scrollFrame) return;
-    scrollFrame = requestAnimationFrame(() => {
-      scrollFrame = 0;
-      const hero = document.getElementById('heroSection');
-      if (!hero) return;
-      const scrollY = window.scrollY;
-      hero.style.transform = `translateY(${scrollY * 0.3}px)`;
-      hero.style.opacity = String(Math.max(0, 1 - scrollY / 600));
-    });
-  }, { passive: true });
-}
 
 document.getElementById('langToggle')?.addEventListener('click', () => {
   const current = window.NexI18n?.getLang() || 'en';

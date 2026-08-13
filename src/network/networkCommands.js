@@ -49,13 +49,18 @@ function requesterName(interaction) {
 
 export function createDnsEmbed(result, interaction) {
   const registration = result.rdap;
+  const source = result.registrationSource || { type: 'rdap', label: 'RDAP' };
   const records = result.records;
-  const registrationSummary = [
-    `**Registrar:** ${truncate(registration?.registrar || 'Unknown', 200)}`,
-    `**Created:** ${formatDate(registration?.createdAt)}`,
-    `**Expires:** ${formatDate(registration?.expiresAt)}`,
-    `**DNSSEC:** ${registration?.dnssec || 'Unknown'}`,
-  ].join('\n');
+  const registrationSummary = registration
+    ? [
+      `**Registrar:** ${truncate(registration.registrar || 'Unknown', 200)}`,
+      `**Created:** ${formatDate(registration.createdAt)}`,
+      `**Expires:** ${formatDate(registration.expiresAt)}`,
+      `**DNSSEC:** ${result.dnssec || registration.dnssec || 'Unknown'}`,
+    ].join('\n')
+    : source.type === 'manual'
+      ? `${truncate(source.message, 800)}\n[Open official ${source.label} lookup](${source.url})\n**DNSSEC:** ${result.dnssec || 'Unknown'} (DNS DS)`
+      : `Registration lookup failed.\n**DNSSEC:** ${result.dnssec || 'Unknown'} (DNS DS)`;
   const addressSummary = [
     ...(records.A?.values || []).map(value => `A • \`${value}\``),
     ...(records.AAAA?.values || []).map(value => `AAAA • \`${value}\``),
@@ -64,11 +69,13 @@ export function createDnsEmbed(result, interaction) {
   const embed = new EmbedBuilder()
     .setColor('#000000')
     .setTitle(`DNS Lookup • ${result.domain}`)
-    .setDescription(result.rdapError
-      ? `Registration data unavailable. DNS records are shown below.`
-      : 'Domain registration and essential DNS records.')
+    .setDescription(source.type === 'manual'
+      ? 'Registration details require the official registry lookup. DNS records are shown below.'
+      : result.rdapError
+        ? 'Registration data unavailable. DNS records are shown below.'
+        : 'Domain registration and essential DNS records.')
     .addFields(
-      { name: 'Domain', value: registrationSummary, inline: false },
+      { name: registration ? 'Domain' : 'Registration source', value: registrationSummary, inline: false },
       { name: 'Addresses', value: joinValues(addressSummary, 500, 4), inline: false },
       { name: 'Mail servers', value: joinValues(records.MX?.values, 500, 3), inline: true },
       { name: 'Nameservers', value: joinValues(records.NS?.values, 500, 3), inline: true },
@@ -78,8 +85,9 @@ export function createDnsEmbed(result, interaction) {
     embed.addFields({ name: 'CNAME', value: joinValues(records.CNAME.values, 300, 2), inline: false });
   }
 
+  const sourceLabel = source.type === 'manual' ? `${source.label} & DNS` : `${source.label || 'RDAP'} & DNS`;
   return embed
-    .setFooter({ text: `Requested by ${requesterName(interaction)} • RDAP & DNS` })
+    .setFooter({ text: `Requested by ${requesterName(interaction)} • ${sourceLabel}` })
     .setTimestamp();
 }
 

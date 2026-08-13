@@ -1,9 +1,9 @@
 import crypto from 'crypto';
 const ALGORITHM = 'aes-256-gcm';
 function getEncryptionKey() {
-    const secret = process.env.ENCRYPTION_SECRET || process.env.DISCORD_TOKEN;
+    const secret = process.env.ENCRYPTION_SECRET;
     if (!secret) {
-        throw new Error('ENCRYPTION_SECRET or DISCORD_TOKEN must be set — no hardcoded fallback key allowed in production');
+        throw new Error('ENCRYPTION_SECRET must be set');
     }
     return crypto.createHash('sha256').update(String(secret)).digest();
 }
