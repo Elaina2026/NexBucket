@@ -1,8 +1,7 @@
 import { EmbedBuilder } from '../utils/embed.js';
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags } from 'discord.js';
-import { isSupabaseUnavailable, supabase } from '../database/supabaseClient.js';
+import { supabase } from '../database/supabaseClient.js';
 import { parseDuration } from '../moderation/moderationManager.js';
-let lastFetchErrorTime = 0;
 function mapGiveaway(g) {
   return {
     messageId: g.message_id,
@@ -19,59 +18,38 @@ function mapGiveaway(g) {
 }
 async function getGiveaways({ guildId, messageId, ended, endAtMost, limit = 100 } = {}) {
   if (!supabase) return [];
-  try {
-    let query = supabase.from('giveaways').select('*');
-    if (guildId) query = query.eq('guild_id', guildId);
-    if (messageId) query = query.eq('message_id', messageId);
-    if (typeof ended === 'boolean') query = query.eq('ended', ended);
-    if (endAtMost !== undefined) query = query.lte('end_time', endAtMost);
-    const { data, error } = await query.order('end_time', { ascending: true }).limit(limit);
-    if (error) {
-      const now = Date.now();
-      if (now - lastFetchErrorTime > 300000) {
-        const unavailable = isSupabaseUnavailable(error);
-        const msg = `[GiveawayManager] Supabase ${unavailable ? 'REST API temporarily unreachable' : 'fetch error'}: ${error.message || 'Unknown error'}. Retrying next cycle.`;
-        console.error(msg);
-        lastFetchErrorTime = now;
-      }
-      return [];
-    }
-    return (data || []).map(mapGiveaway);
-  } catch {
-    return [];
-  }
+  let query = supabase.from('giveaways').select('*');
+  if (guildId) query = query.eq('guild_id', guildId);
+  if (messageId) query = query.eq('message_id', messageId);
+  if (typeof ended === 'boolean') query = query.eq('ended', ended);
+  if (endAtMost !== undefined) query = query.lte('end_time', endAtMost);
+  const { data, error } = await query.order('end_time', { ascending: true }).limit(limit);
+  if (error) throw error;
+  return (data || []).map(mapGiveaway);
 }
 async function getGiveaway(messageId) {
   return (await getGiveaways({ messageId, limit: 1 }))[0] || null;
 }
 async function saveGiveaway(gw) {
   if (!supabase) return;
-  try {
-    const { error } = await supabase.from('giveaways').upsert({
-      message_id: gw.messageId,
-      channel_id: gw.channelId,
-      guild_id: gw.guildId,
-      prize: gw.prize,
-      winners_count: gw.winnersCount,
-      end_time: gw.endTime,
-      host_id: gw.hostId,
-      ended: gw.ended,
-      duration_str: gw.durationStr || null,
-      entries: gw.participants || []
-    });
-    if (error) throw error;
-  } catch (err) {
-    console.error(`[GiveawayManager DB Error] ${err.message || 'Unknown error while saving giveaway'}`);
-  }
+  const { error } = await supabase.from('giveaways').upsert({
+    message_id: gw.messageId,
+    channel_id: gw.channelId,
+    guild_id: gw.guildId,
+    prize: gw.prize,
+    winners_count: gw.winnersCount,
+    end_time: gw.endTime,
+    host_id: gw.hostId,
+    ended: gw.ended,
+    duration_str: gw.durationStr || null,
+    entries: gw.participants || []
+  });
+  if (error) throw error;
 }
 async function deleteGiveaway(messageId) {
   if (!supabase) return;
-  try {
-    const { error } = await supabase.from('giveaways').delete().eq('message_id', messageId);
-    if (error) throw error;
-  } catch (err) {
-    console.error('[GiveawayManager] Error deleting giveaway:', err);
-  }
+  const { error } = await supabase.from('giveaways').delete().eq('message_id', messageId);
+  if (error) throw error;
 }
 let activeClient = null;
 export function setGiveawayClient(client) {

@@ -69,4 +69,14 @@ export const moderationCommands = [
     .setName('banlist')
     .setDescription('Display a list of all permanently and temporarily banned users')
     .toJSON(),
+  new SlashCommandBuilder()
+    .setName('case')
+    .setDescription('View or update moderation cases')
+    .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers)
+    .addSubcommand(option => option.setName('view').setDescription('View one case').addIntegerOption(input => input.setName('number').setDescription('Case number').setRequired(true).setMinValue(1)))
+    .addSubcommand(option => option.setName('list').setDescription('List recent cases').addUserOption(input => input.setName('user').setDescription('Filter by target user')))
+    .addSubcommand(option => option.setName('reason').setDescription('Update a case reason').addIntegerOption(input => input.setName('number').setDescription('Case number').setRequired(true).setMinValue(1)).addStringOption(input => input.setName('value').setDescription('New reason').setRequired(true).setMaxLength(1000)))
+    .addSubcommand(option => option.setName('evidence').setDescription('Update case evidence').addIntegerOption(input => input.setName('number').setDescription('Case number').setRequired(true).setMinValue(1)).addStringOption(input => input.setName('url').setDescription('HTTPS evidence URL').setMaxLength(2048)).addStringOption(input => input.setName('text').setDescription('Evidence notes').setMaxLength(2000)))
+    .addSubcommand(option => option.setName('revoke').setDescription('Reverse an active case action').addIntegerOption(input => input.setName('number').setDescription('Case number').setRequired(true).setMinValue(1)))
+    .toJSON(),
 ];

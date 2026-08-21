@@ -1,10 +1,9 @@
 import { EmbedBuilder } from 'discord.js';
-import { isSupabaseUnavailable } from '../database/supabaseClient.js';
+import { canAttemptSupabase, isSupabaseUnavailable } from '../database/supabaseClient.js';
 
 const INCIDENT_BACKOFF_MS = 5 * 60 * 1000;
 let supabaseClient = null;
 let incidentsUnavailableUntil = 0;
-let incidentStorageUnavailable = false;
 
 async function getSupabase() {
     if (supabaseClient) return supabaseClient;
@@ -21,22 +20,17 @@ function originalError(...args) {
     (global.originalConsoleError || console.error)(...args);
 }
 
-function pauseIncidentStorage(error, now) {
+function pauseIncidentStorage(now) {
     incidentsUnavailableUntil = now + INCIDENT_BACKOFF_MS;
-    if (!incidentStorageUnavailable) {
-        incidentStorageUnavailable = true;
-        originalError('[IncidentLogger] Supabase REST API unavailable; incident persistence paused for 5 minutes:', error?.message || error);
-    }
 }
 
 export function resetIncidentCircuit() {
     incidentsUnavailableUntil = 0;
-    incidentStorageUnavailable = false;
 }
 
 export async function addIncident(severity, module, message, meta = {}, options = {}) {
     const now = options.now ?? Date.now();
-    if (now < incidentsUnavailableUntil) return false;
+    if (now < incidentsUnavailableUntil || !canAttemptSupabase(now)) return false;
     const db = options.db === undefined ? await getSupabase() : options.db;
     if (!db) return false;
     const incident = {
@@ -57,20 +51,16 @@ export async function addIncident(severity, module, message, meta = {}, options 
                 return false;
             }
             if (isSupabaseUnavailable(error)) {
-                pauseIncidentStorage(error, now);
+                pauseIncidentStorage(now);
                 return false;
             }
             originalError('[DB Error] Failed to log incident:', error);
             return false;
         }
-        if (incidentStorageUnavailable) {
-            incidentStorageUnavailable = false;
-            originalError('[IncidentLogger] Supabase REST API recovered; incident persistence resumed.');
-        }
         return true;
     } catch (error) {
         if (isSupabaseUnavailable(error)) {
-            pauseIncidentStorage(error, now);
+            pauseIncidentStorage(now);
             return false;
         }
         originalError('[DB Error] Failed to log incident:', error);
@@ -79,7 +69,7 @@ export async function addIncident(severity, module, message, meta = {}, options 
 }
 
 export async function getIncidents({ severity, startDate, endDate, limit = 100 } = {}) {
-    if (Date.now() < incidentsUnavailableUntil) return [];
+    if (Date.now() < incidentsUnavailableUntil || !canAttemptSupabase()) return [];
     const supabase = await getSupabase();
     if (!supabase) return [];
     let query = supabase.from('incidents').select('*');

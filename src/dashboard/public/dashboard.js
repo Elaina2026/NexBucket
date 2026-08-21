@@ -71,6 +71,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     { id: 'bank', label: 'Banking', icon: I.card },
     { id: 'status', label: 'Server Status', icon: I.monitor },
     { id: 'stats', label: 'Server Stats', icon: I.users },
+    { id: 'management', label: 'Setup & History', icon: I.gear },
   ];
   async function checkAuth() {
     try {
@@ -88,6 +89,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     av.src = data.user.avatar ? `https://cdn.discordapp.com/avatars/${data.user.id}/${data.user.avatar}.png?size=64` : 'https://cdn.discordapp.com/embed/avatars/0.png';
     renderServerGrid(data.guilds);
     loadReminders();
+    loadPrivacySummary();
     const route = parseRoute();
     if (route.serverId) {
       const guild = data.guilds.find(g => g.id === route.serverId);
@@ -95,6 +97,57 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
   document.getElementById('btnLogout')?.addEventListener('click', async () => { await fetch('/api/auth/logout', { method: 'POST' }); location.reload(); });
+  async function loadPrivacySummary() {
+    const container = document.getElementById('privacySummary');
+    const status = document.getElementById('privacyStatus');
+    if (!container) return;
+    try {
+      const response = await fetch('/api/privacy/summary');
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Privacy summary failed');
+      container.replaceChildren();
+      const labels = {
+        reminders: 'Schedules', jtcProfiles: 'JTC profiles', afkRows: 'AFK rows', activePartyMemberships: 'Active parties',
+        tickets: 'Tickets', transcripts: 'Transcripts', moderationCases: 'Moderation cases', paymentTransactions: 'Payments',
+      };
+      for (const [key, value] of Object.entries(result.summary)) {
+        const item = document.createElement('span'); item.className = 'doctor-count'; item.textContent = `${labels[key] || key}: ${value}`; container.appendChild(item);
+      }
+      status.textContent = 'Counts only. Transcript, evidence, card, bank, and OAuth content is excluded.';
+    } catch (error) { status.textContent = error.message; status.classList.add('error'); }
+  }
+  document.getElementById('btnPrivacyExport')?.addEventListener('click', async () => {
+    const response = await fetch('/api/privacy/export');
+    if (!response.ok) return document.getElementById('privacyStatus').textContent = 'Privacy export failed.';
+    const url = URL.createObjectURL(await response.blob());
+    const link = document.createElement('a'); link.href = url; link.download = 'nexbucket-privacy-export.json'; document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url);
+  });
+  document.getElementById('btnPrivacyRequest')?.addEventListener('click', () => {
+    const overlay = modalOverlay(); overlay.replaceChildren();
+    const dialog = document.createElement('div'); dialog.className = 'modal'; dialog.setAttribute('role', 'dialog'); dialog.setAttribute('aria-modal', 'true');
+    const title = document.createElement('h3'); title.textContent = 'Request deletion review';
+    const description = document.createElement('p'); description.textContent = 'Safe categories may be deleted after owner approval. Tickets, transcripts, moderation, and payments are retained under policy.';
+    const categories = document.createElement('div'); categories.className = 'privacy-categories';
+    for (const [value, label] of [['reminders','Schedules'],['jtc','JTC profiles'],['afk','AFK'],['parties','Party memberships'],['tickets','Tickets'],['moderation','Moderation'],['payments','Payments']]) {
+      const option = document.createElement('label'); const input = document.createElement('input'); input.type = 'checkbox'; input.value = value; option.append(input, document.createTextNode(` ${label}`)); categories.appendChild(option);
+    }
+    const note = document.createElement('textarea'); note.className = 'text-input'; note.rows = 3; note.maxLength = 1000; note.placeholder = 'Optional note';
+    const actions = document.createElement('div'); actions.className = 'modal-actions';
+    const cancel = document.createElement('button'); cancel.type = 'button'; cancel.className = 'btn-modal'; cancel.textContent = 'Cancel';
+    const submit = document.createElement('button'); submit.type = 'button'; submit.className = 'btn-modal danger'; submit.textContent = 'Submit request';
+    actions.append(cancel, submit); dialog.append(title, description, categories, note, actions); overlay.appendChild(dialog); overlay.classList.add('show');
+    cancel.addEventListener('click', () => overlay.classList.remove('show'));
+    submit.addEventListener('click', async () => {
+      const selected = [...categories.querySelectorAll('input:checked')].map(input => input.value);
+      if (!selected.length) return;
+      submit.disabled = true;
+      try {
+        await reminderRequest('/api/privacy/requests', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ requestType: 'delete', categories: selected, note: note.value }) });
+        overlay.classList.remove('show'); document.getElementById('privacyStatus').textContent = 'Deletion review request submitted.';
+      } catch (error) { submit.disabled = false; document.getElementById('privacyStatus').textContent = error.message; }
+    });
+  });
+
   const reminderList = document.getElementById('reminderList');
   const reminderStatus = document.getElementById('reminderStatus');
   const reminderEditOverlay = document.getElementById('reminderEditOverlay');
@@ -108,6 +161,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   const scheduleGuildInput = document.getElementById('scheduleGuildInput');
   const scheduleChannelInput = document.getElementById('scheduleChannelInput');
   const scheduleLocalTimeInput = document.getElementById('scheduleLocalTimeInput');
+  const scheduleRecurrenceInput = document.getElementById('scheduleRecurrenceInput');
+  const scheduleOnceInput = document.getElementById('scheduleOnceInput');
+  const scheduleDayOfMonthInput = document.getElementById('scheduleDayOfMonthInput');
   const scheduleTimeZone = document.getElementById('scheduleTimeZone');
   let reminders = [];
   let activeReminderId = null;
@@ -149,7 +205,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       const time = document.createElement('div');
       time.className = 'reminder-time';
       time.textContent = reminder.targetType === 'channel'
-        ? `Daily at ${reminder.localTime} (${reminder.timeZone}) · ${reminder.guildName || 'Unknown server'} / #${reminder.channelName || 'unknown-channel'} · Next ${new Date(reminder.endTime).toLocaleString()}`
+        ? `${reminder.paused ? 'Paused · ' : ''}${reminder.recurrence || 'daily'} at ${reminder.localTime} (${reminder.timeZone}) · ${reminder.guildName || 'Unknown server'} / #${reminder.channelName || 'unknown-channel'} · Next ${new Date(reminder.endTime).toLocaleString()}`
         : `Personal DM · Scheduled for ${new Date(reminder.endTime).toLocaleString()}`;
       main.append(message, time);
 
@@ -165,7 +221,25 @@ document.addEventListener('DOMContentLoaded', async () => {
       cancel.className = 'reminder-action danger';
       cancel.textContent = 'Cancel';
       cancel.addEventListener('click', () => openReminderCancel(reminder));
-      actions.append(edit, cancel);
+      actions.append(edit);
+      if (reminder.targetType === 'channel') {
+        const pause = document.createElement('button');
+        pause.type = 'button'; pause.className = 'reminder-action'; pause.textContent = reminder.paused ? 'Resume' : 'Pause';
+        pause.addEventListener('click', async () => {
+          pause.disabled = true;
+          try { await reminderRequest(`/api/reminders/${reminder.id}/pause`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paused: !reminder.paused }) }); await loadReminders(); }
+          catch (error) { setReminderStatus(error.message, true); pause.disabled = false; }
+        });
+        const clone = document.createElement('button');
+        clone.type = 'button'; clone.className = 'reminder-action'; clone.textContent = 'Clone';
+        clone.addEventListener('click', async () => {
+          clone.disabled = true;
+          try { await reminderRequest(`/api/reminders/${reminder.id}/clone`, { method: 'POST' }); await loadReminders(); }
+          catch (error) { setReminderStatus(error.message, true); clone.disabled = false; }
+        });
+        actions.append(pause, clone);
+      }
+      actions.append(cancel);
       item.append(main, actions);
       reminderList.appendChild(item);
     }
@@ -223,6 +297,14 @@ document.addEventListener('DOMContentLoaded', async () => {
       scheduleChannelInput.disabled = false;
     }
   }
+  function updateScheduleFields() {
+    const recurrence = scheduleRecurrenceInput.value;
+    document.getElementById('scheduleOnceGroup').hidden = recurrence !== 'once';
+    document.getElementById('scheduleWeekdaysGroup').hidden = recurrence !== 'weekly';
+    document.getElementById('scheduleMonthlyGroup').hidden = recurrence !== 'monthly';
+    scheduleOnceInput.required = recurrence === 'once';
+    scheduleDayOfMonthInput.required = recurrence === 'monthly';
+  }
   async function openReminderEdit(reminder = null) {
     activeReminderId = reminder?.id || null;
     activeReminderType = reminder?.targetType || 'channel';
@@ -244,6 +326,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     } else {
       fillScheduleGuilds(reminder?.guildId || guildsData[0]?.id || '');
       scheduleLocalTimeInput.value = reminder?.localTime || '06:00';
+      scheduleRecurrenceInput.value = reminder?.recurrence || 'daily';
+      scheduleOnceInput.value = localDatetimeValue(reminder?.endTime || Date.now() + 60 * 60_000);
+      scheduleDayOfMonthInput.value = String(reminder?.dayOfMonth || 1);
+      document.querySelectorAll('#scheduleWeekdaysGroup input[type="checkbox"]').forEach(input => { input.checked = (reminder?.weekdays || []).includes(Number(input.value)); });
+      document.getElementById('scheduleEmbedTitle').value = reminder?.embed?.title || '';
+      document.getElementById('scheduleEmbedDescription').value = reminder?.embed?.description || '';
+      document.getElementById('scheduleEmbedColor').value = reminder?.embed?.color || '';
+      document.getElementById('scheduleEmbedImage').value = reminder?.embed?.image || '';
+      updateScheduleFields();
       scheduleTimeZone.textContent = `Time zone: ${activeScheduleTimeZone}`;
       if (scheduleGuildInput.value) await loadScheduleChannels(scheduleGuildInput.value, reminder?.channelId || '');
     }
@@ -260,6 +351,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('btnRefreshReminders')?.addEventListener('click', loadReminders);
   document.getElementById('btnAddSchedule')?.addEventListener('click', () => openReminderEdit());
   scheduleGuildInput?.addEventListener('change', () => loadScheduleChannels(scheduleGuildInput.value));
+  scheduleRecurrenceInput?.addEventListener('change', updateScheduleFields);
   document.getElementById('btnCancelReminderEdit')?.addEventListener('click', () => closeReminderOverlay(reminderEditOverlay));
   document.getElementById('btnKeepReminder')?.addEventListener('click', () => closeReminderOverlay(reminderCancelOverlay));
   reminderEditOverlay?.addEventListener('click', event => { if (event.target === reminderEditOverlay) closeReminderOverlay(reminderEditOverlay); });
@@ -276,6 +368,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     button.disabled = true;
     reminderEditError.hidden = true;
     try {
+      const embed = {
+        title: document.getElementById('scheduleEmbedTitle').value.trim(),
+        description: document.getElementById('scheduleEmbedDescription').value.trim(),
+        color: document.getElementById('scheduleEmbedColor').value.trim(),
+        image: document.getElementById('scheduleEmbedImage').value.trim(),
+      };
+      const hasEmbed = Object.values(embed).some(Boolean);
       const channelPayload = {
         targetType: 'channel',
         message: reminderMessageInput.value,
@@ -283,6 +382,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         channelId: scheduleChannelInput.value,
         localTime: scheduleLocalTimeInput.value,
         timeZone: activeScheduleTimeZone,
+        recurrence: scheduleRecurrenceInput.value,
+        weekdays: [...document.querySelectorAll('#scheduleWeekdaysGroup input:checked')].map(input => Number(input.value)),
+        dayOfMonth: Number(scheduleDayOfMonthInput.value),
+        endTime: new Date(scheduleOnceInput.value).getTime(),
+        embed: hasEmbed ? embed : null,
       };
       await reminderRequest(activeReminderId ? `/api/reminders/${activeReminderId}` : '/api/reminders', {
         method: activeReminderId ? 'PUT' : 'POST',
@@ -370,10 +474,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     sidebarNav.querySelectorAll('.sidebar-item').forEach(b => b.classList.toggle('active', b.dataset.section === id));
     contentArea.querySelectorAll('.content-section').forEach(s => s.classList.toggle('active', s.id === 'sec-' + id));
     const actionBar = document.querySelector('.action-bar');
-    actionBar?.classList.toggle('hidden', ['transcripts', 'learn'].includes(id));
+    actionBar?.classList.toggle('hidden', ['transcripts', 'learn', 'management'].includes(id));
     if (updateUrl) pushRoute(currentGuildId, id);
     if (id === 'transcripts') loadTranscripts();
     if (id === 'learn') loadLearnEntries();
+    if (id === 'ticket') loadTicketSlaReport();
+    if (id === 'mod') loadModerationCases();
+    if (id === 'management') loadManagementSuite();
   }
   function modalOverlay() {
     let overlay = document.getElementById('modalOverlay');
@@ -488,10 +595,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     initTicketTypeManager();
     initStatusServerManager();
     initLearnManager();
+    initManagementSuite();
+    document.getElementById('btnLoadTicketReport')?.addEventListener('click', loadTicketSlaReport);
+    document.getElementById('btnLoadCases')?.addEventListener('click', () => loadModerationCases(1));
   }
   const PICKER_CHANNEL_TYPES = {
     welcomeChannel: [0, 5], goodbyeChannel: [0, 5], ticketCategoryId: [4],
-    ticketTranscriptChannel: [0, 5], ticketReviewChannel: [0, 5],
+    ticketTranscriptChannel: [0, 5], ticketReviewChannel: [0, 5], slaEscalationChannelId: [0, 5],
     jtcHubChannelId: [2], jtcCategoryId: [4], jtcLfmChannelId: [0, 5],
     modLogChannel: [0, 5], bankNotifChannel: [0, 5], statsCategoryId: [4],
     statsAllMembersId: [2], statsHumansId: [2], statsStaffOnlineId: [2],
@@ -1141,6 +1251,11 @@ document.addEventListener('DOMContentLoaded', async () => {
       setChecked('enableRating', tc.enableRating !== false);
       setChecked('enableClaim', tc.enableClaim !== false);
       setChecked('lockClaimedTicket', tc.lockClaimedTicket === true);
+      setChecked('slaEnabled', tc.slaEnabled === true);
+      setVal('slaClaimTargetMinutes', tc.slaClaimTargetMinutes || 15);
+      setVal('slaFirstResponseTargetMinutes', tc.slaFirstResponseTargetMinutes || 30);
+      setVal('slaReminderCadenceMinutes', tc.slaReminderCadenceMinutes || 15);
+      setPickerValue('slaEscalationChannelId', tc.slaEscalationChannelId);
       ticketTypes = tc.ticketTypes || [];
       renderTicketTypes();
       setPickerValue('jtcHubChannelId', c.jtcConfig?.hubChannelId);
@@ -1243,6 +1358,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         enableRating: isChecked('enableRating'),
         enableClaim: isChecked('enableClaim'),
         lockClaimedTicket: isChecked('lockClaimedTicket'),
+        slaEnabled: isChecked('slaEnabled'),
+        slaClaimTargetMinutes: Number(getVal('slaClaimTargetMinutes') || 15),
+        slaFirstResponseTargetMinutes: Number(getVal('slaFirstResponseTargetMinutes') || 30),
+        slaReminderCadenceMinutes: Number(getVal('slaReminderCadenceMinutes') || 15),
+        slaEscalationChannelId: getPickerValue('slaEscalationChannelId'),
         ticketTypes,
       },
       jtcConfig: {
@@ -1363,6 +1483,361 @@ document.addEventListener('DOMContentLoaded', async () => {
       .replace(/&lt;@&amp;(\d+)&gt;/g, '<span class="discord-mention">@Role</span>')
       .replace(/&lt;#(\d+)&gt;/g, '<span class="discord-mention">#channel</span>')
       .replace(/&lt;(a?):(\w+):(\d+)&gt;/g, (_, animated, name, id) => `<img src="https://cdn.discordapp.com/emojis/${id}.${animated ? 'gif' : 'png'}" alt=":${name}:" class="discord-emoji"/>`);
+  }
+
+  let moderationCasePage = 1;
+  async function loadModerationCases(page = moderationCasePage) {
+    const list = document.getElementById('moderationCaseList');
+    const status = document.getElementById('caseStatus');
+    const pagination = document.getElementById('casePagination');
+    if (!list || !currentGuildId) return;
+    const params = new URLSearchParams({ page: String(page), limit: '50' });
+    const action = document.getElementById('caseActionFilter')?.value;
+    const caseStatus = document.getElementById('caseStatusFilter')?.value;
+    const targetId = document.getElementById('caseTargetFilter')?.value.trim();
+    if (action) params.set('action', action);
+    if (caseStatus) params.set('status', caseStatus);
+    if (targetId) params.set('targetId', targetId);
+    status.textContent = 'Loading moderation cases...';
+    try {
+      const result = await managementRequest(`/api/guilds/${currentGuildId}/moderation-cases?${params}`);
+      moderationCasePage = result.page;
+      list.replaceChildren();
+      if (!result.items?.length) {
+        const empty = document.createElement('div'); empty.className = 'empty-state'; empty.textContent = 'No moderation cases match these filters.'; list.appendChild(empty);
+      }
+      for (const entry of result.items || []) {
+        const item = document.createElement('article'); item.className = 'management-item';
+        const body = document.createElement('div'); body.className = 'management-item-main';
+        const title = document.createElement('strong'); title.textContent = `Case #${entry.case_number} · ${entry.action.toUpperCase()} · ${entry.status}`;
+        const detail = document.createElement('span'); detail.textContent = `Target ${entry.target_id} · ${entry.reason} · ${new Date(entry.created_at).toLocaleString()}`;
+        body.append(title, detail); item.appendChild(body);
+        const actions = document.createElement('div'); actions.className = 'management-actions';
+        const edit = document.createElement('button'); edit.type = 'button'; edit.className = 'btn-modal'; edit.textContent = 'Edit'; edit.addEventListener('click', () => editModerationCase(entry)); actions.appendChild(edit);
+        if (entry.status === 'active' && ['ban', 'tempban', 'timeout', 'mute', 'hardmute'].includes(entry.action) && ['owner', 'administrator'].includes(currentGuild?.permissionTier)) {
+          const revoke = document.createElement('button'); revoke.type = 'button'; revoke.className = 'btn-modal danger'; revoke.textContent = 'Revoke'; revoke.addEventListener('click', () => confirmCaseRevoke(entry)); actions.appendChild(revoke);
+        }
+        item.appendChild(actions); list.appendChild(item);
+      }
+      pagination.replaceChildren();
+      if (result.totalPages > 1) {
+        const previous = document.createElement('button'); previous.type = 'button'; previous.className = 'btn-back'; previous.textContent = 'Previous'; previous.disabled = result.page <= 1; previous.addEventListener('click', () => loadModerationCases(result.page - 1));
+        const label = document.createElement('span'); label.className = 'transcript-page-label'; label.textContent = `Page ${result.page} of ${result.totalPages}`;
+        const next = document.createElement('button'); next.type = 'button'; next.className = 'btn-back'; next.textContent = 'Next'; next.disabled = result.page >= result.totalPages; next.addEventListener('click', () => loadModerationCases(result.page + 1));
+        pagination.append(previous, label, next);
+      }
+      status.textContent = `${result.total} moderation case${result.total === 1 ? '' : 's'}.`;
+    } catch (error) {
+      list.replaceChildren(); pagination.replaceChildren(); status.textContent = error.message; status.classList.add('error');
+    }
+  }
+  function caseDialog(entry, revoke = false) {
+    const overlay = modalOverlay(); overlay.replaceChildren();
+    const dialog = document.createElement('div'); dialog.className = 'modal'; dialog.setAttribute('role', 'dialog'); dialog.setAttribute('aria-modal', 'true');
+    const title = document.createElement('h3'); title.textContent = revoke ? `Revoke case #${entry.case_number}?` : `Edit case #${entry.case_number}`; dialog.appendChild(title);
+    if (revoke) {
+      const text = document.createElement('p'); text.textContent = `This reverses the active ${entry.action} in Discord, then marks the case revoked.`; dialog.appendChild(text);
+    } else {
+      const reason = document.createElement('textarea'); reason.id = 'caseReasonInput'; reason.className = 'text-input'; reason.rows = 3; reason.maxLength = 1000; reason.value = entry.reason || '';
+      const evidenceUrl = document.createElement('input'); evidenceUrl.id = 'caseEvidenceUrlInput'; evidenceUrl.className = 'text-input'; evidenceUrl.placeholder = 'HTTPS evidence URL'; evidenceUrl.value = entry.evidence_url || '';
+      const evidenceText = document.createElement('textarea'); evidenceText.id = 'caseEvidenceTextInput'; evidenceText.className = 'text-input'; evidenceText.rows = 3; evidenceText.maxLength = 2000; evidenceText.placeholder = 'Evidence notes'; evidenceText.value = entry.evidence_text || '';
+      dialog.append(reason, evidenceUrl, evidenceText);
+    }
+    const actions = document.createElement('div'); actions.className = 'modal-actions';
+    const cancel = document.createElement('button'); cancel.type = 'button'; cancel.className = 'btn-modal'; cancel.textContent = 'Cancel';
+    const apply = document.createElement('button'); apply.type = 'button'; apply.className = `btn-modal ${revoke ? 'danger' : 'primary'}`; apply.textContent = revoke ? 'Revoke action' : 'Save case';
+    actions.append(cancel, apply); dialog.appendChild(actions); overlay.appendChild(dialog); overlay.classList.add('show'); cancel.addEventListener('click', () => overlay.classList.remove('show'));
+    return { overlay, apply };
+  }
+  function editModerationCase(entry) {
+    const { overlay, apply } = caseDialog(entry);
+    apply.addEventListener('click', async () => {
+      apply.disabled = true;
+      try {
+        await managementRequest(`/api/guilds/${currentGuildId}/moderation-cases/${entry.case_number}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason: document.getElementById('caseReasonInput').value, evidenceUrl: document.getElementById('caseEvidenceUrlInput').value, evidenceText: document.getElementById('caseEvidenceTextInput').value }) });
+        overlay.classList.remove('show'); await loadModerationCases();
+      } catch (error) { apply.disabled = false; managementStatus('caseStatus', error.message, true); }
+    });
+  }
+  function confirmCaseRevoke(entry) {
+    const { overlay, apply } = caseDialog(entry, true);
+    apply.addEventListener('click', async () => {
+      apply.disabled = true;
+      try {
+        await managementRequest(`/api/guilds/${currentGuildId}/moderation-cases/${entry.case_number}/revoke`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        overlay.classList.remove('show'); await loadModerationCases();
+      } catch (error) { apply.disabled = false; managementStatus('caseStatus', error.message, true); }
+    });
+  }
+
+  async function loadTicketSlaReport() {
+    const container = document.getElementById('ticketSlaReport');
+    const status = document.getElementById('ticketSlaStatus');
+    if (!container || !currentGuildId) return;
+    status.textContent = 'Loading SLA report...';
+    status.classList.remove('error');
+    try {
+      const days = document.getElementById('ticketReportDays')?.value || '30';
+      const report = await managementRequest(`/api/guilds/${currentGuildId}/tickets/report?days=${encodeURIComponent(days)}`);
+      container.replaceChildren();
+      const values = [
+        ['Resolved', report.resolved], ['Open', report.open], ['Breached', report.breached],
+        ['Median claim', report.medianClaimMinutes === null ? 'N/A' : `${Math.round(report.medianClaimMinutes)}m`],
+        ['Median response', report.medianFirstResponseMinutes === null ? 'N/A' : `${Math.round(report.medianFirstResponseMinutes)}m`],
+      ];
+      for (const [label, value] of values) {
+        const card = document.createElement('span');
+        card.className = 'doctor-count';
+        card.textContent = `${label}: ${value}`;
+        container.appendChild(card);
+      }
+      status.textContent = `Report for the last ${report.days} days.`;
+    } catch (error) {
+      container.replaceChildren();
+      status.textContent = error.message;
+      status.classList.add('error');
+    }
+  }
+
+  let pendingImport = null;
+  function managementStatus(id, message, isError = false) {
+    const element = document.getElementById(id);
+    if (!element) return;
+    element.textContent = message;
+    element.classList.toggle('error', isError);
+  }
+  async function managementRequest(url, options = {}) {
+    const response = await fetch(url, options);
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const error = new Error(result.error || `Request failed (${response.status})`);
+      error.status = response.status;
+      throw error;
+    }
+    return result;
+  }
+  function initManagementSuite() {
+    document.getElementById('btnDoctorRecheck')?.addEventListener('click', loadDoctor);
+    document.getElementById('btnHistoryRefresh')?.addEventListener('click', loadConfigHistory);
+    document.getElementById('btnExportPortable')?.addEventListener('click', () => downloadConfig('portable'));
+    document.getElementById('btnExportBackup')?.addEventListener('click', () => downloadConfig('same-guild'));
+    document.getElementById('configImportFile')?.addEventListener('change', prepareImport);
+    document.getElementById('btnApplyImport')?.addEventListener('click', confirmImport);
+  }
+  function loadManagementSuite() {
+    loadDoctor();
+    loadConfigHistory();
+  }
+  async function loadDoctor() {
+    const list = document.getElementById('doctorList');
+    const summary = document.getElementById('doctorSummary');
+    if (!list || !currentGuildId) return;
+    managementStatus('doctorStatus', 'Checking server configuration...');
+    try {
+      const result = await managementRequest(`/api/guilds/${currentGuildId}/doctor`);
+      summary.replaceChildren();
+      for (const [label, value] of [['Errors', result.summary?.errors || 0], ['Warnings', result.summary?.warnings || 0], ['Info', result.summary?.info || 0]]) {
+        const item = document.createElement('span');
+        item.className = `doctor-count ${label.toLowerCase()}`;
+        item.textContent = `${label}: ${value}`;
+        summary.appendChild(item);
+      }
+      list.replaceChildren();
+      if (!result.findings?.length) {
+        const empty = document.createElement('div');
+        empty.className = 'empty-state';
+        empty.textContent = 'No configuration or permission issues found.';
+        list.appendChild(empty);
+      }
+      for (const finding of result.findings || []) {
+        const item = document.createElement('article');
+        item.className = `management-item doctor-${finding.severity}`;
+        const body = document.createElement('div');
+        body.className = 'management-item-main';
+        const title = document.createElement('strong');
+        title.textContent = finding.title;
+        const detail = document.createElement('span');
+        detail.textContent = `${finding.module} · ${finding.detail}`;
+        body.append(title, detail);
+        item.appendChild(body);
+        if (finding.fixable && ['owner', 'administrator'].includes(currentGuild?.permissionTier)) {
+          const fix = document.createElement('button');
+          fix.type = 'button';
+          fix.className = 'btn-modal primary';
+          fix.textContent = 'Preview fix';
+          fix.addEventListener('click', () => confirmDoctorFix(finding));
+          item.appendChild(fix);
+        }
+        list.appendChild(item);
+      }
+      managementStatus('doctorStatus', `Checked ${new Date(result.checkedAt).toLocaleString()}.`);
+    } catch (error) {
+      managementStatus('doctorStatus', error.message, true);
+      list.replaceChildren();
+    }
+  }
+  function confirmDoctorFix(finding) {
+    const overlay = modalOverlay();
+    overlay.replaceChildren();
+    const dialog = document.createElement('div');
+    dialog.className = 'modal';
+    dialog.setAttribute('role', 'alertdialog');
+    dialog.setAttribute('aria-modal', 'true');
+    const title = document.createElement('h3');
+    title.textContent = `Create resource for ${finding.title}?`;
+    const detail = document.createElement('p');
+    detail.textContent = `${finding.detail} This only creates the missing resource and saves its ID. Nothing is deleted or reordered.`;
+    const actions = document.createElement('div');
+    actions.className = 'modal-actions';
+    const cancel = document.createElement('button');
+    cancel.type = 'button'; cancel.className = 'btn-modal'; cancel.textContent = 'Cancel';
+    const apply = document.createElement('button');
+    apply.type = 'button'; apply.className = 'btn-modal primary'; apply.textContent = 'Create and configure';
+    actions.append(cancel, apply); dialog.append(title, detail, actions); overlay.appendChild(dialog); overlay.classList.add('show');
+    cancel.addEventListener('click', () => overlay.classList.remove('show'));
+    apply.addEventListener('click', async () => {
+      apply.disabled = true;
+      try {
+        const result = await managementRequest(`/api/guilds/${currentGuildId}/wizard/fix`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ findingId: finding.id }),
+        });
+        configVersion = Number(result.configVersion || configVersion);
+        overlay.classList.remove('show');
+        await Promise.all([loadDoctor(), loadConfigHistory(), loadConfig(currentGuildId)]);
+      } catch (error) {
+        apply.disabled = false;
+        managementStatus('doctorStatus', error.message, true);
+      }
+    });
+  }
+  async function downloadConfig(mode) {
+    managementStatus('transferStatus', 'Preparing secure export...');
+    try {
+      const response = await fetch(`/api/guilds/${currentGuildId}/config-export?mode=${encodeURIComponent(mode)}`);
+      if (!response.ok) {
+        const result = await response.json().catch(() => ({}));
+        throw new Error(result.error || 'Export failed');
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `nexbucket-${currentGuildId}-${mode}.json`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      managementStatus('transferStatus', 'Configuration exported without payment secrets.');
+    } catch (error) {
+      managementStatus('transferStatus', error.message, true);
+    }
+  }
+  async function prepareImport(event) {
+    pendingImport = null;
+    const apply = document.getElementById('btnApplyImport');
+    const preview = document.getElementById('transferPreview');
+    apply.disabled = true;
+    preview.hidden = true;
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (file.size > 1024 * 1024) return managementStatus('transferStatus', 'Configuration file exceeds 1 MB.', true);
+    try {
+      const config = JSON.parse(await file.text());
+      const result = await managementRequest(`/api/guilds/${currentGuildId}/config-import/validate`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(config),
+      });
+      pendingImport = config;
+      preview.hidden = false;
+      preview.textContent = `${result.mode === 'portable' ? 'Portable template' : 'Same-server backup'} · Sections: ${result.sections.join(', ')} · Existing payment secrets will be preserved.`;
+      apply.disabled = false;
+      managementStatus('transferStatus', 'Validation passed. Review the preview before importing.');
+    } catch (error) {
+      managementStatus('transferStatus', error.message, true);
+    }
+  }
+  function confirmImport() {
+    if (!pendingImport) return;
+    const overlay = modalOverlay();
+    overlay.replaceChildren();
+    const dialog = document.createElement('div'); dialog.className = 'modal'; dialog.setAttribute('role', 'alertdialog'); dialog.setAttribute('aria-modal', 'true');
+    const title = document.createElement('h3'); title.textContent = 'Import configuration?';
+    const detail = document.createElement('p'); detail.textContent = 'This replaces non-secret configuration sections. Stored PayOS and Card2K keys remain unchanged. A history version is created for rollback.';
+    const actions = document.createElement('div'); actions.className = 'modal-actions';
+    const cancel = document.createElement('button'); cancel.type = 'button'; cancel.className = 'btn-modal'; cancel.textContent = 'Cancel';
+    const apply = document.createElement('button'); apply.type = 'button'; apply.className = 'btn-modal danger'; apply.textContent = 'Import';
+    actions.append(cancel, apply); dialog.append(title, detail, actions); overlay.appendChild(dialog); overlay.classList.add('show');
+    cancel.addEventListener('click', () => overlay.classList.remove('show'));
+    apply.addEventListener('click', async () => {
+      apply.disabled = true;
+      try {
+        const result = await managementRequest(`/api/guilds/${currentGuildId}/config-import`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ configVersion, config: pendingImport }),
+        });
+        configVersion = Number(result.configVersion || configVersion);
+        pendingImport = null;
+        document.getElementById('configImportFile').value = '';
+        document.getElementById('btnApplyImport').disabled = true;
+        document.getElementById('transferPreview').hidden = true;
+        overlay.classList.remove('show');
+        await Promise.all([loadConfig(currentGuildId), loadConfigHistory(), loadDoctor()]);
+        managementStatus('transferStatus', 'Configuration imported. Stored payment secrets were preserved.');
+      } catch (error) {
+        apply.disabled = false;
+        managementStatus('transferStatus', error.message, true);
+      }
+    });
+  }
+  async function loadConfigHistory() {
+    const list = document.getElementById('configHistoryList');
+    if (!list || !currentGuildId) return;
+    managementStatus('historyStatus', 'Loading configuration history...');
+    try {
+      const result = await managementRequest(`/api/guilds/${currentGuildId}/config-history?limit=100`);
+      list.replaceChildren();
+      if (!result.history?.length) {
+        const empty = document.createElement('div'); empty.className = 'empty-state'; empty.textContent = 'No history yet. The next configuration save will create one.'; list.appendChild(empty);
+      }
+      for (const entry of result.history || []) {
+        const item = document.createElement('article'); item.className = 'management-item';
+        const body = document.createElement('div'); body.className = 'management-item-main';
+        const title = document.createElement('strong'); title.textContent = `Version ${entry.version} · ${(entry.changed_sections || []).join(', ') || 'no section changes'}`;
+        const detail = document.createElement('span'); detail.textContent = `${entry.actor_name || entry.actor_id || 'System'} · ${entry.source} · ${new Date(entry.created_at).toLocaleString()}`;
+        body.append(title, detail); item.appendChild(body);
+        const rollback = document.createElement('button'); rollback.type = 'button'; rollback.className = 'btn-modal'; rollback.textContent = 'Rollback';
+        rollback.addEventListener('click', () => confirmRollback(entry)); item.appendChild(rollback); list.appendChild(item);
+      }
+      managementStatus('historyStatus', `${result.history?.length || 0} versions loaded.`);
+    } catch (error) {
+      managementStatus('historyStatus', error.message, true);
+      list.replaceChildren();
+    }
+  }
+  function confirmRollback(entry) {
+    const overlay = modalOverlay(); overlay.replaceChildren();
+    const dialog = document.createElement('div'); dialog.className = 'modal'; dialog.setAttribute('role', 'alertdialog'); dialog.setAttribute('aria-modal', 'true');
+    const title = document.createElement('h3'); title.textContent = `Roll back to version ${entry.version}?`;
+    const detail = document.createElement('p'); detail.textContent = `Sections from this snapshot will replace current values. Payment secrets remain unchanged. A new rollback history version will be recorded.`;
+    const actions = document.createElement('div'); actions.className = 'modal-actions';
+    const cancel = document.createElement('button'); cancel.type = 'button'; cancel.className = 'btn-modal'; cancel.textContent = 'Cancel';
+    const apply = document.createElement('button'); apply.type = 'button'; apply.className = 'btn-modal danger'; apply.textContent = 'Rollback';
+    actions.append(cancel, apply); dialog.append(title, detail, actions); overlay.appendChild(dialog); overlay.classList.add('show');
+    cancel.addEventListener('click', () => overlay.classList.remove('show'));
+    apply.addEventListener('click', async () => {
+      apply.disabled = true;
+      try {
+        const result = await managementRequest(`/api/guilds/${currentGuildId}/config-history/${entry.id}/rollback`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ configVersion }),
+        });
+        configVersion = Number(result.configVersion || configVersion);
+        overlay.classList.remove('show');
+        await Promise.all([loadConfig(currentGuildId), loadConfigHistory(), loadDoctor()]);
+        managementStatus('historyStatus', `Rolled back to snapshot version ${entry.version}.`);
+      } catch (error) {
+        apply.disabled = false;
+        managementStatus('historyStatus', error.message, true);
+      }
+    });
   }
 
   async function loadTranscripts(page = 1) {

@@ -5,6 +5,14 @@ import { getSection, saveSection } from '../database/guildSettings.js';
 
 import ms from 'ms';
 import { getBotRoles, isBotDev, isBotOwner } from '../utils/permissionManager.js';
+import {
+  createModerationCase,
+  expireModerationCases,
+  getModerationCase,
+  listModerationCases,
+  markModerationCaseStatus,
+  updateModerationCase,
+} from './caseManager.js';
 
 export function parseDuration(str) {
   if (!str || typeof str !== 'string') return null;
@@ -25,13 +33,8 @@ export const DEFAULT_MOD_CONFIG = {
 
 export async function getModConfig(guildId) {
   if (!guildId) return { ...DEFAULT_MOD_CONFIG };
-  try {
-    const data = await getSection(guildId, 'moderation');
-    return { ...DEFAULT_MOD_CONFIG, ...data };
-  } catch (error) {
-    console.error('[Moderation] Failed to load config:', error);
-    throw error;
-  }
+  const data = await getSection(guildId, 'moderation');
+  return { ...DEFAULT_MOD_CONFIG, ...data };
 }
 export async function saveModConfig(guildId, patch) {
   const merged = { ...(await getModConfig(guildId)), ...patch };
@@ -48,17 +51,16 @@ export async function getModData(guildId) {
   const config = await getModConfig(guildId);
   const emptyState = { warnings: {}, tempbans: {}, hardmutes: {}, mutes: {} };
   if (!supabase) return { ...config, ...emptyState };
-  try {
-    const { data } = await supabase.from('moderation').select('*').eq('guild_id', guildId).maybeSingle();
-    if (!data) return { ...config, ...emptyState };
-    return {
-      ...config,
-      warnings: data.warnings_json || {},
-      tempbans: data.tempbans_json || {},
-      hardmutes: data.hardmutes_json || {},
-      mutes: data.mutes_json || {}
-    };
-  } catch { return { ...config, ...emptyState }; }
+  const { data, error } = await supabase.from('moderation').select('*').eq('guild_id', guildId).maybeSingle();
+  if (error) throw error;
+  if (!data) return { ...config, ...emptyState };
+  return {
+    ...config,
+    warnings: data.warnings_json || {},
+    tempbans: data.tempbans_json || {},
+    hardmutes: data.hardmutes_json || {},
+    mutes: data.mutes_json || {}
+  };
 }
 export async function saveModData(guildId, modData) {
   if (!supabase) return;
@@ -83,10 +85,9 @@ function isProtectedUser(target, executor) {
 }
 async function getAllModData() {
   if (!supabase) return [];
-  try {
-    const { data } = await supabase.from('moderation').select('guild_id, tempbans_json, hardmutes_json, mutes_json');
-    return data || [];
-  } catch { return []; }
+  const { data, error } = await supabase.from('moderation').select('guild_id, tempbans_json, hardmutes_json, mutes_json');
+  if (error) throw error;
+  return data || [];
 }
 export async function checkModExpirations(client) {
   const allData = await getAllModData();
@@ -166,8 +167,32 @@ export async function checkModExpirations(client) {
       await saveModData(guildId, modData);
     }
   }
+  try {
+    await expireModerationCases();
+  } catch (error) {
+    if (error?.code !== '42P01') throw error;
+  }
 }
-function buildModEmbed(title, color, target, duration, reason, moderator) {
+async function recordCase(interaction, action, targetId, reason, durationMs = null, status = 'active') {
+  try {
+    const entry = await createModerationCase({
+      guildId: interaction.guild.id,
+      action,
+      targetId,
+      moderatorId: interaction.user.id,
+      reason,
+      durationMs,
+      status,
+      source: interaction.isMessage ? 'prefix' : 'discord',
+    });
+    return entry?.case_number || null;
+  } catch (error) {
+    console.error('[Moderation] Failed to create case:', error.message || error);
+    return null;
+  }
+}
+
+function buildModEmbed(title, color, target, duration, reason, moderator, caseNumber = null) {
   let description = `**User:** ${target ? target.toString() : 'Unknown'}\n`;
   if (duration) {
     description += `**Duration:** ${duration}\n`;
@@ -179,6 +204,7 @@ function buildModEmbed(title, color, target, duration, reason, moderator) {
     .setColor(color)
     .setDescription(description)
     .setTimestamp();
+  if (caseNumber) embed.setFooter({ text: `Case #${caseNumber}` });
   return embed;
 }
 export async function handleModerationCommand(interaction) {
@@ -199,6 +225,7 @@ export async function handleModerationCommand(interaction) {
       case 'hardmute': await handleHardmute(interaction); break;
       case 'warn': await handleWarn(interaction); break;
       case 'banlist': await handleBanlist(interaction); break;
+      case 'case': await handleCaseCommand(interaction); break;
     }
   } catch (err) {
     console.error(`[Moderation] Error executing command ${cmd}:`, err);
@@ -242,7 +269,8 @@ async function handleBan(interaction) {
     modData.tempbans[user.id] = Date.now() + durationMs;
     await saveModData(interaction.guild.id, modData);
   }
-  const embed = buildModEmbed('🔨 USER BANNED', '#ff3333', user, durationMs ? durationStr : 'Infinite', reason, interaction.user);
+  const caseNumber = await recordCase(interaction, durationMs ? 'tempban' : 'ban', user.id, reason, durationMs || null);
+  const embed = buildModEmbed('🔨 USER BANNED', '#ff3333', user, durationMs ? durationStr : 'Infinite', reason, interaction.user, caseNumber);
   await interaction.editReply({ embeds: [embed] });
 }
 async function handleUnban(interaction) {
@@ -253,7 +281,8 @@ async function handleUnban(interaction) {
   }
   try {
     await interaction.guild.members.unban(userId, `By ${interaction.user.tag}: ${reason}`);
-    const embed = buildModEmbed('🔓 USER UNBANNED', '#33cc33', `<@${userId}>`, null, reason, interaction.user);
+    const caseNumber = await recordCase(interaction, 'unban', userId, reason, null, 'revoked');
+    const embed = buildModEmbed('🔓 USER UNBANNED', '#33cc33', `<@${userId}>`, null, reason, interaction.user, caseNumber);
     await interaction.reply({ embeds: [embed] }).catch(() => {});
   } catch (error) {
     if (error.code === 10026) {
@@ -285,7 +314,8 @@ async function handleTempban(interaction) {
   const modData = await getModData(interaction.guild.id);
   modData.tempbans[user.id] = Date.now() + durationMs;
   await saveModData(interaction.guild.id, modData);
-  const embed = buildModEmbed('⏳ USER TEMPORARILY BANNED', '#ff6600', user, durationStr, reason, interaction.user);
+  const caseNumber = await recordCase(interaction, 'tempban', user.id, reason, durationMs);
+  const embed = buildModEmbed('⏳ USER TEMPORARILY BANNED', '#ff6600', user, durationStr, reason, interaction.user, caseNumber);
   await interaction.editReply({ embeds: [embed] });
 }
 async function handleKick(interaction) {
@@ -303,7 +333,8 @@ async function handleKick(interaction) {
   }
   try { await user.send(`You have been kicked from **${interaction.guild.name}**.\nReason: ${reason}`); } catch (e) {}
   await member.kick(`By ${interaction.user.tag}: ${reason}`);
-  const embed = buildModEmbed('👢 USER KICKED', '#ffcc00', user, null, reason, interaction.user);
+  const caseNumber = await recordCase(interaction, 'kick', user.id, reason, null, 'expired');
+  const embed = buildModEmbed('👢 USER KICKED', '#ffcc00', user, null, reason, interaction.user, caseNumber);
   await interaction.editReply({ embeds: [embed] });
 }
 async function handleTimeout(interaction) {
@@ -324,7 +355,8 @@ async function handleTimeout(interaction) {
     await interaction.deferReply().catch(() => {});
   }
   await member.timeout(durationMs, `By ${interaction.user.tag}: ${reason}`);
-  const embed = buildModEmbed('⏱️ USER TIMED OUT', '#ff9900', user, durationStr, reason, interaction.user);
+  const caseNumber = await recordCase(interaction, 'timeout', user.id, reason, durationMs);
+  const embed = buildModEmbed('⏱️ USER TIMED OUT', '#ff9900', user, durationStr, reason, interaction.user, caseNumber);
   await interaction.editReply({ embeds: [embed] });
 }
 async function handleRemoveTimeout(interaction) {
@@ -337,7 +369,8 @@ async function handleRemoveTimeout(interaction) {
     await interaction.deferReply().catch(() => {});
   }
   await member.timeout(null, `By ${interaction.user.tag}: ${reason}`);
-  const embed = buildModEmbed('✅ TIMEOUT REMOVED', '#33cc33', user, null, reason, interaction.user);
+  const caseNumber = await recordCase(interaction, 'removetimeout', user.id, reason, null, 'revoked');
+  const embed = buildModEmbed('✅ TIMEOUT REMOVED', '#33cc33', user, null, reason, interaction.user, caseNumber);
   await interaction.editReply({ embeds: [embed] });
 }
 async function getMutedRole(guild) {
@@ -390,7 +423,8 @@ async function handleMute(interaction) {
     modData.mutes[user.id] = Date.now() + durationMs;
     await saveModData(interaction.guild.id, modData);
   }
-  const embed = buildModEmbed('🔇 USER MUTED', '#ff9900', user, durationMs ? durationStr : 'Infinite', reason, interaction.user);
+  const caseNumber = await recordCase(interaction, 'mute', user.id, reason, durationMs || null);
+  const embed = buildModEmbed('🔇 USER MUTED', '#ff9900', user, durationMs ? durationStr : 'Infinite', reason, interaction.user, caseNumber);
   await interaction.editReply({ embeds: [embed] });
 }
 async function handleUnmute(interaction) {
@@ -426,7 +460,8 @@ async function handleUnmute(interaction) {
   if (updated) {
     await saveModData(interaction.guild.id, modData);
   }
-  const embed = buildModEmbed('🔊 USER UNMUTED / UNHARDMUTED', '#33cc33', user, null, reason, interaction.user);
+  const caseNumber = await recordCase(interaction, 'unmute', user.id, reason, null, 'revoked');
+  const embed = buildModEmbed('🔊 USER UNMUTED / UNHARDMUTED', '#33cc33', user, null, reason, interaction.user, caseNumber);
   await interaction.editReply({ embeds: [embed] });
 }
 async function handleHardmute(interaction) {
@@ -466,7 +501,8 @@ async function handleHardmute(interaction) {
   } catch (e) {
     return interaction.reply({ content: '❌ Error modifying roles (check the bot\'s permissions hierarchy).', flags: MessageFlags.Ephemeral });
   }
-  const embed = buildModEmbed('🔕 USER HARDMUTED', '#ff0000', user, durationMs ? durationStr : 'Infinite', reason, interaction.user);
+  const caseNumber = await recordCase(interaction, 'hardmute', user.id, reason, durationMs || null);
+  const embed = buildModEmbed('🔕 USER HARDMUTED', '#ff0000', user, durationMs ? durationStr : 'Infinite', reason, interaction.user, caseNumber);
   await interaction.reply({ embeds: [embed] }).catch(() => {});
 }
 export function shouldAutoBanForWarnings(warnCount, threshold, previousWarnCount = warnCount - 1) {
@@ -525,10 +561,75 @@ async function handleWarn(interaction) {
       }
     }
   }
-  const embed = buildModEmbed('⚠️ USER WARNED', '#ffcc00', user, null, reason, interaction.user);
-  embed.setFooter({ text: `This user now has ${warnCount} warning(s).${autoBanResult}` });
+  const caseNumber = await recordCase(interaction, 'warn', user.id, reason, null, 'expired');
+  const embed = buildModEmbed('⚠️ USER WARNED', '#ffcc00', user, null, reason, interaction.user, caseNumber);
+  embed.setFooter({ text: `Case #${caseNumber || 'N/A'} · This user now has ${warnCount} warning(s).${autoBanResult}` });
   await interaction.editReply({ embeds: [embed] }).catch(() => {});
 }
+function buildCaseEmbed(entry) {
+  const embed = new EmbedBuilder()
+    .setTitle(`Moderation Case #${entry.case_number}`)
+    .setColor(entry.status === 'active' ? '#f04747' : '#5865f2')
+    .addFields(
+      { name: 'Action', value: String(entry.action).toUpperCase(), inline: true },
+      { name: 'Status', value: entry.status, inline: true },
+      { name: 'Target', value: `<@${entry.target_id}> (\`${entry.target_id}\`)` },
+      { name: 'Reason', value: entry.reason || 'No reason provided' },
+    )
+    .setTimestamp(new Date(entry.created_at));
+  if (entry.expires_at) embed.addFields({ name: 'Expires', value: `<t:${Math.floor(new Date(entry.expires_at).getTime() / 1000)}:R>` });
+  if (entry.evidence_url) embed.addFields({ name: 'Evidence URL', value: entry.evidence_url });
+  if (entry.evidence_text) embed.addFields({ name: 'Evidence notes', value: entry.evidence_text });
+  return embed;
+}
+
+async function reverseCaseAction(guild, entry, reason) {
+  if (['ban', 'tempban'].includes(entry.action)) return guild.members.unban(entry.target_id, reason);
+  const member = await guild.members.fetch(entry.target_id);
+  if (entry.action === 'timeout') return member.timeout(null, reason);
+  if (['mute', 'hardmute'].includes(entry.action)) {
+    const muted = guild.roles.cache.find(role => role.name.toLowerCase() === 'muted');
+    if (muted) await member.roles.remove(muted, reason);
+    return;
+  }
+  throw new TypeError('This case action cannot be reversed automatically');
+}
+
+async function handleCaseCommand(interaction) {
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  const subcommand = interaction.options.getSubcommand();
+  if (subcommand === 'list') {
+    const user = interaction.options.getUser('user');
+    const result = await listModerationCases(interaction.guild.id, { limit: 10, targetId: user?.id || '' });
+    if (!result.items.length) return interaction.editReply({ content: 'No moderation cases found.' });
+    const description = result.items.map(entry => `**#${entry.case_number}** · ${entry.action} · <@${entry.target_id}> · ${entry.status}\n${entry.reason}`).join('\n\n').slice(0, 4000);
+    return interaction.editReply({ embeds: [new EmbedBuilder().setTitle('Recent Moderation Cases').setDescription(description).setColor('#5865f2')] });
+  }
+  const caseNumber = interaction.options.getInteger('number');
+  const entry = await getModerationCase(interaction.guild.id, caseNumber);
+  if (!entry) return interaction.editReply({ content: 'Moderation case not found.' });
+  if (subcommand === 'view') return interaction.editReply({ embeds: [buildCaseEmbed(entry)] });
+  if (subcommand === 'reason') {
+    const updated = await updateModerationCase(interaction.guild.id, caseNumber, { reason: interaction.options.getString('value') }, interaction.user.id);
+    return interaction.editReply({ embeds: [buildCaseEmbed(updated)] });
+  }
+  if (subcommand === 'evidence') {
+    const updated = await updateModerationCase(interaction.guild.id, caseNumber, {
+      evidenceUrl: interaction.options.getString('url') || '', evidenceText: interaction.options.getString('text') || '',
+    }, interaction.user.id);
+    return interaction.editReply({ embeds: [buildCaseEmbed(updated)] });
+  }
+  if (subcommand === 'revoke') {
+    if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
+      return interaction.editReply({ content: 'Administrator permission is required to revoke a case.' });
+    }
+    if (entry.status !== 'active') return interaction.editReply({ content: 'This case is no longer active.' });
+    await reverseCaseAction(interaction.guild, entry, `Case #${entry.case_number} revoked by ${interaction.user.tag}`);
+    const revoked = await markModerationCaseStatus(interaction.guild.id, caseNumber, 'revoked', interaction.user.id);
+    return interaction.editReply({ embeds: [buildCaseEmbed(revoked)] });
+  }
+}
+
 async function handleBanlist(interaction) {
   await interaction.deferReply().catch(() => {});
   try {
@@ -701,8 +802,7 @@ export async function handleModerationMessage(message) {
       case 'automod': await handleAutoModCommand(interactionAdapter, message); break;
     }
   } catch (err) {
-    console.error(`[Moderation] Text Command Error (${commandName}):`, err);
-    message.reply('❌ An error occurred while executing this command.').catch(() => {});
+    throw err;
   }
   return true;
 }

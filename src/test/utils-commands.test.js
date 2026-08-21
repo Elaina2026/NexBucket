@@ -8,3 +8,13 @@ test('utility command routing uses every unique registered command name', () => 
   assert.deepEqual([...utilCommandNames], names);
   assert.ok(utilCommandNames.has('aimodel'));
 });
+
+test('required slash command options precede optional options', () => {
+  for (const command of utilCommands) {
+    let optionalSeen = false;
+    for (const option of command.options || []) {
+      if (option.required === true) assert.equal(optionalSeen, false, `${command.name}.${option.name}`);
+      else optionalSeen = true;
+    }
+  }
+});

@@ -161,7 +161,7 @@ export function startServerStatsUpdater(client) {
       if (guild) await updateServerStatsForGuild(guild, config[guildId]);
     }
   };
-  const job = scheduleBackgroundJob('ServerStats', runUpdate, 600000);
+  const job = scheduleBackgroundJob('ServerStats', runUpdate, 600000, { usesSupabase: true });
   job.run();
   return job;
 }

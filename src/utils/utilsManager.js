@@ -2,6 +2,8 @@ import { EmbedBuilder } from './embed.js';
 import { MessageFlags, PermissionFlagsBits, ActionRowBuilder, StringSelectMenuBuilder, AttachmentBuilder } from 'discord.js';
 import ms from 'ms';
 import { addReminder } from './reminderManager.js';
+import { createPartyQueue } from './partyFinder.js';
+import { getPlayingActivity } from './jtcManager.js';
 export { checkReminders } from './reminderManager.js';
 import { saveBotRoles, isBotOwner, getBotRoles } from './permissionManager.js';
 import { addToBlacklist, removeFromBlacklist } from './blacklistManager.js';
@@ -227,6 +229,23 @@ export async function handleUtilCommand(interaction) {
       );
     }
     await interaction.reply({ embeds: [embed] });
+    return;
+  }
+  if (cmd === 'party') {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    const game = interaction.options.getString('game') || getPlayingActivity(interaction.member);
+    try {
+      const queue = await createPartyQueue({
+        guildId: interaction.guild.id,
+        ownerId: interaction.user.id,
+        game,
+        rank: interaction.options.getString('rank') || '',
+        partySize: interaction.options.getInteger('size'),
+      }, interaction.client);
+      await interaction.editReply({ content: `✅ Party queue created: **${queue.game}** (${queue.members.length}/${queue.partySize}).` });
+    } catch (error) {
+      await interaction.editReply({ content: `❌ ${error.message || 'Party queue creation failed.'}` });
+    }
     return;
   }
   if (cmd === 'remind') {

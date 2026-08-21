@@ -9,7 +9,9 @@ import {
   claimReminder,
   listPendingReminders,
   nextDailyOccurrence,
+  nextScheduleOccurrence,
   normalizeChannelScheduleInput,
+  normalizeScheduleEmbed,
   normalizeReminderInput,
   updatePendingReminder,
 } from '../utils/reminderManager.js';
@@ -85,12 +87,24 @@ class MemoryQuery {
 class MemoryDatabase {
   constructor(rows = []) {
     this.rows = rows.map(row => ({ ...row }));
+    this.scheduleRuns = [];
     this.nextId = Math.max(0, ...this.rows.map(row => row.id)) + 1;
   }
 
   from(table) {
-    assert.equal(table, 'reminders');
-    return new MemoryQuery(this);
+    if (table === 'reminders') return new MemoryQuery(this);
+    if (table === 'schedule_runs') {
+      const store = { rows: this.scheduleRuns, nextId: this.scheduleRuns.length + 1 };
+      const query = new MemoryQuery(store);
+      const originalExecute = query.execute.bind(query);
+      query.execute = () => {
+        const result = originalExecute();
+        this.scheduleRuns = store.rows;
+        return result;
+      };
+      return query;
+    }
+    throw new Error(`Unexpected table: ${table}`);
   }
 }
 
@@ -220,6 +234,26 @@ test('daily channel schedule sends without mentions and advances to tomorrow', a
   assert.equal(db.rows[0].done, false);
   assert.equal(db.rows[0].processing_at, null);
   assert.equal(db.rows[0].end_time, Date.parse('2026-08-13T23:00:00Z'));
+});
+
+test('weekly and monthly schedules calculate local occurrences across DST', () => {
+  assert.equal(nextScheduleOccurrence({
+    recurrence: 'weekly', weekdays: [1], localTime: '09:00', timeZone: 'America/New_York',
+  }, Date.parse('2026-03-07T12:00:00Z')), Date.parse('2026-03-09T13:00:00Z'));
+  assert.equal(nextScheduleOccurrence({
+    recurrence: 'monthly', dayOfMonth: 15, localTime: '06:30', timeZone: 'Asia/Ho_Chi_Minh',
+  }, Date.parse('2026-08-13T00:00:00Z')), Date.parse('2026-08-14T23:30:00Z'));
+  assert.throws(() => nextScheduleOccurrence({ recurrence: 'weekly', weekdays: [], localTime: '09:00', timeZone: 'UTC' }), /weekdays/);
+  assert.throws(() => nextScheduleOccurrence({ recurrence: 'monthly', dayOfMonth: 29, localTime: '09:00', timeZone: 'UTC' }), /day of month/);
+});
+
+test('schedule embed is bounded and requires HTTPS images', () => {
+  assert.deepEqual(normalizeScheduleEmbed({ title: 'Notice', image: 'https://cdn.example.com/image.png', fields: [{ name: 'A', value: 'B' }] }), {
+    title: 'Notice', description: undefined, color: undefined,
+    image: 'https://cdn.example.com/image.png', fields: [{ name: 'A', value: 'B', inline: false }],
+  });
+  assert.throws(() => normalizeScheduleEmbed({ image: 'http://example.com/image.png' }), /HTTPS/);
+  assert.throws(() => normalizeScheduleEmbed({ fields: Array.from({ length: 11 }, () => ({ name: 'A', value: 'B' })) }), /10 fields/);
 });
 
 test('addReminder reports database failures', async () => {

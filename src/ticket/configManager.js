@@ -1,4 +1,5 @@
 import { getSection, saveSection } from '../database/guildSettings.js';
+import { isSupabaseUnavailable } from '../database/supabaseClient.js';
 
 export function getStaffRoleIds(config) {
   if (config.staffRoleIds && Array.isArray(config.staffRoleIds) && config.staffRoleIds.length > 0) {
@@ -16,21 +17,17 @@ class ConfigManager {
       const data = await getSection(guildId, 'ticket');
       return { ...this.getDefaultConfig(), ...data };
     } catch (err) {
+      if (isSupabaseUnavailable(err)) throw err;
       console.error('[ConfigManager] Error:', err);
       return this.getDefaultConfig();
     }
   }
 
   static async saveConfig(guildId, newGuildConfig) {
-    try {
-      const currentConfig = await this.getConfig(guildId);
-      const mergedConfig = { ...currentConfig, ...newGuildConfig };
-      await saveSection(guildId, 'ticket', mergedConfig);
-      return true;
-    } catch (err) {
-      console.error('[ConfigManager] Error saving:', err);
-      return false;
-    }
+    const currentConfig = await this.getConfig(guildId);
+    const mergedConfig = { ...currentConfig, ...newGuildConfig };
+    await saveSection(guildId, 'ticket', mergedConfig);
+    return true;
   }
 
   static async setConfig(guildId, newGuildConfig) {
@@ -52,6 +49,7 @@ class ConfigManager {
       }
       return allConfigs;
     } catch (err) {
+      if (isSupabaseUnavailable(err)) throw err;
       console.error('[ConfigManager] Error in getAllConfigs:', err);
       return {};
     }
@@ -66,6 +64,11 @@ class ConfigManager {
       enableRating: true,
       enableClaim: true,
       lockClaimedTicket: false,
+      slaEnabled: false,
+      slaClaimTargetMinutes: 15,
+      slaFirstResponseTargetMinutes: 30,
+      slaReminderCadenceMinutes: 15,
+      slaEscalationChannelId: "",
       panelColor: "#ff90ba",
       panelImageUrl: "https://i.pinimg.com/originals/6a/4e/81/6a4e81c50d13fdfc52a773eac7b9a0c8.jpg",
       panelTitle: "🎫 Support Center",

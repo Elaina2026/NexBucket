@@ -109,19 +109,12 @@
               Active Sessions
             </button>
             <button class="sidebar-item" data-section="system">
-              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <rect x="4" y="4" width="16" height="16" rx="2" />
-                <rect x="9" y="9" width="6" height="6" />
-                <line x1="9" y1="1" x2="9" y2="4" />
-                <line x1="15" y1="1" x2="15" y2="4" />
-                <line x1="9" y1="20" x2="9" y2="23" />
-                <line x1="15" y1="20" x2="15" y2="23" />
-                <line x1="20" y1="9" x2="23" y2="9" />
-                <line x1="20" y1="14" x2="23" y2="14" />
-                <line x1="1" y1="9" x2="4" y2="9" />
-                <line x1="1" y1="14" x2="4" y2="14" />
-              </svg>
+              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/></svg>
               System & Storage
+            </button>
+            <button class="sidebar-item" data-section="privacy">
+              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>
+              Privacy Requests
             </button>
           </div>
         </nav>
@@ -255,6 +248,8 @@
             </div>
           </div>
 
+          <div class="content-section" id="sec-privacy"><div class="section-card"><div class="management-heading"><div><div class="section-card-title"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg> Privacy Requests</div><span class="field-hint">Preview exact deletions and retained categories before approval.</span></div><button type="button" id="btnRefreshPrivacy" class="btn-back">Refresh</button></div><div id="adminPrivacyStatus" class="management-status" role="status" aria-live="polite"></div><div id="adminPrivacyList" class="management-list"><div class="empty-state">Loading privacy requests...</div></div></div></div>
+
           <div class="content-section" id="sec-system">
             <div class="section-card">
               <div class="section-card-title">
@@ -340,11 +335,12 @@
                 </div>
 
                 <div class="bento-card">
-                  <h3 class="bento-title">Database Storage</h3>
+                  <h3 class="bento-title">Database Layers</h3>
                   <div class="admin-storage-value" id="dbSize">—</div>
                   <div class="admin-muted-small" id="dbStatus">Loading...</div>
                 </div>
               </div>
+              <div id="databaseHealthLayers" class="management-list admin-database-health"></div>
             </div>
           </div>
         </section>

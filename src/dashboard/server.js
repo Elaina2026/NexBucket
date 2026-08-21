@@ -10,7 +10,7 @@ import { promisify } from 'util';
 import dotenv from 'dotenv';
 const execAsync = promisify(exec);
 import axios from 'axios';
-dotenv.config({ override: true });
+dotenv.config();
 import ConfigManager from '../ticket/configManager.js';
 import { getWelcomeConfig, renderWelcomeBanner } from '../welcome/welcomeManager.js';
 import { formatJtcChannelName, getJtcProfile, getJtcSettings, normalizeJtcConfig, normalizeJtcProfile, saveJtcProfile, setJtcSettingsCache } from '../utils/jtcManager.js';
@@ -19,15 +19,34 @@ import { getAllServicesStatus, getOverallStatus } from '../utils/uptimeTracker.j
 import { getBankConfig } from '../banking/bankManager.js';
 import { getCardConfig, normalizeCardDomain } from '../banking/cardConfig.js';
 import { getStatsConfigForGuild } from '../status/serverStatsManager.js';
-import { getAllSections, saveSections } from '../database/guildSettings.js';
+import {
+    getAllSections,
+    getConfigHistoryVersion,
+    listConfigHistory,
+    rollbackConfig,
+    saveSection,
+    saveSections,
+} from '../database/guildSettings.js';
+import { mergeImportedConfig, serializePortableConfig, validatePortableConfig } from './configTransfer.js';
+import { analyzeGuildSetup, GUILD_DOCTOR_FIXES } from '../utils/guildDoctor.js';
+import { listTicketReport } from '../ticket/ticketLifecycle.js';
+import { getModerationCase, listModerationCases, markModerationCaseStatus, updateModerationCase } from '../moderation/caseManager.js';
+import {
+    buildPrivacyExport,
+    createPrivacyRequest,
+    decidePrivacyRequest,
+    getPrivacySummary,
+    listPrivacyRequests,
+    previewPrivacyApproval,
+} from '../privacy/privacyManager.js';
 import { getModConfig } from '../moderation/moderationManager.js';
 import { parseTrackedMinecraftAddress } from '../status/minecraftBanner.js';
 import { applyCardResult } from '../banking/cardResult.js';
-import { supabase } from '../database/supabaseClient.js';
+import { getDatabaseHealthSnapshot, probeDatabaseLayers, supabase } from '../database/supabaseClient.js';
 import { encryptToken, decryptToken, generateCsrfToken, sanitizePayload } from '../utils/securityUtils.js';
 import { LEARN_IMAGE_MAX_BYTES, validateLearnImage } from '../utils/learnImage.js';
 import { PermissionFlagsBits } from 'discord.js';
-import { addChannelSchedule, cancelPendingReminder, listPendingReminders, updateChannelSchedule, updatePendingReminder } from '../utils/reminderManager.js';
+import { addChannelSchedule, cancelPendingReminder, cloneChannelSchedule, listPendingReminders, setSchedulePaused, updateChannelSchedule, updatePendingReminder } from '../utils/reminderManager.js';
 import { createBackgroundJob } from '../runtime/backgroundJob.js';
 import {
     cookieHeader,
@@ -209,6 +228,14 @@ export function startDashboard(client) {
     app.get('/payos/success', (req, res) => res.redirect('/?payment=success'));
     app.get('/payos/cancel', (req, res) => res.redirect('/?payment=cancelled'));
 
+    app.get('/api/admin/database-health', requireAdmin, async (req, res) => {
+        try {
+            if (req.query.refresh === '1') await probeDatabaseLayers();
+            res.json(getDatabaseHealthSnapshot({ detailed: true }));
+        } catch (error) {
+            sendInternalError(res, error, 'Database health failed');
+        }
+    });
     app.get('/api/admin/system', requireAdmin, async (req, res) => {
         try {
             const cpus = os.cpus();
@@ -482,7 +509,7 @@ export function startDashboard(client) {
         if (!accessToken) return null;
         return { session, accessToken };
     }
-    async function requireGuildAdministrator(req, res) {
+    async function requireManageableGuild(req, res, { administrator = false } = {}) {
         const auth = await getAuthenticatedUser(req);
         if (!auth) {
             res.status(401).json({ error: 'Unauthorized' });
@@ -494,12 +521,24 @@ export function startDashboard(client) {
             return null;
         }
         const member = await getGuildMember(guild, auth.session.user_id);
-        if (!member?.permissions.has('Administrator')) {
-            res.status(403).json({ error: 'Forbidden: Administrator permission required.' });
+        const permitted = administrator
+            ? member?.permissions.has(PermissionFlagsBits.Administrator)
+            : (member?.permissions.has(PermissionFlagsBits.Administrator) || member?.permissions.has(PermissionFlagsBits.ManageGuild));
+        if (!permitted) {
+            res.status(403).json({ error: administrator
+                ? 'Forbidden: Administrator permission required.'
+                : 'Forbidden: Administrator or Manage Server permission required.' });
             return null;
         }
         return { auth, guild, member };
     }
+    const requireGuildAdministrator = (req, res) => requireManageableGuild(req, res, { administrator: true });
+    const configActor = auth => ({
+        actorId: auth.session.user_id,
+        actorName: auth.session.username || auth.session.user_id,
+        source: 'dashboard',
+    });
+    const configConflict = error => error?.code === '40001' || String(error?.message || '').includes('CONFIG_VERSION_CONFLICT');
     app.get('/api/auth/me', async (req, res) => {
         try {
             const auth = await getAuthenticatedUser(req);
@@ -551,6 +590,70 @@ export function startDashboard(client) {
             sendInternalError(res, err, 'API request failed');
         }
     });
+    app.get('/api/privacy/summary', async (req, res) => {
+        try {
+            const auth = await getAuthenticatedUser(req);
+            if (!auth) return res.status(401).json({ error: 'Unauthorized' });
+            res.json({ summary: await getPrivacySummary(auth.session.user_id) });
+        } catch (error) {
+            sendInternalError(res, error, 'Privacy summary failed');
+        }
+    });
+    app.get('/api/privacy/export', async (req, res) => {
+        try {
+            const auth = await getAuthenticatedUser(req);
+            if (!auth) return res.status(401).json({ error: 'Unauthorized' });
+            const exported = await buildPrivacyExport(auth.session.user_id);
+            res.setHeader('Content-Disposition', `attachment; filename="nexbucket-privacy-${auth.session.user_id}.json"`);
+            res.json(exported);
+        } catch (error) {
+            sendInternalError(res, error, 'Privacy export failed');
+        }
+    });
+    app.post('/api/privacy/requests', async (req, res) => {
+        try {
+            const auth = await getAuthenticatedUser(req);
+            if (!auth) return res.status(401).json({ error: 'Unauthorized' });
+            const request = await createPrivacyRequest(auth.session.user_id, req.body);
+            res.status(201).json({ request });
+        } catch (error) {
+            if (error?.code === '23505') return res.status(409).json({ error: 'A deletion request is already pending' });
+            if (error instanceof TypeError || error instanceof RangeError) return res.status(422).json({ error: error.message });
+            sendInternalError(res, error, 'Privacy request failed');
+        }
+    });
+    app.get('/api/admin/privacy-requests', requireAdmin, async (req, res) => {
+        try {
+            res.json({ requests: await listPrivacyRequests({ status: String(req.query.status || 'pending') }) });
+        } catch (error) {
+            if (error instanceof TypeError) return res.status(400).json({ error: error.message });
+            sendInternalError(res, error, 'Privacy request list failed');
+        }
+    });
+    app.get('/api/admin/privacy-requests/:id/preview', requireAdmin, async (req, res) => {
+        try {
+            const preview = await previewPrivacyApproval(req.params.id);
+            if (!preview) return res.status(404).json({ error: 'Privacy request not found' });
+            res.json(preview);
+        } catch (error) {
+            if (error instanceof TypeError) return res.status(400).json({ error: error.message });
+            sendInternalError(res, error, 'Privacy approval preview failed');
+        }
+    });
+    app.post('/api/admin/privacy-requests/:id/decision', requireAdmin, async (req, res) => {
+        try {
+            const result = await decidePrivacyRequest(req.params.id, req.body?.decision, req.auth.session.user_id, req.body?.ownerNote);
+            if (!result) return res.status(404).json({ error: 'Privacy request not found' });
+            const forwardedFor = req.headers['x-forwarded-for'];
+            const ip = (Array.isArray(forwardedFor) ? forwardedFor[0] : forwardedFor)?.split(',')[0]?.trim() || req.socket.remoteAddress;
+            logSecurityEvent('PRIVACY_DECISION', ip, req.headers['user-agent'], `Request ${req.params.id}: ${req.body?.decision}`);
+            res.json(result);
+        } catch (error) {
+            if (error instanceof TypeError) return res.status(422).json({ error: error.message });
+            sendInternalError(res, error, 'Privacy decision failed');
+        }
+    });
+
     app.get('/api/guilds/:guildId/jtc-profile', async (req, res) => {
         try {
             const auth = await getAuthenticatedUser(req);
@@ -623,6 +726,12 @@ export function startDashboard(client) {
             recurrence: reminder.recurrence,
             timeZone: reminder.timeZone,
             localTime: reminder.localTime,
+            weekdays: reminder.weekdays,
+            dayOfMonth: reminder.dayOfMonth,
+            embed: reminder.embed,
+            paused: reminder.paused,
+            retryCount: reminder.retryCount,
+            lastRunAt: reminder.lastRunAt,
         };
     };
     async function validateScheduleTarget(guildId, channelId, userId, res) {
@@ -673,6 +782,11 @@ export function startDashboard(client) {
                 channelId: req.body?.channelId,
                 localTime: req.body?.localTime,
                 timeZone: req.body?.timeZone,
+                recurrence: req.body?.recurrence,
+                weekdays: req.body?.weekdays,
+                dayOfMonth: req.body?.dayOfMonth,
+                embed: req.body?.embed,
+                endTime: req.body?.endTime,
             });
             res.status(201).json({ reminder: serializeReminder(reminder) });
         } catch (error) {
@@ -697,6 +811,30 @@ export function startDashboard(client) {
         } catch (error) {
             if (error instanceof TypeError || error instanceof RangeError) return res.status(400).json({ error: error.message });
             sendInternalError(res, error, 'Reminder update failed');
+        }
+    });
+    app.post('/api/reminders/:id/clone', async (req, res) => {
+        try {
+            const auth = await getAuthenticatedUser(req);
+            if (!auth) return res.status(401).json({ error: 'Unauthorized' });
+            const reminder = await cloneChannelSchedule(req.params.id, auth.session.user_id);
+            if (!reminder) return res.status(404).json({ error: 'Schedule not found' });
+            res.status(201).json({ reminder: serializeReminder(reminder) });
+        } catch (error) {
+            if (error instanceof TypeError || error instanceof RangeError) return res.status(400).json({ error: error.message });
+            sendInternalError(res, error, 'Schedule clone failed');
+        }
+    });
+    app.patch('/api/reminders/:id/pause', async (req, res) => {
+        try {
+            const auth = await getAuthenticatedUser(req);
+            if (!auth) return res.status(401).json({ error: 'Unauthorized' });
+            const reminder = await setSchedulePaused(req.params.id, auth.session.user_id, req.body?.paused === true);
+            if (!reminder) return res.status(404).json({ error: 'Schedule not found' });
+            res.json({ reminder: serializeReminder(reminder) });
+        } catch (error) {
+            if (error instanceof TypeError || error instanceof RangeError) return res.status(400).json({ error: error.message });
+            sendInternalError(res, error, 'Schedule pause failed');
         }
     });
     app.delete('/api/reminders/:id', async (req, res) => {
@@ -964,6 +1102,239 @@ export function startDashboard(client) {
         }
     });
 
+    app.get('/api/guilds/:guildId/moderation-cases', async (req, res) => {
+        try {
+            const access = await requireManageableGuild(req, res);
+            if (!access) return;
+            const cases = await listModerationCases(req.params.guildId, {
+                page: req.query.page, limit: req.query.limit, action: String(req.query.action || ''),
+                status: String(req.query.status || ''), targetId: String(req.query.targetId || ''),
+            });
+            res.json(cases);
+        } catch (error) {
+            if (error instanceof TypeError || error instanceof RangeError) return res.status(400).json({ error: error.message });
+            sendInternalError(res, error, 'Moderation cases list failed');
+        }
+    });
+    app.patch('/api/guilds/:guildId/moderation-cases/:caseNumber', async (req, res) => {
+        try {
+            const access = await requireManageableGuild(req, res);
+            if (!access) return;
+            const entry = await updateModerationCase(req.params.guildId, req.params.caseNumber, {
+                reason: req.body?.reason, evidenceUrl: req.body?.evidenceUrl, evidenceText: req.body?.evidenceText,
+            }, access.auth.session.user_id);
+            if (!entry) return res.status(404).json({ error: 'Moderation case not found' });
+            res.json({ case: entry });
+        } catch (error) {
+            if (error instanceof TypeError || error instanceof RangeError) return res.status(422).json({ error: error.message });
+            sendInternalError(res, error, 'Moderation case update failed');
+        }
+    });
+    app.post('/api/guilds/:guildId/moderation-cases/:caseNumber/revoke', async (req, res) => {
+        try {
+            const access = await requireManageableGuild(req, res, { administrator: true });
+            if (!access) return;
+            const entry = await getModerationCase(req.params.guildId, req.params.caseNumber);
+            if (!entry) return res.status(404).json({ error: 'Moderation case not found' });
+            if (entry.status !== 'active') return res.status(409).json({ error: 'Moderation case is no longer active' });
+            const target = entry.target_id;
+            const reason = `Case #${entry.case_number} revoked by ${access.auth.session.username}`;
+            if (['ban', 'tempban'].includes(entry.action)) {
+                await access.guild.members.unban(target, reason);
+            } else if (entry.action === 'timeout') {
+                const member = await access.guild.members.fetch(target);
+                await member.timeout(null, reason);
+            } else if (['mute', 'hardmute'].includes(entry.action)) {
+                const member = await access.guild.members.fetch(target);
+                const muted = access.guild.roles.cache.find(role => role.name.toLowerCase() === 'muted');
+                if (muted) await member.roles.remove(muted, reason);
+            } else {
+                return res.status(409).json({ error: 'This case action cannot be reversed automatically' });
+            }
+            const revoked = await markModerationCaseStatus(req.params.guildId, req.params.caseNumber, 'revoked', access.auth.session.user_id);
+            res.json({ case: revoked });
+        } catch (error) {
+            sendInternalError(res, error, 'Moderation case revoke failed');
+        }
+    });
+
+    app.get('/api/guilds/:guildId/tickets/report', async (req, res) => {
+        try {
+            const access = await requireManageableGuild(req, res);
+            if (!access) return;
+            res.json(await listTicketReport(req.params.guildId, Number(req.query.days)));
+        } catch (error) {
+            sendInternalError(res, error, 'Ticket SLA report failed');
+        }
+    });
+    app.get('/api/guilds/:guildId/config-history', async (req, res) => {
+        try {
+            const access = await requireManageableGuild(req, res);
+            if (!access) return;
+            const limit = Math.min(100, Math.max(1, Number.parseInt(req.query.limit, 10) || 50));
+            const history = await listConfigHistory(req.params.guildId, limit);
+            res.json({ history });
+        } catch (error) {
+            if (isDatabaseUnavailable(error)) return sendDatabaseUnavailable(res, error);
+            sendInternalError(res, error, 'Config history list failed');
+        }
+    });
+    app.get('/api/guilds/:guildId/config-history/:id', async (req, res) => {
+        try {
+            const access = await requireManageableGuild(req, res);
+            if (!access) return;
+            const history = await getConfigHistoryVersion(req.params.guildId, req.params.id);
+            if (!history) return res.status(404).json({ error: 'Configuration history version not found' });
+            res.json({ history });
+        } catch (error) {
+            if (error instanceof TypeError || error instanceof RangeError || /^Invalid /.test(error.message || '')) {
+                return res.status(400).json({ error: error.message });
+            }
+            sendInternalError(res, error, 'Config history version failed');
+        }
+    });
+    app.post('/api/guilds/:guildId/config-history/:id/rollback', async (req, res) => {
+        try {
+            const access = await requireManageableGuild(req, res);
+            if (!access) return;
+            const expectedVersion = Number(req.body?.configVersion);
+            if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 0) return res.status(400).json({ error: 'Invalid configVersion' });
+            const nextVersion = await rollbackConfig(req.params.guildId, req.params.id, expectedVersion, configActor(access.auth));
+            setJtcSettingsCache(req.params.guildId, (await getAllSections(req.params.guildId, true)).jtc || {});
+            res.json({ success: true, configVersion: Number(nextVersion) });
+        } catch (error) {
+            if (configConflict(error)) return res.status(409).json({ error: 'Settings changed. Reload before rolling back.' });
+            if (error?.code === 'PGRST116' || error?.code === 'P0002' || String(error?.message || '').includes('CONFIG_HISTORY_NOT_FOUND')) {
+                return res.status(404).json({ error: 'Configuration history version not found' });
+            }
+            if (/^Invalid /.test(error.message || '')) return res.status(400).json({ error: error.message });
+            sendInternalError(res, error, 'Config rollback failed');
+        }
+    });
+    app.get('/api/guilds/:guildId/config-export', async (req, res) => {
+        try {
+            const access = await requireManageableGuild(req, res);
+            if (!access) return;
+            const mode = req.query.mode === 'same-guild' ? 'same-guild' : 'portable';
+            const exported = serializePortableConfig(await getAllSections(req.params.guildId, true), { mode });
+            if (mode === 'same-guild') exported.guildId = req.params.guildId;
+            res.setHeader('Content-Disposition', `attachment; filename="nexbucket-${req.params.guildId}-${mode}.json"`);
+            res.json(exported);
+        } catch (error) {
+            sendInternalError(res, error, 'Config export failed');
+        }
+    });
+    app.post('/api/guilds/:guildId/config-import/validate', async (req, res) => {
+        try {
+            const access = await requireManageableGuild(req, res);
+            if (!access) return;
+            const imported = validatePortableConfig(req.body);
+            if (imported.mode === 'same-guild' && req.body?.guildId && req.body.guildId !== req.params.guildId) {
+                return res.status(400).json({ error: 'Same-guild backup belongs to another server' });
+            }
+            res.json({ valid: true, mode: imported.mode, sections: Object.keys(imported.sections) });
+        } catch (error) {
+            res.status(422).json({ error: error.message || 'Invalid configuration file' });
+        }
+    });
+    app.post('/api/guilds/:guildId/config-import', async (req, res) => {
+        try {
+            const access = await requireManageableGuild(req, res);
+            if (!access) return;
+            const expectedVersion = Number(req.body?.configVersion);
+            if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 0) return res.status(400).json({ error: 'Invalid configVersion' });
+            const imported = validatePortableConfig(req.body?.config);
+            if (imported.mode === 'same-guild' && req.body?.config?.guildId !== req.params.guildId) {
+                return res.status(400).json({ error: 'Same-guild backup belongs to another server' });
+            }
+            const current = await getAllSections(req.params.guildId, true);
+            const nextSections = mergeImportedConfig(current, imported.sections);
+            const guild = access.guild;
+            const validResource = (id, cache) => !id || (typeof id === 'string' && /^\d{17,20}$/.test(id) && cache.has(id));
+            const invalidChannel = Object.entries(nextSections).some(([, section]) => Object.entries(section || {}).some(([key, value]) =>
+                /(?:channel|category|hub)id$/i.test(key) && value !== undefined && !validResource(value, guild.channels.cache)
+            ));
+            const invalidRole = Object.entries(nextSections).some(([, section]) => Object.entries(section || {}).some(([key, value]) =>
+                /roleid$/i.test(key) && value !== undefined && !validResource(value, guild.roles.cache)
+            ));
+            const invalidRoleList = Object.entries(nextSections).some(([, section]) => Object.entries(section || {}).some(([key, value]) =>
+                /roleids$/i.test(key) && value !== undefined && (!Array.isArray(value) || value.some(id => !validResource(id, guild.roles.cache)))
+            ));
+            const invalidMinecraftChannel = (nextSections.minecraft?.servers || []).some(server => !validResource(server.channelId, guild.channels.cache));
+            if (invalidChannel || invalidRole || invalidRoleList || invalidMinecraftChannel) {
+                return res.status(422).json({ error: 'Configuration contains resources that do not exist in this server' });
+            }
+            const nextVersion = await saveSections(req.params.guildId, nextSections, expectedVersion, {
+                ...configActor(access.auth), source: 'import',
+            });
+            setJtcSettingsCache(req.params.guildId, nextSections.jtc);
+            res.json({ success: true, configVersion: Number(nextVersion) });
+        } catch (error) {
+            if (configConflict(error)) return res.status(409).json({ error: 'Settings changed. Reload before importing.' });
+            if (error instanceof TypeError || error instanceof RangeError || /configuration|must|invalid/i.test(error.message || '')) {
+                return res.status(422).json({ error: error.message || 'Invalid configuration file' });
+            }
+            sendInternalError(res, error, 'Config import failed');
+        }
+    });
+    app.get('/api/guilds/:guildId/doctor', async (req, res) => {
+        try {
+            const access = await requireManageableGuild(req, res);
+            if (!access) return;
+            const settings = await getAllSections(req.params.guildId, true);
+            const bank = settings.bank || {};
+            const safeSettings = {
+                ...settings,
+                bank: {
+                    ...bank,
+                    payosConfigured: Boolean(bank.payosClientId && bank.payosApiKey && bank.payosChecksumKey),
+                    payosClientId: undefined, payosApiKey: undefined, payosChecksumKey: undefined,
+                },
+                card: { ...(settings.card || {}), partnerKey: undefined },
+            };
+            res.json(analyzeGuildSetup(access.guild, safeSettings));
+        } catch (error) {
+            sendInternalError(res, error, 'Permission Doctor failed');
+        }
+    });
+    app.post('/api/guilds/:guildId/wizard/fix', async (req, res) => {
+        let createdResource = null;
+        try {
+            const access = await requireManageableGuild(req, res, { administrator: true });
+            if (!access) return;
+            const findingId = String(req.body?.findingId || '');
+            const fix = Object.values(GUILD_DOCTOR_FIXES).find(candidate => candidate.findingId === findingId);
+            if (!fix) return res.status(400).json({ error: 'Finding is not auto-fixable' });
+            const settings = await getAllSections(req.params.guildId, true);
+            const report = analyzeGuildSetup(access.guild, settings);
+            if (!report.findings.some(finding => finding.id === findingId && finding.fixable)) {
+                return res.status(409).json({ error: 'Finding no longer applies. Recheck the server.' });
+            }
+            const currentSection = settings[fix.section] || {};
+            const existing = access.guild.channels.cache.find(channel => channel.name === fix.name && channel.type === fix.type)
+                || (fix.key === 'mutedRoleId' ? access.guild.roles.cache.find(role => role.name === fix.name) : null);
+            let resource = existing;
+            if (!resource && fix.key === 'mutedRoleId') {
+                resource = await access.guild.roles.create({ name: fix.name, permissions: [] });
+                createdResource = resource;
+            } else if (!resource) {
+                resource = await access.guild.channels.create({ name: fix.name, type: fix.type });
+                createdResource = resource;
+            }
+            const nextVersion = await saveSection(req.params.guildId, fix.section, {
+                ...currentSection, [fix.key]: resource.id,
+            }, Number(settings.version || 0), {
+                ...configActor(access.auth), source: 'wizard',
+            });
+            createdResource = null;
+            res.json({ success: true, resource: { id: resource.id, name: resource.name, type: resource.type }, configVersion: Number(nextVersion) });
+        } catch (error) {
+            if (createdResource) await createdResource.delete('Wizard config save failed').catch(() => {});
+            if (configConflict(error)) return res.status(409).json({ error: 'Settings changed. Recheck before applying a fix.' });
+            sendInternalError(res, error, 'Wizard fix failed');
+        }
+    });
+
     app.get('/api/config/:guildId', async (req, res) => {
         try {
             res.setHeader('Cache-Control', 'no-store');
@@ -1103,6 +1474,13 @@ export function startDashboard(client) {
             if (!validChannelType(jtcConfig.hubChannelId, [2])) return res.status(400).json({ error: 'JTC hub must be a voice channel' });
             if (!validChannelType(jtcConfig.categoryId, [4])) return res.status(400).json({ error: 'JTC category must be a category channel' });
             if (!validChannelType(jtcConfig.lfmChannelId, [0, 5])) return res.status(400).json({ error: 'JTC LFM must be a text or announcement channel' });
+            if (!validChannelType(ticketConfig.slaEscalationChannelId, [0, 5])) return res.status(400).json({ error: 'SLA escalation channel must be a text or announcement channel' });
+            for (const key of ['slaClaimTargetMinutes', 'slaFirstResponseTargetMinutes', 'slaReminderCadenceMinutes']) {
+                const value = Number(ticketConfig[key]);
+                if (!Number.isFinite(value) || value < 1 || value > 10080) return res.status(400).json({ error: `Invalid ticket ${key}` });
+                ticketConfig[key] = value;
+            }
+            ticketConfig.slaEnabled = ticketConfig.slaEnabled === true;
             for (const id of [welcomeConfig.welcomeChannel, welcomeConfig.goodbyeChannel, bankConfig.notificationChannelId, statsConfig.categoryId, statsConfig.allMembersChannelId, statsConfig.humansChannelId, statsConfig.staffOnlineChannelId, statsConfig.botCountChannelId]) {
                 if (!validChannel(id)) return res.status(400).json({ error: 'Invalid channel in configuration' });
             }
@@ -1173,7 +1551,7 @@ export function startDashboard(client) {
             };
             let nextVersion;
             try {
-                nextVersion = await saveSections(guildId, payload, expectedVersion);
+                nextVersion = await saveSections(guildId, payload, expectedVersion, configActor(auth));
             } catch (saveError) {
                 if (saveError.code === '40001' || String(saveError.message).includes('CONFIG_VERSION_CONFLICT')) {
                     return res.status(409).json({ error: 'Settings changed from Discord or database. Reload before saving.' });
@@ -1434,9 +1812,13 @@ export function startDashboard(client) {
     });
     app.get('/api/services', async (req, res) => {
         try {
+            const health = getDatabaseHealthSnapshot();
             res.json({
                 overall: await getOverallStatus(),
                 services: await getAllServicesStatus(),
+                databaseLayers: health.layers,
+                databaseCircuit: health.circuit,
+                databaseUpdatedAt: health.updatedAt,
             });
         } catch (err) {
             sendInternalError(res, err, 'API request failed');

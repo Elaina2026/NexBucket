@@ -111,6 +111,13 @@ export const utilCommands = [
     .setDescription('Generate an invite link for the bot')
     .toJSON(),
   new SlashCommandBuilder()
+    .setName('party')
+    .setDescription('Create a JTC Party Finder queue')
+    .addIntegerOption(option => option.setName('size').setDescription('Party size from 2 to 10').setRequired(true).setMinValue(2).setMaxValue(10))
+    .addStringOption(option => option.setName('game').setDescription('Game name; defaults to your Playing activity'))
+    .addStringOption(option => option.setName('rank').setDescription('Optional rank').setMaxLength(50))
+    .toJSON(),
+  new SlashCommandBuilder()
     .setName('setup-jtc')
     .setDescription('Setup the Join-To-Create (JTC) voice system')
     .addChannelOption(option =>

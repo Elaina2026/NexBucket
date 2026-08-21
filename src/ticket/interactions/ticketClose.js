@@ -2,6 +2,7 @@ import { EmbedBuilder } from '../../utils/embed.js';
 import { MessageFlags, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, PermissionFlagsBits } from 'discord.js';
 import { createWebTranscript } from '../utils/transcriptManager.js';
 import ConfigManager, { getStaffRoleIds } from '../configManager.js';
+import { closeTicketRecord } from '../ticketLifecycle.js';
 async function closeTicketDirectly(interaction, staffId) {
   try {
     await interaction.reply({
@@ -19,6 +20,7 @@ async function closeTicketDirectly(interaction, staffId) {
       }
     });
     const transcriptData = await createWebTranscript(channel, closer.username, ticketCreatorId);
+    await closeTicketRecord(channel.id, staffId);
     const logEmbed = new EmbedBuilder()
       .setColor(0x2b2d31)
       .setTitle(`📁 Transcript ${channel.name}`)
@@ -225,6 +227,7 @@ export async function handleTicketReviewSubmit(interaction) {
       .setTimestamp();
     await channel.send({ embeds: [reviewEmbed] });
     const transcriptData = await createWebTranscript(channel, user.username, user.id);
+    await closeTicketRecord(channel.id, staffId);
     const logEmbed = new EmbedBuilder()
       .setColor(0x2b2d31)
       .setTitle(`📁 Transcript ${channel.name}`)

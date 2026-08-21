@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { getSupabaseBackoffDelay, isSupabaseUnavailable, supabase } from '../database/supabaseClient.js';
+import { canAttemptSupabase, getSupabaseBackoffDelay, getSupabaseAvailability, isSupabaseUnavailable, supabase } from '../database/supabaseClient.js';
 import { inspectCardConfig } from './cardConfig.js';
 import { getSection } from '../database/guildSettings.js';
 import { applyCardResult, PENDING_STATUSES, isFinalStatus, shouldExpirePending } from './cardResult.js';
@@ -107,9 +107,10 @@ async function pollPendingCards(client) {
     if (error) {
         databaseFailures++;
         const delay = isSupabaseUnavailable(error)
-            ? getDatabaseFailureDelay(databaseFailures)
+            ? Math.max(getDatabaseFailureDelay(databaseFailures), getSupabaseAvailability(now).retryAt - now)
             : POLL_INTERVAL_MS;
         nextDatabasePollAt = now + delay;
+        if (isSupabaseUnavailable(error)) throw error;
         if (now >= nextDatabaseErrorLogAt) {
             console.error(`[Card2K Poller] Failed to load pending transactions; retrying in ${Math.ceil(delay / 1000)}s:`, error.message);
             nextDatabaseErrorLogAt = now + Math.max(delay, 5 * 60 * 1000);
@@ -181,7 +182,7 @@ async function pollPendingCards(client) {
                 lastCheckedAt.delete(txn.request_id);
             }
         } catch (err) {
-
+            if (isSupabaseUnavailable(err)) throw err;
             console.error(`[Card2K Poller] Error checking ${txn.request_id}:`, err.message);
         }
         await sleep(REQUEST_GAP_MS);
@@ -197,12 +198,12 @@ export function startCardStatusPoller(client) {
 
     let isRunning = false;
     setInterval(async () => {
-        if (isRunning) return;
+        if (isRunning || !canAttemptSupabase()) return;
         isRunning = true;
         try {
             await pollPendingCards(client);
         } catch (err) {
-            console.error('[Card2K Poller] Unhandled error:', err.message);
+            if (!isSupabaseUnavailable(err)) console.error('[Card2K Poller] Unhandled error:', err.message);
         } finally {
             isRunning = false;
         }

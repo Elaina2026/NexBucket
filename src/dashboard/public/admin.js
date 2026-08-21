@@ -222,6 +222,25 @@ function renderSecurityLog(data) {
   }).join('');
 }
 
+function renderDatabaseHealth(health) {
+  if (!health?.layers) return;
+  const labels = { postgres: 'PostgreSQL', auth: 'Supabase Auth', postgrest: 'PostgREST' };
+  const container = document.getElementById('databaseHealthLayers');
+  if (container) {
+    container.replaceChildren();
+    for (const [key, layer] of Object.entries(health.layers)) {
+      const item = document.createElement('div');
+      item.className = `management-item doctor-${layer.status === 'operational' ? 'info' : 'error'}`;
+      const main = document.createElement('div'); main.className = 'management-item-main';
+      const title = document.createElement('strong'); title.textContent = `${labels[key] || key}: ${layer.status}`;
+      const detail = document.createElement('span'); detail.textContent = `${layer.latencyMs ?? 'N/A'} ms · Last success ${layer.lastSuccessAt ? fmtDate(layer.lastSuccessAt) : 'never'}${layer.error ? ` · ${layer.error.code}: ${layer.error.message}` : ''}`;
+      main.append(title, detail); item.appendChild(main); container.appendChild(item);
+    }
+  }
+  document.getElementById('dbStatus').textContent = `PostgREST ${health.layers.postgrest.status}`;
+  document.getElementById('dbSize').textContent = `Circuit ${health.circuit?.state || 'unknown'}`;
+}
+
 function renderSystemStats(sys) {
   if (!sys || !sys.cpu || !sys.ram || !sys.disk) return;
   document.getElementById('cpuUsage').textContent = (sys.cpu.processUsagePercent).toFixed(1) + '%';
@@ -252,17 +271,66 @@ function renderSystemStats(sys) {
   document.getElementById('dbSize').textContent = sys.db.size;
   document.getElementById('dbStatus').textContent = sys.db.status;
 }
+async function loadPrivacyRequests() {
+  const list = document.getElementById('adminPrivacyList');
+  const status = document.getElementById('adminPrivacyStatus');
+  if (!list) return;
+  status.textContent = 'Loading privacy requests...';
+  try {
+    const result = await fetchJSON('/api/admin/privacy-requests?status=pending');
+    const requests = result?.requests || [];
+    list.replaceChildren();
+    if (!requests.length) { const empty = document.createElement('div'); empty.className = 'empty-state'; empty.textContent = 'No pending privacy requests.'; list.appendChild(empty); }
+    for (const request of requests) {
+      const item = document.createElement('article'); item.className = 'management-item';
+      const main = document.createElement('div'); main.className = 'management-item-main';
+      const title = document.createElement('strong'); title.textContent = `Request #${request.id} · ${request.request_type} · User ${request.user_id}`;
+      const detail = document.createElement('span'); detail.textContent = `${request.categories.join(', ')} · ${fmtDate(request.requested_at)}${request.note ? ` · ${request.note}` : ''}`;
+      const preview = document.createElement('button'); preview.type = 'button'; preview.className = 'btn-modal'; preview.textContent = 'Preview decision'; preview.addEventListener('click', () => showPrivacyDecision(request));
+      main.append(title, detail); item.append(main, preview); list.appendChild(item);
+    }
+    status.textContent = `${requests.length} pending request${requests.length === 1 ? '' : 's'}.`;
+  } catch (error) { status.textContent = error.message; status.classList.add('error'); }
+}
+async function showPrivacyDecision(request) {
+  const previewResponse = await fetchJSON(`/api/admin/privacy-requests/${request.id}/preview`);
+  if (!previewResponse) return;
+  let overlay = document.getElementById('modalOverlay');
+  if (!overlay) { overlay = document.createElement('div'); overlay.id = 'modalOverlay'; overlay.className = 'modal-overlay'; document.body.appendChild(overlay); }
+  overlay.replaceChildren();
+  const dialog = document.createElement('div'); dialog.className = 'modal'; dialog.setAttribute('role', 'alertdialog'); dialog.setAttribute('aria-modal', 'true');
+  const title = document.createElement('h3'); title.textContent = `Decide privacy request #${request.id}`;
+  const detail = document.createElement('p'); detail.textContent = `Delete: ${previewResponse.delete.join(', ') || 'nothing'}. Retain: ${previewResponse.retain.join(', ') || 'nothing'}.`;
+  const note = document.createElement('textarea'); note.className = 'text-input'; note.maxLength = 1000; note.rows = 3; note.placeholder = 'Owner note';
+  const actions = document.createElement('div'); actions.className = 'modal-actions';
+  const cancel = document.createElement('button'); cancel.type = 'button'; cancel.className = 'btn-modal'; cancel.textContent = 'Cancel';
+  const reject = document.createElement('button'); reject.type = 'button'; reject.className = 'btn-modal'; reject.textContent = 'Reject';
+  const approve = document.createElement('button'); approve.type = 'button'; approve.className = 'btn-modal danger'; approve.textContent = 'Approve exact actions';
+  actions.append(cancel, reject, approve); dialog.append(title, detail, note, actions); overlay.appendChild(dialog); overlay.classList.add('show');
+  cancel.addEventListener('click', () => overlay.classList.remove('show'));
+  const decide = async (decision, button) => {
+    button.disabled = true;
+    const response = await fetch(`/api/admin/privacy-requests/${request.id}/decision`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision, ownerNote: note.value }) });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) { button.disabled = false; return document.getElementById('adminPrivacyStatus').textContent = result.error || 'Decision failed'; }
+    overlay.classList.remove('show'); await loadPrivacyRequests();
+  };
+  reject.addEventListener('click', () => decide('reject', reject)); approve.addEventListener('click', () => decide('approve', approve));
+}
+document.getElementById('btnRefreshPrivacy')?.addEventListener('click', loadPrivacyRequests);
+
 let isRefreshing = false;
 async function refreshAll() {
   if (isRefreshing) return;
   isRefreshing = true;
-  const [botInfo, overview, growth, sessions, security, system] = await Promise.all([
+  const [botInfo, overview, growth, sessions, security, system, databaseHealth] = await Promise.all([
     fetchJSON('/api/admin/bot-info'),
     fetchJSON('/api/admin/overview'),
     fetchJSON('/api/admin/growth'),
     fetchJSON('/api/admin/sessions'),
     fetchJSON('/api/admin/security-log'),
     fetchJSON('/api/admin/system'),
+    fetchJSON('/api/admin/database-health'),
   ]);
   if (botInfo?.__forbidden || overview?.__forbidden) {
     document.getElementById('accessDenied').classList.remove('hidden');
@@ -278,6 +346,8 @@ async function refreshAll() {
   renderSessions(sessions);
   renderSecurityLog(security);
   renderSystemStats(system);
+  renderDatabaseHealth(databaseHealth);
+  await loadPrivacyRequests();
   isRefreshing = false;
 }
 function start() {

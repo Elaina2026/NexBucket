@@ -1,6 +1,7 @@
 import { handleClientReady } from './ready.js';
 import { handleInteractionCreate } from '../events/interactionCreate.js';
 import { handleMessageCreate } from '../events/messageCreate.js';
+import { isSupabaseUnavailable } from '../database/supabaseClient.js';
 import {
   handleGuildCreate,
   handleGuildDelete,
@@ -14,7 +15,7 @@ function withErrorBoundary(eventName, handler) {
     try {
       await handler(...args);
     } catch (error) {
-      console.error(`[${eventName}] Unhandled error:`, error);
+      if (!isSupabaseUnavailable(error)) console.error(`[${eventName}] Unhandled error:`, error);
     }
   };
 }

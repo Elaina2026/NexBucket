@@ -20,11 +20,12 @@ function cleanupTracker(tracker) {
     }
   }
 }
-setInterval(() => {
+const cleanupTimer = setInterval(() => {
   cleanupTracker(imageTracker);
   cleanupTracker(pingTracker);
   cleanupTracker(textTracker);
 }, GC_INTERVAL);
+cleanupTimer.unref?.();
 export async function handleAntiSpam(message) {
   if (!message.member) return;
   if (message.author.id === message.client.user.id) return;

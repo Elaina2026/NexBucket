@@ -4,8 +4,10 @@ import {
   allowSupabaseRetry,
   createSupabaseFetch,
   getSupabaseBackoffDelay,
+  getSupabaseAvailability,
   initDatabase,
   isSupabaseUnavailable,
+  subscribeSupabaseAvailability,
 } from '../database/supabaseClient.js';
 import { createBackgroundJob } from '../runtime/backgroundJob.js';
 import { addIncident, resetIncidentCircuit } from '../utils/errorHandler.js';
@@ -98,23 +100,38 @@ test('incident persistence opens a circuit after one REST timeout', async () => 
   resetIncidentCircuit();
 });
 
-test('background jobs catch rejection, skip overlap, and recover', async () => {
+test('background jobs skip shared outages, overlap, and expected outage logs', async () => {
+  allowSupabaseRetry();
   const logs = [];
   let release;
   let calls = 0;
   const task = () => {
     calls++;
     if (calls === 1) return Promise.reject({ code: 'REST_TIMEOUT', message: 'REST timed out' });
-    if (calls === 2) return new Promise(resolve => { release = resolve; });
-    return Promise.resolve();
+    return new Promise(resolve => { release = resolve; });
   };
-  const job = createBackgroundJob('test', task, { logError: (...args) => logs.push(args.join(' ')), now: () => 10_000 });
+  const job = createBackgroundJob('test', task, { logError: (...args) => logs.push(args.join(' ')), usesSupabase: true });
   assert.equal(await job.run(), false);
+  assert.equal(logs.length, 0);
   const running = job.run();
   assert.equal(await job.run(), false);
   release();
   assert.equal(await running, true);
-  assert.equal(job.getUnavailableFailures(), 0);
-  assert.equal(logs.some(line => line.includes('unavailable')), true);
-  assert.equal(logs.some(line => line.includes('recovered')), true);
+  assert.equal(calls, 2);
+});
+
+test('Supabase availability emits one outage and one real recovery transition', async () => {
+  allowSupabaseRetry();
+  const transitions = [];
+  const unsubscribe = subscribeSupabaseAvailability(event => transitions.push(event.state));
+  const timeout = async () => { throw Object.assign(new Error('fetch failed'), { name: 'TimeoutError' }); };
+  await createSupabaseFetch(timeout, 1)('https://project.supabase.co/rest/v1/guild_settings');
+  allowSupabaseRetry();
+  await createSupabaseFetch(timeout, 1)('https://project.supabase.co/rest/v1/guild_settings');
+  assert.equal(transitions.filter(state => state === 'unavailable').length <= 1, true);
+  allowSupabaseRetry();
+  await createSupabaseFetch(async () => Response.json([]), 1)('https://project.supabase.co/rest/v1/guild_settings');
+  unsubscribe();
+  assert.equal(transitions.at(-1), 'available');
+  assert.equal(getSupabaseAvailability().state, 'available');
 });

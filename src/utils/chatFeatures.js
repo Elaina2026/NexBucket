@@ -5,7 +5,8 @@ export async function getAfkData() {
   if (!supabase) return {};
   if (afkCache) return afkCache;
   try {
-    const { data } = await supabase.from('afk_data').select('*');
+    const { data, error } = await supabase.from('afk_data').select('*');
+    if (error) throw error;
     const afk = {};
     if (data) {
       data.forEach(row => {
@@ -15,21 +16,21 @@ export async function getAfkData() {
     }
     afkCache = afk;
     return afkCache;
-  } catch { return {}; }
+  } catch (error) { throw error; }
 }
 export async function removeAfk(guildId, userId) {
   if (!supabase) return;
-  if (afkCache && afkCache[guildId]) {
-    delete afkCache[guildId][userId];
-  }
-  await supabase.from('afk_data').delete().match({ guild_id: guildId, user_id: userId });
+  const { error } = await supabase.from('afk_data').delete().match({ guild_id: guildId, user_id: userId });
+  if (error) throw error;
+  if (afkCache && afkCache[guildId]) delete afkCache[guildId][userId];
 }
 export async function setAfk(guildId, userId, reason, timestamp) {
   if (!supabase) return;
+  const { error } = await supabase.from('afk_data').upsert({ guild_id: guildId, user_id: userId, reason, timestamp });
+  if (error) throw error;
   if (!afkCache) afkCache = {};
   if (!afkCache[guildId]) afkCache[guildId] = {};
   afkCache[guildId][userId] = { reason, timestamp };
-  await supabase.from('afk_data').upsert({ guild_id: guildId, user_id: userId, reason, timestamp });
 }
 let arCache = null;
 
@@ -110,7 +111,8 @@ export async function getArData() {
   if (!supabase) return {};
   if (arCache) return arCache;
   try {
-    const { data } = await supabase.from('autoresponder_data').select('*');
+    const { data, error } = await supabase.from('autoresponder_data').select('*');
+    if (error) throw error;
     const ar = {};
     if (data) {
       data.forEach(row => {
@@ -123,14 +125,15 @@ export async function getArData() {
     }
     arCache = ar;
     return arCache;
-  } catch { return {}; }
+  } catch (error) { throw error; }
 }
 export async function saveArData(guildId, triggers) {
   const normalized = normalizeArTriggers(triggers);
   if (!supabase) return;
+  const { error } = await supabase.from('autoresponder_data').upsert({ guild_id: guildId, triggers_json: normalized });
+  if (error) throw error;
   if (!arCache) arCache = {};
   arCache[guildId] = normalized;
-  await supabase.from('autoresponder_data').upsert({ guild_id: guildId, triggers_json: normalized });
 }
 import { getBankConfig, generateVietQRUrl, createPaymentLink, getPayOS } from '../banking/bankManager.js';
 import { EmbedBuilder } from 'discord.js';

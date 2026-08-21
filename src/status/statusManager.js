@@ -16,6 +16,32 @@ const BOT_OWNER_ID = process.env.BOT_OWNER_ID || '';
 const SERVER_SNAPSHOT_MS = Math.max(30000, Number(process.env.MINECRAFT_CONFIG_CACHE_MS) || 5 * 60 * 1000);
 let allServersSnapshot = null;
 const guildWrites = new Map();
+const DISCORD_REST_BACKOFF_MS = 5 * 60 * 1000;
+let discordRestUnavailableUntil = 0;
+let discordRestUnavailable = false;
+
+export function isDiscordRestUnavailable(error) {
+    const code = String(error?.code || error?.cause?.code || '');
+    const message = String(error?.message || error?.cause?.message || error || '').toLowerCase();
+    return ['EAI_AGAIN', 'UND_ERR_CONNECT_TIMEOUT', 'ECONNRESET', 'ETIMEDOUT'].includes(code)
+        || ((message.includes('discord.com') || message.includes('discordapp.com'))
+            && (message.includes('connect timeout') || message.includes('fetch failed') || message.includes('getaddrinfo')));
+}
+
+function recordDiscordRestFailure(error, now = Date.now()) {
+    discordRestUnavailableUntil = now + DISCORD_REST_BACKOFF_MS;
+    if (!discordRestUnavailable) {
+        discordRestUnavailable = true;
+        console.warn(`[Status] Discord REST unavailable; status publishing paused for 5 minutes: ${error?.message || error}`);
+    }
+}
+
+function recordDiscordRestSuccess() {
+    if (!discordRestUnavailable) return;
+    discordRestUnavailable = false;
+    discordRestUnavailableUntil = 0;
+    console.log('[Status] Discord REST recovered; status publishing resumed.');
+}
 
 export function invalidateMinecraftServersCache() {
     allServersSnapshot = null;
@@ -203,12 +229,15 @@ export async function getGeoInfo(ip, fetchImpl = fetch) {
     }
 }
 
-export async function updateServerStatus(server, client) {
+export async function updateServerStatus(server, client, now = Date.now(), options = {}) {
+    if (now < discordRestUnavailableUntil) return 'discord-unavailable';
+    const renderBanner = options.renderMinecraftBanner || renderMinecraftBanner;
+    const persistServers = options.saveServers || saveServers;
     try {
         const guild = client.guilds.cache.get(server.guildId);
-        if (!guild) return;
+        if (!guild) return 'skipped';
         const channel = guild.channels.cache.get(server.channelId);
-        if (!channel) return;
+        if (!channel) return 'skipped';
 
         const serverConfig = server;
         const ip = server.ip;
@@ -217,9 +246,9 @@ export async function updateServerStatus(server, client) {
 
         let banner;
         try {
-            banner = await renderMinecraftBanner(server);
+            banner = await renderBanner(server);
         } catch (error) {
-            if (error.code === 'MC_BANNER_BUSY') return;
+            if (error.code === 'MC_BANNER_BUSY') return 'skipped';
             console.error(`[Status] Banner failed for ${target}; using fallback image:`, error.message || error);
             const fallbackStatus = error.status || { online: false, error: error.message || 'Banner renderer failed' };
             banner = { png: await getMinecraftBannerFallback(), status: fallbackStatus };
@@ -277,17 +306,28 @@ export async function updateServerStatus(server, client) {
             await message.edit({ embeds: [embed], files: [attachment] });
         } else {
             message = await channel.send({ embeds: [embed], files: [attachment] });
+            await persistServers([{ ...server, messageId: message.id }]);
             server.messageId = message.id;
-            await saveServers([server]);
         }
+        recordDiscordRestSuccess();
+        return 'updated';
     } catch (error) {
+        if (isDiscordRestUnavailable(error)) {
+            recordDiscordRestFailure(error, now);
+            return 'discord-unavailable';
+        }
         console.error(`[Status] Update failed for ${server.ip}:${server.port}:`, error.message || error);
+        return 'failed';
     }
 }
 
-export async function updateAllStatus(client) {
-    const servers = await getServers();
-    for (const server of servers) await updateServerStatus(server, client);
+export async function updateAllStatus(client, options = {}) {
+    const loadServers = options.getServers || getServers;
+    const updateStatus = options.updateServerStatus || updateServerStatus;
+    const servers = await loadServers();
+    for (const server of servers) {
+        if (await updateStatus(server, client) === 'discord-unavailable') break;
+    }
 }
 
 export async function handleMcServer(interaction) {

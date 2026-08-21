@@ -2,6 +2,7 @@ import { EmbedBuilder } from '../../utils/embed.js';
 import { PermissionFlagsBits, ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags } from 'discord.js';
 import { logActivity } from '../../utils/activityLogger.js';
 import ConfigManager, { getStaffRoleIds } from '../configManager.js';
+import { createTicketRecord } from '../ticketLifecycle.js';
 function buildTicketConfirmEmbed(user, ticketInfo, config) {
   let greeting = (ticketInfo.greetingMessage && ticketInfo.greetingMessage.trim() !== '')
     ? ticketInfo.greetingMessage
@@ -97,6 +98,20 @@ export async function handleTicketSelect(interaction) {
     return interaction.editReply({
       content: '❌ The bot lacks permission to create channels. Please contact an Administrator.',
     });
+  }
+  try {
+    await createTicketRecord({
+      channelId: ticketChannel.id,
+      guildId,
+      creatorId: user.id,
+      category: ticketInfo.id || ticketInfo.value || ticketInfo.label,
+      priority: ticketInfo.priority || 'normal',
+      config,
+    });
+  } catch (error) {
+    console.error('[ticketSelect] Failed to persist ticket lifecycle; deleting channel:', error);
+    await ticketChannel.delete('Ticket lifecycle persistence failed.').catch(() => {});
+    return interaction.editReply({ content: '❌ Ticket storage is temporarily unavailable. Please try again.' });
   }
   logActivity(guildId, guild.name, user.id, 'TICKET_CREATE', `Created ticket ${channelName} (Category: ${ticketInfo.label})`);
   try {

@@ -1,5 +1,6 @@
 import { MessageFlags, PermissionFlagsBits, ActionRowBuilder, ButtonBuilder } from 'discord.js';
 import ConfigManager, { getStaffRoleIds } from '../configManager.js';
+import { claimTicket } from '../ticketLifecycle.js';
 export async function handleTicketClaim(interaction) {
   const guildId = interaction.guildId;
   const config = await ConfigManager.getConfig(guildId);
@@ -28,6 +29,10 @@ export async function handleTicketClaim(interaction) {
     throw err;
   }
   try {
+    const claimed = await claimTicket(channel.id, interaction.user.id);
+    if (!claimed) {
+      return interaction.editReply({ content: '❌ This ticket was already claimed or is closed.' });
+    }
     const originalMessage = interaction.message;
     const newComponents = originalMessage.components.map(row =>
       new ActionRowBuilder().addComponents(

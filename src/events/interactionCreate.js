@@ -19,10 +19,11 @@ import { handleGiveawayCommand, handleGiveawayButton, handleGiveawayAutocomplete
 import { handleEditCommand, handleEditSelectMenu, handleEditModalSubmit } from '../utils/configCommand.js';
 import { handleNetworkCommand, networkCommandNames } from '../network/networkCommands.js';
 import { logActivity } from '../utils/activityLogger.js';
+import { cancelPartyQueue, confirmPartyQueue, joinPartyQueue, leavePartyQueue, reopenPartyQueue } from '../utils/partyFinder.js';
 
 const moderationCommands = new Set([
   'ban', 'unban', 'tempban', 'kick', 'timeout', 'removetimeout',
-  'mute', 'unmute', 'hardmute', 'warn', 'banlist',
+  'mute', 'unmute', 'hardmute', 'warn', 'banlist', 'case',
 ]);
 
 async function handleChatInput(interaction) {
@@ -78,6 +79,27 @@ export async function handleInteractionCreate(interaction) {
     if (/^g_(enter|participants|page)_/.test(interaction.customId)) return handleGiveawayButton(interaction);
     if (interaction.customId.startsWith('trate_')) return handleTicketRate(interaction);
     if (interaction.customId.startsWith('jtc_btn_')) return handleJtcButton(interaction);
+    if (interaction.customId.startsWith('party_')) {
+      const [action, queueId] = interaction.customId.split(':', 2);
+      await interaction.deferReply({ flags: 64 });
+      try {
+        if (!interaction.inGuild() && ['party_join', 'party_leave'].includes(action)) {
+          return interaction.editReply({ content: '❌ Join or leave from the Party Finder card in the server.' });
+        }
+        const interactionGuildId = interaction.guildId || null;
+        if (action === 'party_join') await joinPartyQueue(queueId, interaction.user.id, interaction.client, undefined, interactionGuildId);
+        else if (action === 'party_leave') await leavePartyQueue(queueId, interaction.user.id, interaction.client, undefined, interactionGuildId);
+        else if (action === 'party_cancel') await cancelPartyQueue(queueId, interaction.user.id, interaction.client, undefined, interactionGuildId);
+        else if (action === 'party_reopen') await reopenPartyQueue(queueId, interaction.user.id, interaction.client, undefined, interactionGuildId);
+        else if (action === 'party_confirm') {
+          const result = await confirmPartyQueue(queueId, interaction.user.id, interaction.client, undefined, interactionGuildId);
+          return interaction.editReply({ content: `✅ Voice room created: <#${result.voiceChannelId}> · ${result.inviteUrl}` });
+        } else return interaction.editReply({ content: '❌ Unknown Party Finder action.' });
+        return interaction.editReply({ content: '✅ Party queue updated.' });
+      } catch (error) {
+        return interaction.editReply({ content: `❌ ${error.message || 'Party action failed.'}` });
+      }
+    }
     return;
   }
   if (interaction.isUserSelectMenu()) {
