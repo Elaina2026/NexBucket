@@ -195,6 +195,14 @@ export async function saveBlacklist(list) {
 
 const geoCache = new Map();
 const GEO_CACHE_TTL = 3600000;
+const GEO_CACHE_MAX_ENTRIES = 500;
+
+function pruneGeoCache(now) {
+    for (const [address, cached] of geoCache) {
+        if (now - cached.timestamp >= GEO_CACHE_TTL) geoCache.delete(address);
+    }
+    while (geoCache.size >= GEO_CACHE_MAX_ENTRIES) geoCache.delete(geoCache.keys().next().value);
+}
 
 function countryCodeToFlag(countryCode) {
     const code = String(countryCode || '').toUpperCase();
@@ -206,8 +214,11 @@ export async function getGeoInfo(ip, fetchImpl = fetch) {
     if (NetworkGuard.isPrivateIp(ip)) {
         return { location: '🏠 Local Network', isp: 'N/A' };
     }
+    const now = Date.now();
     const cached = geoCache.get(ip);
-    if (cached && Date.now() - cached.timestamp < GEO_CACHE_TTL) {
+    if (cached && now - cached.timestamp < GEO_CACHE_TTL) {
+        geoCache.delete(ip);
+        geoCache.set(ip, cached);
         return cached.data;
     }
     try {
@@ -221,7 +232,8 @@ export async function getGeoInfo(ip, fetchImpl = fetch) {
             location: `${countryCodeToFlag(json.countryCode)} ${json.city || 'Unknown'}, ${json.country || 'Unknown'}`,
             isp: json.isp || 'Unknown',
         };
-        geoCache.set(ip, { data, timestamp: Date.now() });
+        pruneGeoCache(now);
+        geoCache.set(ip, { data, timestamp: now });
         return data;
     } catch (error) {
         console.error(`[Status] Geolocation failed for ${ip}:`, error.message || error);

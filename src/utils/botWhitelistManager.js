@@ -19,6 +19,15 @@ export async function isBotWhitelisted(guildId, botId) {
 
 const topGGCache = new Map();
 const TOPGG_CACHE_TTL = 6 * 60 * 60 * 1000;
+const TOPGG_CACHE_MAX_ENTRIES = 2_000;
+
+function cacheTopGGResult(botId, listed, now) {
+  for (const [id, cached] of topGGCache) {
+    if (now - cached.at >= TOPGG_CACHE_TTL) topGGCache.delete(id);
+  }
+  while (topGGCache.size >= TOPGG_CACHE_MAX_ENTRIES) topGGCache.delete(topGGCache.keys().next().value);
+  topGGCache.set(botId, { listed, at: now });
+}
 
 export async function isBotListedOnTopGG(botId, httpClient = axios) {
   try {
@@ -41,8 +50,11 @@ export async function checkAndAutoWhitelist(guildId, user) {
   if (!user?.bot) return false;
   if (await isBotWhitelisted(guildId, user.id)) return true;
 
+  const now = Date.now();
   const cached = topGGCache.get(user.id);
-  if (cached && Date.now() - cached.at < TOPGG_CACHE_TTL) {
+  if (cached && now - cached.at < TOPGG_CACHE_TTL) {
+    topGGCache.delete(user.id);
+    topGGCache.set(user.id, cached);
     if (cached.listed) {
       await addBotToWhitelist(guildId, user.id, 'SYSTEM_AUTO_TOPGG');
       return true;
@@ -51,7 +63,7 @@ export async function checkAndAutoWhitelist(guildId, user) {
   }
 
   const listed = await isBotListedOnTopGG(user.id);
-  topGGCache.set(user.id, { listed, at: Date.now() });
+  cacheTopGGResult(user.id, listed, now);
   if (!listed) return false;
   await addBotToWhitelist(guildId, user.id, 'SYSTEM_AUTO_TOPGG');
   return true;

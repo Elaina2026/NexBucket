@@ -99,10 +99,6 @@ export const utilCommands = [
     .setDescription('Check the bot\'s API and websocket latency')
     .toJSON(),
   new SlashCommandBuilder()
-    .setName('aimodel')
-    .setDescription('Display the SWE-bench Verified AI coding leaderboard')
-    .toJSON(),
-  new SlashCommandBuilder()
     .setName('uptime')
     .setDescription('Display the bot\'s total uptime')
     .toJSON(),

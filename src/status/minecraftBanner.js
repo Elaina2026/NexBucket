@@ -17,6 +17,7 @@ const ASSETS_DIR = path.resolve(__dirname, '..', '..', 'assets');
 const FALLBACK_IMAGE_PATH = path.join(ASSETS_DIR, 'unknown_server.png');
 const BANNERS_DIR = path.join(ASSETS_DIR, 'banners');
 const WIDTH = 1990;
+const CACHE_ENTRY_MAX_AGE_MS = 60 * 60 * 1000;
 const cache = new Map();
 const pending = new Map();
 let enginePromise = null;
@@ -57,11 +58,17 @@ function readBool(name, fallback) {
   throw new Error(`${name} must be true or false`);
 }
 
+function getCacheConfig() {
+  return {
+    cacheMs: Math.min(readInt('MC_BANNER_CACHE_SECONDS', 300, 0, 86400) * 1000, CACHE_ENTRY_MAX_AGE_MS),
+    maxCacheEntries: readInt('MC_BANNER_MAX_CACHE_ENTRIES', 50, 1, 500),
+  };
+}
+
 function getConfig() {
   return {
     assetDir: path.resolve(process.env.MC_BANNER_ASSET_DIR || DEFAULT_ASSET_DIR),
-    cacheMs: readInt('MC_BANNER_CACHE_SECONDS', 300, 0, 86400) * 1000,
-    maxCacheEntries: readInt('MC_BANNER_MAX_CACHE_ENTRIES', 300, 1, 10000),
+    ...getCacheConfig(),
     connectTimeout: readInt('MC_BANNER_CONNECT_TIMEOUT_MS', 4000, 250, 30000),
     readTimeout: readInt('MC_BANNER_READ_TIMEOUT_MS', 5000, 250, 30000),
     protocol: readInt('MC_BANNER_PROTOCOL', -1, -1, 2147483647),
@@ -176,6 +183,7 @@ async function renderServer(server) {
 
 export async function renderMinecraftBanner(server, refresh = false) {
   const engine = await getEngine();
+  const bannerCacheConfig = getCacheConfig();
   const key = cacheKey(server);
   const now = Date.now();
   const cached = cache.get(key);
@@ -190,9 +198,9 @@ export async function renderMinecraftBanner(server, refresh = false) {
     activeRenders++;
     try {
       const value = await renderServer(server);
-      if (engine.config.cacheMs > 0) {
-        pruneCache(engine.config.maxCacheEntries, now);
-        cache.set(key, { value, expiresAt: now + engine.config.cacheMs });
+      if (bannerCacheConfig.cacheMs > 0) {
+        pruneCache(bannerCacheConfig.maxCacheEntries, now);
+        cache.set(key, { value, expiresAt: now + bannerCacheConfig.cacheMs });
       }
       return { ...value, cacheHit: false };
     } finally {
@@ -206,6 +214,10 @@ export async function renderMinecraftBanner(server, refresh = false) {
 
 export async function getMinecraftBannerFallback() {
   return getFallbackImage();
+}
+
+export function getMinecraftBannerCacheSize() {
+  return cache.size;
 }
 
 export function clearMinecraftBannerCache() {

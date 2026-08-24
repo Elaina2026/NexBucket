@@ -4,6 +4,7 @@ import pg from 'pg';
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_KEY;
 const REST_TIMEOUT_MS = 15_000;
+const REST_RETRY_DELAY_MS = 250;
 const REST_BACKOFF_MAX_MS = 5 * 60 * 1000;
 
 let restFailureCount = 0;
@@ -69,6 +70,18 @@ function restErrorResponse(code, message, status) {
     status,
     headers: { 'Content-Type': 'application/json' },
   });
+}
+
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+function isRetryableRestError(error) {
+  return error?.message === 'fetch failed'
+    || ['TimeoutError', 'AbortError'].includes(error?.name)
+    || ['UND_ERR_CONNECT_TIMEOUT', 'ECONNRESET', 'ETIMEDOUT', 'EAI_AGAIN'].includes(error?.code || error?.cause?.code);
+}
+
+function requestSignal(options, timeoutMs) {
+  return options?.signal || AbortSignal.timeout(timeoutMs);
 }
 
 export function getSupabaseBackoffDelay(failureCount, baseMs = REST_TIMEOUT_MS, maximumMs = REST_BACKOFF_MAX_MS) {
@@ -150,10 +163,17 @@ export function createSupabaseFetch(fetchImpl = fetch, timeoutMs = REST_TIMEOUT_
       if (restAvailability === 'unavailable') restProbeInFlight = true;
     }
     try {
-      const response = await fetchImpl(url, {
-        ...options,
-        signal: options?.signal || AbortSignal.timeout(timeoutMs),
-      });
+      let response;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          response = await fetchImpl(url, { ...options, signal: requestSignal(options, timeoutMs) });
+          break;
+        } catch (error) {
+          if (!restRequest || !isRetryableRestError(error)) throw error;
+          if (attempt === 1 || options?.signal?.aborted) throw error;
+          await sleep(REST_RETRY_DELAY_MS);
+        }
+      }
       if (restRequest) {
         if ([502, 503, 504].includes(response.status)) {
           recordSupabaseResult({ code: 'REST_UNAVAILABLE', status: response.status });
@@ -163,10 +183,10 @@ export function createSupabaseFetch(fetchImpl = fetch, timeoutMs = REST_TIMEOUT_
       }
       return response;
     } catch (error) {
-      const unavailable = error?.message === 'fetch failed'
-        || ['TimeoutError', 'AbortError'].includes(error?.name)
-        || error?.code === 'UND_ERR_CONNECT_TIMEOUT';
-      if (!unavailable) throw error;
+      if (!isRetryableRestError(error)) {
+        if (restRequest) restProbeInFlight = false;
+        throw error;
+      }
       if (restRequest) recordSupabaseResult({ code: 'REST_TIMEOUT', message: error?.message });
       return restErrorResponse('REST_TIMEOUT', 'Supabase REST API request timed out.', 504);
     }

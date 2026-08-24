@@ -29,123 +29,11 @@ function initTabs() {
       const target = document.getElementById(btn.dataset.tab);
       if (target) {
         target.classList.add('active');
-        if (btn.dataset.tab === 'tab-ai-models') fetchAiModels();
       }
     });
   });
 }
 
-const AI_MODELS_PER_PAGE = 20;
-const aiModelsState = { models: null, query: '', provider: '', page: 1 };
-
-function escapeHTML(value) {
-  return String(value ?? '').replace(/[&<>"']/g, char => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-  })[char]);
-}
-
-function formatModelNumber(value) {
-  return Number.isFinite(value) ? value.toLocaleString() : 'Unknown';
-}
-
-function formatModelPrice(value) {
-  return Number.isFinite(value) ? `$${value.toLocaleString(undefined, { maximumFractionDigits: 4 })}` : '?';
-}
-
-function renderAiModels() {
-  const container = document.getElementById('aiModelsList');
-  const summary = document.getElementById('aiModelsSummary');
-  const pagination = document.getElementById('aiModelsPagination');
-  const pageLabel = document.getElementById('aiModelsPage');
-  const previous = document.getElementById('aiModelsPrev');
-  const next = document.getElementById('aiModelsNext');
-  if (!container || !Array.isArray(aiModelsState.models)) return;
-
-  const query = aiModelsState.query.toLowerCase();
-  const filtered = aiModelsState.models.filter(model => {
-    const matchesProvider = !aiModelsState.provider || model.provider === aiModelsState.provider;
-    const searchable = `${model.name} ${model.id} ${model.provider}`.toLowerCase();
-    return matchesProvider && searchable.includes(query);
-  });
-  const pages = Math.max(1, Math.ceil(filtered.length / AI_MODELS_PER_PAGE));
-  aiModelsState.page = Math.min(aiModelsState.page, pages);
-  const offset = (aiModelsState.page - 1) * AI_MODELS_PER_PAGE;
-  const pageModels = filtered.slice(offset, offset + AI_MODELS_PER_PAGE);
-
-  if (summary) summary.textContent = `${filtered.length.toLocaleString()} of ${aiModelsState.models.length.toLocaleString()} models`;
-  if (pagination) pagination.hidden = filtered.length <= AI_MODELS_PER_PAGE;
-  if (pageLabel) pageLabel.textContent = `Page ${aiModelsState.page} of ${pages}`;
-  if (previous) previous.disabled = aiModelsState.page <= 1;
-  if (next) next.disabled = aiModelsState.page >= pages;
-
-  if (pageModels.length === 0) {
-    container.innerHTML = '<div class="empty-state">No AI models match these filters.</div>';
-    return;
-  }
-
-  container.innerHTML = pageModels.map(model => `
-    <div class="service-card operational">
-      <div class="svc-main">
-        <div class="svc-info">
-          <div class="svc-name">${escapeHTML(model.name || model.id)}</div>
-          <div class="svc-desc">${escapeHTML(model.id)}<br>Context: ${formatModelNumber(model.context_window)} tokens | Max Output: ${formatModelNumber(model.max_output_tokens)} tokens</div>
-        </div>
-      </div>
-      <div class="svc-meta">
-        <span class="status-badge">Provider: ${escapeHTML(model.provider || 'unknown')}</span>
-        <span class="status-badge status-up">Vision: ${model.vision_support ? 'Yes' : 'No'}</span>
-        <span class="status-badge">Price In/Out: ${formatModelPrice(model.input_price_per_m)} / ${formatModelPrice(model.output_price_per_m)} per 1M</span>
-      </div>
-    </div>
-  `).join('');
-}
-
-async function fetchAiModels() {
-  const container = document.getElementById('aiModelsList');
-  if (!container || aiModelsState.models) return;
-  const data = await fetchJSON('/api/ai/models');
-  if (!Array.isArray(data?.models) || data.models.length === 0) {
-    container.innerHTML = '<div class="empty-state">Failed to load AI models catalogue.</div>';
-    return;
-  }
-
-  aiModelsState.models = data.models.filter(model =>
-    model && typeof model.id === 'string' && typeof model.name === 'string'
-  );
-  if (aiModelsState.models.length === 0) {
-    container.innerHTML = '<div class="empty-state">Failed to load AI models catalogue.</div>';
-    return;
-  }
-
-  const providers = [...new Set(aiModelsState.models.map(model => model.provider).filter(Boolean))].sort();
-  const providerFilter = document.getElementById('aiProviderFilter');
-  if (providerFilter) {
-    providerFilter.replaceChildren(new Option('All providers', ''));
-    providers.forEach(provider => providerFilter.add(new Option(provider, provider)));
-  }
-  renderAiModels();
-}
-
-function initAiModelsControls() {
-  document.getElementById('aiModelSearch')?.addEventListener('input', event => {
-    aiModelsState.query = event.target.value.trim();
-    aiModelsState.page = 1;
-    renderAiModels();
-  });
-  document.getElementById('aiProviderFilter')?.addEventListener('change', event => {
-    aiModelsState.provider = event.target.value;
-    aiModelsState.page = 1;
-    renderAiModels();
-  });
-  document.getElementById('aiModelsPrev')?.addEventListener('click', () => {
-    aiModelsState.page--;
-    renderAiModels();
-  });
-  document.getElementById('aiModelsNext')?.addEventListener('click', () => {
-    aiModelsState.page++;
-    renderAiModels();
-  });
-}
 function formatUptime(sec) {
   const d = Math.floor(sec / 86400);
   const h = Math.floor((sec % 86400) / 3600);
@@ -199,7 +87,7 @@ function renderHealth(data) {
   if (!data) return;
   document.getElementById('hUptime').textContent = formatUptime(data.uptime);
   document.getElementById('hPing').textContent = `${data.ping}ms`;
-  document.getElementById('hMemory').textContent = `${data.memory.heapUsed} MB`;
+  document.getElementById('hMemory').textContent = `${data.memory.rss} MB`;
   document.getElementById('hGuilds').textContent = data.guilds;
   document.getElementById('hUsers').textContent = data.totalUsers.toLocaleString();
 }
@@ -276,7 +164,6 @@ async function refreshAll() {
 }
 function startLoop() {
   initTabs();
-  initAiModelsControls();
   const timerEl = document.getElementById('refreshTimer');
   countdown = REFRESH_SEC;
   refreshAll();

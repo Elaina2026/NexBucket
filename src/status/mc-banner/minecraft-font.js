@@ -9,7 +9,6 @@ class MinecraftFont {
   constructor(glyphs, defaultAdvance = 6) {
     this.glyphs = glyphs;
     this.defaultAdvance = defaultAdvance;
-    this.tintCache = new WeakMap();
     this.smallGlyphCache = new WeakMap();
     this.italicGlyphCache = new WeakMap();
     const missingCanvas = createCanvas(5, 8);

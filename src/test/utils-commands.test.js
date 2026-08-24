@@ -6,7 +6,6 @@ test('utility command routing uses every unique registered command name', () => 
   const names = utilCommands.map(command => command.name);
   assert.equal(utilCommandNames.size, names.length);
   assert.deepEqual([...utilCommandNames], names);
-  assert.ok(utilCommandNames.has('aimodel'));
 });
 
 test('required slash command options precede optional options', () => {

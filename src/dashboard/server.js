@@ -1724,15 +1724,6 @@ export function startDashboard(client) {
         if (!client.user) return res.status(404).send('Bot not ready');
         res.redirect(client.user.displayAvatarURL({ size: 128, extension: 'png' }));
     });
-    app.get('/api/ai/models', async (req, res) => {
-        try {
-            const { getModelsLeaderboard } = await import('../utils/aiManager.js');
-            const models = await getModelsLeaderboard();
-            res.json({ success: true, models, updated_at: new Date().toISOString() });
-        } catch (err) {
-            sendInternalError(res, err, 'Failed to fetch AI models leaderboard');
-        }
-    });
     app.get('/api/health', async (req, res) => {
         try {
             const mem = process.memoryUsage();
@@ -1936,7 +1927,7 @@ export function startDashboard(client) {
         const { error } = await supabase.from('bot_growth_snapshots').insert([{
             guild_count: client.guilds.cache.size,
             user_count: totalUsers,
-            memory_mb: +(process.memoryUsage().heapUsed / 1024 / 1024).toFixed(2),
+            memory_mb: +(process.memoryUsage().rss / 1024 / 1024).toFixed(2),
             avg_ping: client.ws.ping,
         }]);
         if (error) throw error;

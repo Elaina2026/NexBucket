@@ -432,29 +432,6 @@ export async function handleUtilCommand(interaction) {
     }
     return;
   }
-  if (cmd === 'aimodel') {
-    await interaction.deferReply();
-    try {
-      const [{ AI_CODING_SOURCE, getAiCodingLeaderboard }, { renderAiCodingChart }] = await Promise.all([
-        import('./aiCodingLeaderboard.js'),
-        import('./aiChartRenderer.js'),
-      ]);
-      const image = renderAiCodingChart(getAiCodingLeaderboard(), AI_CODING_SOURCE);
-      const attachment = new AttachmentBuilder(image, { name: 'ai-coding-leaderboard.png' });
-      const embed = new EmbedBuilder()
-        .setTitle('🤖 AI Coding Leaderboard')
-        .setColor('#5865F2')
-        .setDescription(`SWE-bench Verified results using the same mini-SWE-agent harness. [View official source](${AI_CODING_SOURCE.url})`)
-        .setImage('attachment://ai-coding-leaderboard.png')
-        .setFooter({ text: `Updated ${AI_CODING_SOURCE.updatedAt} • Higher is better` })
-        .setTimestamp();
-
-      return interaction.editReply({ embeds: [embed], files: [attachment] });
-    } catch (err) {
-      console.error('[Slash Command aimodel Error]:', err);
-      return interaction.editReply({ content: '❌ Failed to generate the AI model chart.' });
-    }
-  }
 }
 export async function handleLockCommand(message) {
   if (!message.member.permissions.has(PermissionFlagsBits.ManageChannels)) {

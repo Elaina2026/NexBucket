@@ -30,7 +30,6 @@ The project uses Node.js ESM, Discord.js 14, Express 5, Supabase, Sharp, and `@n
 | Tickets | Category-based ticket panels, staff claims, access controls, editing, ratings, password-protected web transcripts, and automatic expiry |
 | Moderation | Ban, temporary ban, kick, timeout, mute, warnings, anti-spam, anti-link, anti-raid, banned words, and threshold-based auto-ban |
 | Learn manager | Text, image, or mixed automatic responses; dashboard search, preview, duplicate warnings, enable/disable state, metadata, and Administrator-only CRUD |
-| AI tools | Claude chat integration and a local SWE-bench Verified AI coding leaderboard rendered as a chart |
 | Network tools | RDAP-powered WHOIS summaries, DNS records, public IP/domain availability checks, ISP/location metadata, and private-network protection |
 | Minecraft | Java server ping, SRV resolution, MOTD rendering, favicon support, local backgrounds, caching, and Discord-ready status banners |
 | Community | Welcome/goodbye cards, auto-role, Join-to-Create rooms, giveaways, reminders, AFK status, statistics channels, and backups |
@@ -44,7 +43,6 @@ The project uses Node.js ESM, Discord.js 14, Express 5, Supabase, Sharp, and `@n
 | `/ticket` | Configure and publish the ticket system |
 | `/dns whois domain:<domain>` | Show concise registration and essential DNS information |
 | `/check ip-domain:<target>` | Check a public IP/domain, HTTP/HTTPS availability, latency, ISP, and location |
-| `/aimodel` | Render the local SWE-bench Verified AI coding leaderboard |
 | `/avatar` | Show avatar, decoration, banner, and direct asset links |
 | `/mcserver` | Query a Minecraft server and render its status banner |
 | `/giveaway` | Start, edit, end, or reroll giveaways |
@@ -196,7 +194,6 @@ See `.env.example` for the deployment template.
 | `DATABASE_URL` | Yes | Runtime PostgreSQL pooler and migration fallback |
 | `DIRECT_URL` | Recommended | PostgreSQL session pooler for migrations |
 | `ENCRYPTION_SECRET` | Yes | AES-256-GCM key source for stored OAuth/payment secrets |
-| `ANTHROPIC_API_KEY` | Optional | Enables Claude chat requests; not required for the local `/aimodel` leaderboard |
 | `DASHBOARD_PORT` | No | Express port; defaults to `3000` |
 | `DASHBOARD_URL` | Production | Exact public dashboard origin; use HTTPS |
 | `UPDATE_INTERVAL` | No | Minecraft status refresh interval in milliseconds |
@@ -239,7 +236,7 @@ The complete Node.js test suite lives in `src/test/`:
 npm test
 ```
 
-Tests cover dashboard security helpers, payments, moderation, Learn entries and image validation, network input/SSRF boundaries, command embeds, Minecraft resolution/rendering, AI leaderboards, welcome cards, and shared utilities. Network tests use injected dependencies and do not require live Internet access.
+Tests cover dashboard security helpers, payments, moderation, Learn entries and image validation, network input/SSRF boundaries, command embeds, Minecraft resolution/rendering, welcome cards, and shared utilities. Network tests use injected dependencies and do not require live Internet access.
 
 ## Troubleshooting
 

@@ -23,9 +23,16 @@ function clone(value) {
   return value === undefined ? undefined : structuredClone(value);
 }
 
+function pruneRowCache(now) {
+  for (const [guildId, cached] of rowCache) {
+    if (cached.staleUntil <= now) rowCache.delete(guildId);
+  }
+}
+
 function cacheRow(guildId, row) {
   const value = row || { guild_id: guildId, version: 0 };
   const now = clock();
+  pruneRowCache(now);
   rowCache.set(guildId, {
     value: clone(value),
     expiresAt: now + CACHE_TTL_MS,

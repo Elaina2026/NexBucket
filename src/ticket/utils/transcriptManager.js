@@ -20,7 +20,7 @@ export async function createWebTranscript(channel, closedBy, creatorId) {
     let keepFetching = true;
 
     while (keepFetching) {
-      const options = { limit: 100 };
+      const options = { limit: 100, cache: false };
       if (lastId) options.before = lastId;
 
       const fetched = await channel.messages.fetch(options);

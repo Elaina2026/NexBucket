@@ -13,7 +13,6 @@
     "dev": "node --watch index.js"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.116.0",
     "@napi-rs/canvas": "^1.0.3",
     "@payos/node": "^1.0.10",
     "@supabase/supabase-js": "^2.110.0",

@@ -46,13 +46,16 @@ function incidentDatabase(error = null) {
   };
 }
 
-test('Supabase REST timeout is classified without claiming PostgreSQL is sleeping', async () => {
+test('Supabase REST timeout is retried once before opening degraded mode', async () => {
   allowSupabaseRetry();
+  let calls = 0;
   const fetchImpl = async () => {
+    calls++;
     throw Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' });
   };
   const response = await createSupabaseFetch(fetchImpl, 1)('https://project.supabase.co/rest/v1/guild_settings');
   const body = await response.json();
+  assert.equal(calls, 2);
   assert.equal(response.status, 504);
   assert.equal(body.code, 'REST_TIMEOUT');
   assert.match(body.message, /REST API request timed out/);
@@ -61,6 +64,19 @@ test('Supabase REST timeout is classified without claiming PostgreSQL is sleepin
   assert.equal(isSupabaseUnavailable({ status: 503 }), true);
   assert.equal(isSupabaseUnavailable({ code: '23505', message: 'duplicate key' }), false);
   allowSupabaseRetry();
+});
+
+test('Supabase REST transient fetch failure recovers within the same request', async () => {
+  allowSupabaseRetry();
+  let calls = 0;
+  const response = await createSupabaseFetch(async () => {
+    calls++;
+    if (calls === 1) throw new Error('fetch failed');
+    return Response.json([{ guild_id: '1' }]);
+  }, 10)('https://project.supabase.co/rest/v1/guild_settings');
+  assert.equal(calls, 2);
+  assert.equal(response.status, 200);
+  assert.equal(getSupabaseAvailability().state, 'available');
 });
 
 test('Supabase outage backoff is bounded and shared with Card2K', () => {

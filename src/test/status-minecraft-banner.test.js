@@ -4,6 +4,8 @@ import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import {
+  clearMinecraftBannerCache,
+  getMinecraftBannerCacheSize,
   getMinecraftBannerFallback,
   getMinecraftBannerTitle,
   parseMinecraftAddress,
@@ -103,4 +105,31 @@ test('Minecraft renderer produces Discord-compatible banner dimensions', {
   const image = await loadImage(result.png);
   assert.equal(image.width, 1990);
   assert.equal(image.height, 256);
+});
+
+test('Minecraft banner cache stays within the configured entry limit', {
+  skip: !existsSync(path.join(assetDir, 'asset-version.json')) && 'run npm run assets:prepare first',
+  timeout: 120_000,
+}, async () => {
+  const originalLimit = process.env.MC_BANNER_MAX_CACHE_ENTRIES;
+  const originalCacheSeconds = process.env.MC_BANNER_CACHE_SECONDS;
+  process.env.MC_BANNER_MAX_CACHE_ENTRIES = '3';
+  process.env.MC_BANNER_CACHE_SECONDS = '300';
+  clearMinecraftBannerCache();
+  try {
+    for (let index = 0; index < 5; index++) {
+      await renderMinecraftBanner({
+        ip: '127.0.0.1',
+        port: 25565,
+        name: `Cache fixture ${index}`,
+      }, true);
+    }
+    assert.equal(getMinecraftBannerCacheSize(), 3);
+  } finally {
+    clearMinecraftBannerCache();
+    if (originalLimit === undefined) delete process.env.MC_BANNER_MAX_CACHE_ENTRIES;
+    else process.env.MC_BANNER_MAX_CACHE_ENTRIES = originalLimit;
+    if (originalCacheSeconds === undefined) delete process.env.MC_BANNER_CACHE_SECONDS;
+    else process.env.MC_BANNER_CACHE_SECONDS = originalCacheSeconds;
+  }
 });
