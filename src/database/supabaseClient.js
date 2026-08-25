@@ -11,6 +11,7 @@ let restFailureCount = 0;
 let restUnavailableUntil = 0;
 let restAvailability = 'unknown';
 let restProbeInFlight = false;
+let restStateVersion = 0;
 let databasePingTimer = null;
 const availabilityListeners = new Set();
 const databaseHealth = {
@@ -90,12 +91,18 @@ export function getSupabaseBackoffDelay(failureCount, baseMs = REST_TIMEOUT_MS, 
 }
 
 export function isSupabaseUnavailable(error) {
-  const status = Number(error?.status);
-  const text = String(error?.message || error || '').toLowerCase();
-  return ['REST_TIMEOUT', 'REST_UNAVAILABLE'].includes(error?.code)
+  const code = String(error?.code || error?.cause?.code || '').toUpperCase();
+  const status = Number(error?.status || error?.cause?.status);
+  const text = [error?.message, error?.details, error?.hint, typeof error === 'string' ? error : '']
+    .filter(Boolean).join(' ').toLowerCase();
+  return ['REST_TIMEOUT', 'REST_UNAVAILABLE', 'PGRST000', 'PGRST001', 'PGRST002', 'PGRST003'].includes(code)
     || [502, 503, 504].includes(status)
     || text.includes('supabase rest api')
     || text.includes('postgrest api')
+    || text.includes('could not connect with the database')
+    || text.includes('could not connect to the database')
+    || text.includes('could not query the database for the schema cache')
+    || text.includes('timed out waiting for a pool connection')
     || text.includes('database connection timed out')
     || text.includes('database might be paused')
     || text.includes('fetch failed')
@@ -119,17 +126,32 @@ export function subscribeSupabaseAvailability(listener) {
   return () => availabilityListeners.delete(listener);
 }
 
-export function recordSupabaseResult(error = null, now = Date.now()) {
+export function recordSupabaseResult(error = null, now = Date.now(), requestVersion = restStateVersion) {
+  if (requestVersion !== restStateVersion) {
+    return {
+      available: restAvailability === 'available',
+      failureCount: restFailureCount,
+      retryAt: restUnavailableUntil,
+      state: restAvailability,
+    };
+  }
   if (!error || !isSupabaseUnavailable(error)) {
+    const recovered = restAvailability === 'unavailable';
     restFailureCount = 0;
     restUnavailableUntil = 0;
     restProbeInFlight = false;
+    if (recovered) restStateVersion++;
     emitAvailability('available');
     return { available: true, failureCount: 0, retryAt: 0, state: restAvailability };
+  }
+  if (restAvailability === 'unavailable' && now < restUnavailableUntil) {
+    restProbeInFlight = false;
+    return { available: false, failureCount: restFailureCount, retryAt: restUnavailableUntil, state: restAvailability };
   }
   restFailureCount++;
   restUnavailableUntil = Math.max(restUnavailableUntil, now + getSupabaseBackoffDelay(restFailureCount));
   restProbeInFlight = false;
+  restStateVersion++;
   emitAvailability('unavailable', error);
   return { available: false, failureCount: restFailureCount, retryAt: restUnavailableUntil, state: restAvailability };
 }
@@ -141,6 +163,7 @@ export function canAttemptSupabase(now = Date.now()) {
 export function allowSupabaseRetry() {
   restUnavailableUntil = 0;
   restProbeInFlight = false;
+  restStateVersion++;
 }
 
 export function getSupabaseAvailability(now = Date.now()) {
@@ -152,14 +175,41 @@ export function getSupabaseAvailability(now = Date.now()) {
   };
 }
 
+async function getRestResponseError(response) {
+  if (response.ok) return null;
+  let body = null;
+  let parsed = false;
+  try {
+    const text = await response.clone().text();
+    if (text) {
+      try {
+        body = JSON.parse(text);
+        parsed = true;
+      } catch {
+        body = { message: text };
+      }
+    }
+  } catch {}
+  if (parsed && body && typeof body === 'object' && !Array.isArray(body)) {
+    return { ...body, status: response.status };
+  }
+  return {
+    code: response.status >= 500 ? 'REST_UNAVAILABLE' : `HTTP_${response.status}`,
+    status: response.status,
+    message: body?.message || response.statusText || `HTTP ${response.status}`,
+  };
+}
+
 export function createSupabaseFetch(fetchImpl = fetch, timeoutMs = REST_TIMEOUT_MS) {
   return async (url, options) => {
     const restRequest = isRestRequest(url);
+    let requestVersion = restStateVersion;
     if (restRequest) {
       const now = Date.now();
       if (now < restUnavailableUntil || restProbeInFlight) {
         return restErrorResponse('REST_UNAVAILABLE', 'Supabase REST API is temporarily unavailable; retry later.', 503);
       }
+      requestVersion = restStateVersion;
       if (restAvailability === 'unavailable') restProbeInFlight = true;
     }
     try {
@@ -175,19 +225,17 @@ export function createSupabaseFetch(fetchImpl = fetch, timeoutMs = REST_TIMEOUT_
         }
       }
       if (restRequest) {
-        if ([502, 503, 504].includes(response.status)) {
-          recordSupabaseResult({ code: 'REST_UNAVAILABLE', status: response.status });
-        } else {
-          recordSupabaseResult();
-        }
+        recordSupabaseResult(await getRestResponseError(response), Date.now(), requestVersion);
       }
       return response;
     } catch (error) {
       if (!isRetryableRestError(error)) {
-        if (restRequest) restProbeInFlight = false;
+        if (restRequest && requestVersion === restStateVersion) restProbeInFlight = false;
         throw error;
       }
-      if (restRequest) recordSupabaseResult({ code: 'REST_TIMEOUT', message: error?.message });
+      if (restRequest) {
+        recordSupabaseResult({ code: 'REST_TIMEOUT', message: error?.message }, Date.now(), requestVersion);
+      }
       return restErrorResponse('REST_TIMEOUT', 'Supabase REST API request timed out.', 504);
     }
   };
@@ -201,14 +249,15 @@ export const supabase = supabaseUrl && supabaseKey ? createClient(supabaseUrl, s
 
 export async function probeDatabase(db = supabase) {
   if (!db) return { ok: false, error: new Error('Database is not configured') };
+  const recordsOwnResults = db !== supabase;
   const startedAt = performance.now();
   try {
     const result = await db.from('guild_settings').select('guild_id').limit(1);
-    recordSupabaseResult(result.error);
+    if (recordsOwnResults) recordSupabaseResult(result.error);
     recordHealthLayer('postgrest', !result.error, performance.now() - startedAt, result.error);
     return { ok: !result.error, error: result.error || null };
   } catch (error) {
-    recordSupabaseResult(error);
+    if (recordsOwnResults) recordSupabaseResult(error);
     recordHealthLayer('postgrest', false, performance.now() - startedAt, error);
     return { ok: false, error };
   }
@@ -266,13 +315,13 @@ function installAvailabilityLogger() {
   availabilityLoggerInstalled = true;
   subscribeSupabaseAvailability(({ state, previousState, error }) => {
     if (state === 'unavailable') {
-      console.warn(`⚠️ [Database] Supabase REST API unavailable; bot is running in degraded mode: ${error?.message || 'request failed'}`);
+      console.log(`⚠️ [Database] Supabase REST API unavailable; bot is running in degraded mode: ${error?.message || 'request failed'}`);
     } else if (previousState === 'unavailable') {
       console.log('✅ [Database] Supabase REST API recovered.');
     }
   });
   if (restAvailability === 'unavailable') {
-    console.warn('⚠️ [Database] Supabase REST API unavailable; bot is running in degraded mode.');
+    console.log('⚠️ [Database] Supabase REST API unavailable; bot is running in degraded mode.');
   }
 }
 

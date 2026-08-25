@@ -86,18 +86,19 @@ export function normalizeServerList(servers, guildId) {
     return valid;
 }
 
-export async function getServers(guildId = null) {
-    if (!supabase) return [];
+export async function getServers(guildId = null, options = {}) {
+    const db = options.db === undefined ? supabase : options.db;
+    if (!db) return [];
     try {
         if (guildId) {
             const settings = await getAllSections(guildId);
             return normalizeServerList(settings.minecraft?.servers, guildId);
         }
-        const now = Date.now();
+        const now = options.now ?? Date.now();
         if (allServersSnapshot && allServersSnapshot.expiresAt > now) {
             return structuredClone(allServersSnapshot.servers);
         }
-        const { data, error } = await supabase.from('guild_settings').select('guild_id, minecraft');
+        const { data, error } = await db.from('guild_settings').select('guild_id, minecraft');
         if (error) throw error;
         const servers = (data || []).flatMap(row =>
             normalizeServerList(row.minecraft?.servers, row.guild_id)
@@ -105,9 +106,12 @@ export async function getServers(guildId = null) {
         allServersSnapshot = { servers: structuredClone(servers), expiresAt: now + SERVER_SNAPSHOT_MS };
         return servers;
     } catch (error) {
-        if (!isSupabaseUnavailable(error)) {
-            console.error('[Status] Failed to load Minecraft config:', error.message || error);
+        if (isSupabaseUnavailable(error)) {
+            return !guildId && allServersSnapshot
+                ? structuredClone(allServersSnapshot.servers)
+                : [];
         }
+        console.error('[Status] Failed to load Minecraft config:', error.message || error);
         return [];
     }
 }

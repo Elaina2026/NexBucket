@@ -62,6 +62,12 @@ test('Supabase REST timeout is retried once before opening degraded mode', async
   assert.doesNotMatch(body.message, /paused|sleeping/i);
   assert.equal(isSupabaseUnavailable(body), true);
   assert.equal(isSupabaseUnavailable({ status: 503 }), true);
+  for (const code of ['PGRST000', 'PGRST001', 'PGRST002', 'PGRST003']) {
+    assert.equal(isSupabaseUnavailable({ code }), true);
+  }
+  assert.equal(isSupabaseUnavailable({ message: 'Could not query the database for the schema cache. Retrying.' }), true);
+  assert.equal(isSupabaseUnavailable({ code: 'PGRST205', status: 404, message: "Could not find the table 'public.missing' in the schema cache" }), false);
+  assert.equal(isSupabaseUnavailable({ code: '42P01', message: 'relation does not exist' }), false);
   assert.equal(isSupabaseUnavailable({ code: '23505', message: 'duplicate key' }), false);
   allowSupabaseRetry();
 });
@@ -79,6 +85,68 @@ test('Supabase REST transient fetch failure recovers within the same request', a
   assert.equal(getSupabaseAvailability().state, 'available');
 });
 
+test('PostgREST schema-cache outage opens once and recovers after one successful probe', async () => {
+  allowSupabaseRetry();
+  const transitions = [];
+  const unavailable = {
+    code: 'PGRST002',
+    message: 'Could not query the database for the schema cache. Retrying.',
+  };
+  const firstResponse = Response.json(unavailable, { status: 500 });
+  const unsubscribe = subscribeSupabaseAvailability(event => transitions.push(event.state));
+  try {
+    const response = await createSupabaseFetch(async () => firstResponse, 1)(
+      'https://project.supabase.co/rest/v1/guild_settings',
+    );
+    assert.deepEqual(await response.json(), unavailable);
+    const opened = getSupabaseAvailability();
+    assert.equal(opened.state, 'unavailable');
+    assert.equal(opened.failureCount, 1);
+
+    const blocked = await createSupabaseFetch(async () => {
+      throw new Error('circuit should block this request');
+    }, 1)('https://project.supabase.co/rest/v1/guild_settings');
+    assert.equal((await blocked.json()).code, 'REST_UNAVAILABLE');
+    assert.equal(getSupabaseAvailability().failureCount, 1);
+    assert.deepEqual(transitions, ['unavailable']);
+
+    allowSupabaseRetry();
+    const recovered = await createSupabaseFetch(async () => Response.json([]), 1)(
+      'https://project.supabase.co/rest/v1/guild_settings',
+    );
+    assert.equal(recovered.status, 200);
+    assert.deepEqual(transitions, ['unavailable', 'available']);
+  } finally {
+    unsubscribe();
+    allowSupabaseRetry();
+  }
+});
+
+test('late REST success cannot recover a newer outage', async () => {
+  allowSupabaseRetry();
+  let releaseLateSuccess;
+  const transitions = [];
+  const unsubscribe = subscribeSupabaseAvailability(event => transitions.push(event.state));
+  const lateSuccess = createSupabaseFetch(() => new Promise(resolve => {
+    releaseLateSuccess = () => resolve(Response.json([]));
+  }), 1)('https://project.supabase.co/rest/v1/guild_settings');
+  const outage = createSupabaseFetch(async () => Response.json({
+    code: 'PGRST002',
+    message: 'Could not query the database for the schema cache. Retrying.',
+  }, { status: 500 }), 1)('https://project.supabase.co/rest/v1/guild_settings');
+  try {
+    await outage;
+    releaseLateSuccess();
+    await lateSuccess;
+    assert.deepEqual(transitions, ['unavailable']);
+    assert.equal(getSupabaseAvailability().state, 'unavailable');
+    assert.equal(getSupabaseAvailability().failureCount, 1);
+  } finally {
+    unsubscribe();
+    allowSupabaseRetry();
+  }
+});
+
 test('Supabase outage backoff is bounded and shared with Card2K', () => {
   assert.equal(getSupabaseBackoffDelay(1, 10_000, 300_000), 10_000);
   assert.equal(getSupabaseBackoffDelay(2, 10_000, 300_000), 20_000);
@@ -91,10 +159,11 @@ test('initDatabase reports degraded mode instead of false success', async () => 
   const timeout = { code: 'REST_TIMEOUT', status: 504, message: 'Supabase REST API request timed out.' };
   const db = resultDatabase([{ data: null, error: timeout }]);
   const logs = [];
+  const warnings = [];
   const originalLog = console.log;
   const originalWarn = console.warn;
   console.log = (...args) => logs.push(args.join(' '));
-  console.warn = (...args) => logs.push(args.join(' '));
+  console.warn = (...args) => warnings.push(args.join(' '));
   try {
     assert.equal(await initDatabase(db, { schedulePing: false }), false);
   } finally {
@@ -104,6 +173,7 @@ test('initDatabase reports degraded mode instead of false success', async () => 
   }
   assert.equal(logs.some(line => line.includes('Connected to Supabase')), false);
   assert.equal(logs.some(line => line.includes('degraded mode')), true);
+  assert.equal(warnings.length, 0);
 });
 
 test('incident persistence opens a circuit after one REST timeout', async () => {
