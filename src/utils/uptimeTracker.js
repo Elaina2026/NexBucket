@@ -1,3 +1,6 @@
+import { isSupabaseUnavailable } from '../database/supabaseClient.js';
+import { createBackgroundJob } from '../runtime/backgroundJob.js';
+
 const HISTORY_SLOTS = 30;
 const CHECK_INTERVAL = 10 * 60 * 1000;
 const CLEANUP_INTERVAL = 24 * 60 * 60 * 1000;
@@ -96,15 +99,17 @@ function getUptimeBars(rawHistory) {
     return bars;
 }
 
-async function cleanupOldData() {
-    const supabase = await getSupabase();
+export async function cleanupOldData(db = null, now = Date.now()) {
+    const supabase = db || await getSupabase();
     if (!supabase) return;
-    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 3600000).toISOString();
+    const sevenDaysAgo = new Date(now - 7 * 24 * 3600000).toISOString();
     const { error: uptimeError } = await supabase.from('uptime_checks').delete().lt('timestamp', sevenDaysAgo);
+    if (isSupabaseUnavailable(uptimeError)) throw uptimeError;
     if (uptimeError) console.error('[DB Cleanup Error] uptime_checks:', uptimeError);
+    else historyCache = null;
     const { error: incidentError } = await supabase.from('incidents').delete().lt('timestamp', sevenDaysAgo);
+    if (isSupabaseUnavailable(incidentError)) throw incidentError;
     if (incidentError) console.error('[DB Cleanup Error] incidents:', incidentError);
-    historyCache = null;
 }
 
 async function moduleLoads(path) {
@@ -148,9 +153,12 @@ export function startUptimeTracker(client) {
         return;
     }
     runHealthChecks(client).catch(console.error);
-    setInterval(() => runHealthChecks(client).catch(console.error), CHECK_INTERVAL);
-    setInterval(() => cleanupOldData().catch(console.error), CLEANUP_INTERVAL);
-    cleanupOldData().catch(console.error);
+    const checkTimer = setInterval(() => runHealthChecks(client).catch(console.error), CHECK_INTERVAL);
+    checkTimer.unref?.();
+    const cleanupJob = createBackgroundJob('DB Cleanup', cleanupOldData, { usesSupabase: true });
+    const cleanupTimer = setInterval(() => { cleanupJob.run(); }, CLEANUP_INTERVAL);
+    cleanupTimer.unref?.();
+    cleanupJob.run();
     console.log('[UptimeTracker] Monitoring started (DB Backed).');
 }
 

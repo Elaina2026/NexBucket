@@ -42,7 +42,7 @@ import {
 import { getModConfig } from '../moderation/moderationManager.js';
 import { parseTrackedMinecraftAddress } from '../status/minecraftBanner.js';
 import { applyCardResult } from '../banking/cardResult.js';
-import { getDatabaseHealthSnapshot, probeDatabaseLayers, supabase } from '../database/supabaseClient.js';
+import { getDatabaseHealthSnapshot, isSupabaseUnavailable, probeDatabaseLayers, supabase } from '../database/supabaseClient.js';
 import { encryptToken, decryptToken, generateCsrfToken, sanitizePayload } from '../utils/securityUtils.js';
 import { LEARN_IMAGE_MAX_BYTES, validateLearnImage } from '../utils/learnImage.js';
 import { PermissionFlagsBits } from 'discord.js';
@@ -73,13 +73,7 @@ function isSessionId(value) {
 }
 
 function isDatabaseUnavailable(error) {
-    const text = String(error?.message || error || '').toLowerCase();
-    return error?.code === 'TIMEOUT'
-        || error?.status === 504
-        || text.includes('database connection timed out')
-        || text.includes('database might be paused')
-        || text.includes('fetch failed')
-        || text.includes('connect timeout');
+    return error?.code === 'TIMEOUT' || isSupabaseUnavailable(error);
 }
 
 function sendDatabaseUnavailable(res, error) {

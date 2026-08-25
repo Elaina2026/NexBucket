@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  getServers,
+  invalidateMinecraftServersCache,
   isDiscordRestUnavailable,
   updateAllStatus,
   updateServerStatus,
@@ -11,6 +13,65 @@ test('Discord REST outage classification is narrow', () => {
   assert.equal(isDiscordRestUnavailable(Object.assign(new Error('Connect Timeout Error (attempted address: discord.com:443)'), { code: 'UND_ERR_CONNECT_TIMEOUT' })), true);
   assert.equal(isDiscordRestUnavailable(new Error('Minecraft server connection timed out')), false);
   assert.equal(isDiscordRestUnavailable({ code: 50013, message: 'Missing Permissions' }), false);
+});
+
+function minecraftDatabase(results) {
+  let calls = 0;
+  return {
+    get calls() { return calls; },
+    from() {
+      return {
+        async select() {
+          return results[Math.min(calls++, results.length - 1)];
+        },
+      };
+    },
+  };
+}
+
+test('Minecraft status keeps stale server config during a PostgREST outage', async () => {
+  invalidateMinecraftServersCache();
+  const unavailable = {
+    code: 'PGRST002',
+    message: 'Could not query the database for the schema cache. Retrying.',
+  };
+  const db = minecraftDatabase([
+    { data: [{ guild_id: '1', minecraft: { servers: [{ channelId: '2', ip: 'mc.example.com', port: 25565 }] } }], error: null },
+    { data: null, error: unavailable },
+  ]);
+  const logs = [];
+  const originalError = console.error;
+  console.error = (...args) => logs.push(args);
+  try {
+    const fresh = await getServers(null, { db, now: 1_000 });
+    const stale = await getServers(null, { db, now: 1_000 + 6 * 60_000 });
+    assert.deepEqual(stale, fresh);
+    assert.equal(db.calls, 2);
+    assert.equal(logs.length, 0);
+  } finally {
+    console.error = originalError;
+    invalidateMinecraftServersCache();
+  }
+});
+
+test('Minecraft status does not mask genuine config query errors with stale data', async () => {
+  invalidateMinecraftServersCache();
+  const databaseError = { code: '42P01', message: 'relation does not exist' };
+  const db = minecraftDatabase([
+    { data: [{ guild_id: '1', minecraft: { servers: [{ channelId: '2', ip: 'mc.example.com', port: 25565 }] } }], error: null },
+    { data: null, error: databaseError },
+  ]);
+  const logs = [];
+  const originalError = console.error;
+  console.error = (...args) => logs.push(args);
+  try {
+    await getServers(null, { db, now: 1_000 });
+    assert.deepEqual(await getServers(null, { db, now: 1_000 + 6 * 60_000 }), []);
+    assert.equal(logs.length, 1);
+  } finally {
+    console.error = originalError;
+    invalidateMinecraftServersCache();
+  }
 });
 
 test('status publishing logs one Discord outage, preserves message ID, and recovers once', async () => {

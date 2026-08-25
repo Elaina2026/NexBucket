@@ -70,7 +70,7 @@ test('expired guild settings fall back to bounded stale data during REST outage'
   assert.equal((await getAllSections('stale-guild')).version, 3);
   now += 20_000;
   responseError = {
-    code: 'REST_UNAVAILABLE', message: 'Supabase REST API is temporarily unavailable; retry later.', status: 503,
+    code: 'PGRST002', message: 'Could not query the database for the schema cache. Retrying.', status: 500,
   };
   assert.equal((await getAllSections('stale-guild')).moderation.antiSpam, false);
   await assert.rejects(() => getAllSections('stale-guild', true));

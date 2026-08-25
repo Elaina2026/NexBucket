@@ -9,7 +9,7 @@ import {
   StringSelectMenuBuilder,
 } from 'discord.js';
 import { EmbedBuilder } from './embed.js';
-import { supabase } from '../database/supabaseClient.js';
+import { isSupabaseUnavailable, supabase } from '../database/supabaseClient.js';
 import { getSection, saveSection } from '../database/guildSettings.js';
 
 export const JTCEmojis = {
@@ -450,7 +450,7 @@ export async function handleVoiceStateUpdate(oldState, newState) {
       if (profile.status) await setJtcVoiceStatus(tempChannel, profile.status);
       await refreshJtcDashboard(tempChannel, member);
     } catch (error) {
-      console.error('[JTC] Error creating temp channel:', error);
+      if (!isSupabaseUnavailable(error)) console.error('[JTC] Error creating temp channel:', error);
     }
   }
 
