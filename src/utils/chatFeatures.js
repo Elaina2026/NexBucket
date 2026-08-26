@@ -1,33 +1,27 @@
-import { supabase } from '../database/supabaseClient.js';
+import { all, execute } from '../database/client.js';
+import { encodeJson } from '../database/codecs.js';
+import { localMediaUrl, mediaPathForKey } from '../storage/localMedia.js';
 import { PermissionFlagsBits } from 'discord.js';
 let afkCache = null;
 export async function getAfkData() {
-  if (!supabase) return {};
   if (afkCache) return afkCache;
-  try {
-    const { data, error } = await supabase.from('afk_data').select('*');
-    if (error) throw error;
-    const afk = {};
-    if (data) {
-      data.forEach(row => {
-        if (!afk[row.guild_id]) afk[row.guild_id] = {};
-        afk[row.guild_id][row.user_id] = { reason: row.reason, timestamp: row.timestamp };
-      });
-    }
-    afkCache = afk;
-    return afkCache;
-  } catch (error) { throw error; }
+  const rows = await all('SELECT guild_id, user_id, reason, timestamp FROM afk_data');
+  const afk = {};
+  for (const row of rows) {
+    if (!afk[row.guild_id]) afk[row.guild_id] = {};
+    afk[row.guild_id][row.user_id] = { reason: row.reason, timestamp: row.timestamp };
+  }
+  afkCache = afk;
+  return afkCache;
 }
 export async function removeAfk(guildId, userId) {
-  if (!supabase) return;
-  const { error } = await supabase.from('afk_data').delete().match({ guild_id: guildId, user_id: userId });
-  if (error) throw error;
+  await execute('DELETE FROM afk_data WHERE guild_id = ? AND user_id = ?', [guildId, userId]);
   if (afkCache && afkCache[guildId]) delete afkCache[guildId][userId];
 }
 export async function setAfk(guildId, userId, reason, timestamp) {
-  if (!supabase) return;
-  const { error } = await supabase.from('afk_data').upsert({ guild_id: guildId, user_id: userId, reason, timestamp });
-  if (error) throw error;
+  await execute(`INSERT INTO afk_data (guild_id, user_id, reason, timestamp) VALUES (?, ?, ?, ?)
+    ON CONFLICT(user_id, guild_id) DO UPDATE SET reason = excluded.reason, timestamp = excluded.timestamp`,
+  [guildId, userId, reason, timestamp]);
   if (!afkCache) afkCache = {};
   if (!afkCache[guildId]) afkCache[guildId] = {};
   afkCache[guildId][userId] = { reason, timestamp };
@@ -59,19 +53,28 @@ export function normalizeArEntry(value) {
   }
 
   const response = optionalText(source.response, 2000, 'Auto Responder response');
-  const imageUrl = optionalText(source.imageUrl, 2048, 'Auto Responder image URL');
-  const imagePath = optionalText(source.imagePath, 500, 'Auto Responder image path');
-  if (!response && !imageUrl) throw new RangeError('Auto Responder entries require text or an image');
-  if (imageUrl) {
+  let mediaUrl = optionalText(source.mediaUrl ?? source.imageUrl, 2048, 'Auto Responder media URL');
+  const mediaPath = optionalText(source.mediaPath ?? source.imagePath, 500, 'Auto Responder media path');
+  const mediaType = optionalText(source.mediaType, 100, 'Auto Responder media type');
+  if (!response && !mediaUrl && !mediaPath) throw new RangeError('Auto Responder entries require text or media');
+  if (mediaPath) {
+    mediaPathForKey(mediaPath);
+    mediaUrl = localMediaUrl(mediaPath);
+  } else if (mediaUrl) {
+    if (mediaUrl.startsWith('/media/')) throw new TypeError('Auto Responder local media requires a valid media path');
     let parsed;
-    try { parsed = new URL(imageUrl); } catch { throw new TypeError('Auto Responder image URL is invalid'); }
-    if (parsed.protocol !== 'https:') throw new TypeError('Auto Responder image URL must use HTTPS');
+    try { parsed = new URL(mediaUrl); } catch { throw new TypeError('Auto Responder media URL is invalid'); }
+    if (parsed.protocol !== 'https:') throw new TypeError('Auto Responder media URL must use HTTPS');
+  }
+  if (mediaType && !/^(?:image\/(?:png|jpeg|webp|gif)|video\/(?:mp4|webm))$/.test(mediaType)) {
+    throw new TypeError('Auto Responder media type is invalid');
   }
 
   return {
     response,
-    imageUrl,
-    imagePath,
+    mediaUrl,
+    mediaPath,
+    mediaType,
     enabled: source.enabled !== false,
     createdAt: optionalTimestamp(source.createdAt),
     updatedAt: optionalTimestamp(source.updatedAt),
@@ -101,37 +104,34 @@ export function createLearnReply(entry) {
   if (!normalized.enabled) return null;
   const reply = {};
   if (normalized.response) reply.content = normalized.response;
-  if (normalized.imageUrl) {
-    const extension = new URL(normalized.imageUrl).pathname.match(/\.(png|jpe?g|webp|gif)$/i)?.[1]?.toLowerCase();
-    reply.files = [{ attachment: normalized.imageUrl, name: `learn-image${extension ? `.${extension}` : ''}` }];
+  if (normalized.mediaUrl) {
+    const pathname = normalized.mediaUrl.startsWith('/') ? normalized.mediaUrl : new URL(normalized.mediaUrl).pathname;
+    const extension = pathname.match(/\.(png|jpe?g|webp|gif|mp4|webm)$/i)?.[1]?.toLowerCase();
+    const attachment = normalized.mediaUrl.startsWith('/media/')
+      ? mediaPathForKey(normalized.mediaPath)
+      : normalized.mediaUrl;
+    reply.files = [{ attachment, name: `learn-media${extension ? `.${extension}` : ''}` }];
   }
   return reply;
 }
 export async function getArData() {
-  if (!supabase) return {};
   if (arCache) return arCache;
-  try {
-    const { data, error } = await supabase.from('autoresponder_data').select('*');
-    if (error) throw error;
-    const ar = {};
-    if (data) {
-      data.forEach(row => {
-        try {
-          ar[row.guild_id] = normalizeArTriggers(row.triggers_json || {});
-        } catch {
-          ar[row.guild_id] = Object.create(null);
-        }
-      });
+  const rows = await all('SELECT guild_id, triggers_json FROM autoresponder_data');
+  const ar = {};
+  for (const row of rows) {
+    try {
+      ar[row.guild_id] = normalizeArTriggers(row.triggers_json || {});
+    } catch {
+      ar[row.guild_id] = Object.create(null);
     }
-    arCache = ar;
-    return arCache;
-  } catch (error) { throw error; }
+  }
+  arCache = ar;
+  return arCache;
 }
 export async function saveArData(guildId, triggers) {
   const normalized = normalizeArTriggers(triggers);
-  if (!supabase) return;
-  const { error } = await supabase.from('autoresponder_data').upsert({ guild_id: guildId, triggers_json: normalized });
-  if (error) throw error;
+  await execute(`INSERT INTO autoresponder_data (guild_id, triggers_json) VALUES (?, ?)
+    ON CONFLICT(guild_id) DO UPDATE SET triggers_json = excluded.triggers_json`, [guildId, encodeJson(normalized)]);
   if (!arCache) arCache = {};
   arCache[guildId] = normalized;
 }
@@ -218,19 +218,14 @@ export async function handleChatFeatures(message) {
       .setImage(qrUrl)
       .setFooter({ text: `Order #${orderCode} • Powered by PayOS` });
     const replyMsg = await message.reply({ embeds: [embed] }).catch(()=> null);
-    if (supabase && replyMsg) {
-      const { error: dbError } = await supabase.from('bank_transactions').insert([{
-        order_code: orderCode,
-        guild_id: guildId,
-        user_id: userId,
-        amount: amount,
-        description: description,
-        status: 'PENDING',
-        channel_id: replyMsg.channelId,
-        message_id: replyMsg.id
-      }]);
-      if (dbError) {
-        console.error('[PayOS] DB Insert Error:', dbError);
+    if (replyMsg) {
+      try {
+        await execute(`INSERT INTO bank_transactions (
+          order_code, guild_id, user_id, amount, description, status, channel_id, message_id
+        ) VALUES (?, ?, ?, ?, ?, 'PENDING', ?, ?)`,
+        [orderCode, guildId, userId, amount, description, replyMsg.channelId, replyMsg.id]);
+      } catch (error) {
+        console.error('[PayOS] DB Insert Error:', error);
       }
     }
   }

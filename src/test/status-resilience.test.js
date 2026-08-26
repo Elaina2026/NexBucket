@@ -19,25 +19,23 @@ function minecraftDatabase(results) {
   let calls = 0;
   return {
     get calls() { return calls; },
-    from() {
-      return {
-        async select() {
-          return results[Math.min(calls++, results.length - 1)];
-        },
-      };
+    async execute() {
+      const result = results[Math.min(calls++, results.length - 1)];
+      if (result.error) throw result.error;
+      return { rows: result.rows || [] };
     },
   };
 }
 
-test('Minecraft status keeps stale server config during a PostgREST outage', async () => {
+test('Minecraft status keeps stale server config during a Turso outage', async () => {
   invalidateMinecraftServersCache();
   const unavailable = {
-    code: 'PGRST002',
-    message: 'Could not query the database for the schema cache. Retrying.',
+    code: 'DB_UNAVAILABLE',
+    message: 'Turso is temporarily unavailable.',
   };
   const db = minecraftDatabase([
-    { data: [{ guild_id: '1', minecraft: { servers: [{ channelId: '2', ip: 'mc.example.com', port: 25565 }] } }], error: null },
-    { data: null, error: unavailable },
+    { rows: [{ guild_id: '1', minecraft: JSON.stringify({ servers: [{ channelId: '2', ip: 'mc.example.com', port: 25565 }] }) }], error: null },
+    { rows: null, error: unavailable },
   ]);
   const logs = [];
   const originalError = console.error;
@@ -56,10 +54,10 @@ test('Minecraft status keeps stale server config during a PostgREST outage', asy
 
 test('Minecraft status does not mask genuine config query errors with stale data', async () => {
   invalidateMinecraftServersCache();
-  const databaseError = { code: '42P01', message: 'relation does not exist' };
+  const databaseError = { code: 'SQLITE_ERROR', message: 'no such table' };
   const db = minecraftDatabase([
-    { data: [{ guild_id: '1', minecraft: { servers: [{ channelId: '2', ip: 'mc.example.com', port: 25565 }] } }], error: null },
-    { data: null, error: databaseError },
+    { rows: [{ guild_id: '1', minecraft: JSON.stringify({ servers: [{ channelId: '2', ip: 'mc.example.com', port: 25565 }] }) }], error: null },
+    { rows: null, error: databaseError },
   ]);
   const logs = [];
   const originalError = console.error;

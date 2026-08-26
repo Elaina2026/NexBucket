@@ -1,18 +1,18 @@
-import { canAttemptSupabase, isSupabaseUnavailable } from '../database/supabaseClient.js';
+import { canAttemptDatabase, isDatabaseUnavailable } from '../database/client.js';
 
 export function createBackgroundJob(label, task, options = {}) {
   const logError = options.logError || console.error;
-  const usesSupabase = options.usesSupabase === true;
+  const usesDatabase = options.usesDatabase === true;
   let running = false;
 
   async function run() {
-    if (running || (usesSupabase && !canAttemptSupabase())) return false;
+    if (running || (usesDatabase && !canAttemptDatabase())) return false;
     running = true;
     try {
       await task();
       return true;
     } catch (error) {
-      if (!isSupabaseUnavailable(error)) logError(`[${label}] Background job failed:`, error);
+      if (!isDatabaseUnavailable(error)) logError(`[${label}] Background job failed:`, error);
       return false;
     } finally {
       running = false;

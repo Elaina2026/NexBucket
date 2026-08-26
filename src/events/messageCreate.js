@@ -5,7 +5,7 @@ import { handleAutoMod } from '../moderation/autoMod.js';
 import { handleLockCommand } from '../utils/utilsManager.js';
 import { handleChatFeatures, handleAfkCommand, handleArCommand } from '../utils/chatFeatures.js';
 import ConfigManager, { getStaffRoleIds } from '../ticket/configManager.js';
-import { isSupabaseUnavailable } from '../database/supabaseClient.js';
+import { isDatabaseUnavailable } from '../database/client.js';
 import { recordFirstStaffResponse } from '../ticket/ticketLifecycle.js';
 
 const channelCommandPattern = /^[!?](?:lock|unlock|hide|unhide|slowmode|clear|nuke|say|role|vlock|vunlock|vmute|vunmute|disconnect|dc|vlimit)(?:\s|$)/;
@@ -14,8 +14,8 @@ async function bestEffortMessageStep(label, task) {
   try {
     return { handled: Boolean(await task()), unavailable: false };
   } catch (error) {
-    if (!isSupabaseUnavailable(error)) console.error(`[messageCreate] ${label} failed:`, error);
-    return { handled: false, unavailable: isSupabaseUnavailable(error) };
+    if (!isDatabaseUnavailable(error)) console.error(`[messageCreate] ${label} failed:`, error);
+    return { handled: false, unavailable: isDatabaseUnavailable(error) };
   }
 }
 
@@ -42,7 +42,7 @@ export async function handleMessageCreate(message, client, handlers = {}) {
         || staffRoleIds.some(roleId => message.member?.roles.cache.has(roleId));
       if (isStaff) await recordFirstStaffResponse(message.channel.id, message.author.id);
     } catch (error) {
-      if (!isSupabaseUnavailable(error) && !['PGRST116', '42P01'].includes(error?.code)) {
+      if (!isDatabaseUnavailable(error) && error?.code !== 'NOT_FOUND') {
         console.error('[Ticket SLA] First response failed:', error.message || error);
       }
     }
@@ -52,7 +52,7 @@ export async function handleMessageCreate(message, client, handlers = {}) {
   const content = message.content.toLowerCase();
   if (content.startsWith('!afk') || content.startsWith('?afk')) {
     try { return await handleAfkCommand(message); } catch (error) {
-      if (isSupabaseUnavailable(error)) return message.reply('❌ Database is temporarily unavailable. Try again later.').catch(() => {});
+      if (isDatabaseUnavailable(error)) return message.reply('❌ Database is temporarily unavailable. Try again later.').catch(() => {});
       throw error;
     }
   }
@@ -62,7 +62,7 @@ export async function handleMessageCreate(message, client, handlers = {}) {
   }
   if (content.startsWith('+ar') || content.startsWith('!learn') || content.startsWith('!unlearn')) {
     try { return await handleArCommand(message); } catch (error) {
-      if (isSupabaseUnavailable(error)) return message.reply('❌ Database is temporarily unavailable. Try again later.').catch(() => {});
+      if (isDatabaseUnavailable(error)) return message.reply('❌ Database is temporarily unavailable. Try again later.').catch(() => {});
       throw error;
     }
   }

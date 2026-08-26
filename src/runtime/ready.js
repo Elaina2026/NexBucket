@@ -1,6 +1,7 @@
 import { ActivityType } from 'discord.js';
-import { initDatabase, probeDatabaseLayers } from '../database/supabaseClient.js';
+import { initDatabase, probeDatabaseLayers } from '../database/client.js';
 import { runAutoMigrations } from '../database/dbMigrate.js';
+import { probeLocalMedia } from '../storage/localMedia.js';
 import { registerCommands } from '../ticket/deploy-commands.js';
 import { startDashboard } from '../dashboard/server.js';
 import { updateAllStatus } from '../status/statusManager.js';
@@ -25,12 +26,12 @@ export async function handleClientReady(client) {
   console.log(`✅ NexBucket Bot is ready: ${client.user.tag}`);
   console.log(`   Guilds: ${client.guilds.cache.size}`);
   console.log('═══════════════════════════════════════════');
-  await loadBlacklist();
-  await loadBotRoles();
   client.user.setActivity('/help • NexStudio Development', { type: ActivityType.Watching });
   setupAntiRaid(client);
   await runAutoMigrations();
   await initDatabase();
+  await loadBlacklist();
+  await loadBotRoles();
   await registerCommands(client);
   startDashboard(client);
   startUptimeTracker(client);
@@ -40,7 +41,7 @@ export async function handleClientReady(client) {
     client.user.id,
     'BOT_ONLINE',
     `Bot has successfully started and is connected to ${client.guilds.cache.size} servers.`,
-  ), { usesSupabase: true }).run();
+  ), { usesDatabase: true }).run();
 
   const updateInterval = parseInt(process.env.UPDATE_INTERVAL) || 60000;
   console.log(`⏰ Updating status every ${updateInterval / 1000}s`);
@@ -48,26 +49,29 @@ export async function handleClientReady(client) {
   await statusJob.run();
   const statusTimer = setInterval(() => { statusJob.run(); }, updateInterval);
   statusTimer.unref?.();
-  const moderationJob = createBackgroundJob('Moderation Expiry', () => checkModExpirations(client), { usesSupabase: true });
+  const moderationJob = createBackgroundJob('Moderation Expiry', () => checkModExpirations(client), { usesDatabase: true });
   const moderationTimer = setInterval(() => { moderationJob.run(); }, 60000);
   moderationTimer.unref?.();
   setGiveawayClient(client);
-  const giveawayJob = createBackgroundJob('GiveawayManager', () => checkGiveaways(client), { usesSupabase: true });
+  const giveawayJob = createBackgroundJob('GiveawayManager', () => checkGiveaways(client), { usesDatabase: true });
   const giveawayTimer = setInterval(() => { giveawayJob.run(); }, 30000);
   giveawayTimer.unref?.();
-  const reminderJob = createBackgroundJob('ReminderWorker', () => checkReminders(client), { usesSupabase: true });
+  const reminderJob = createBackgroundJob('ReminderWorker', () => checkReminders(client), { usesDatabase: true });
   const reminderTimer = setInterval(() => { reminderJob.run(); }, 30000);
   reminderTimer.unref?.();
-  const ticketSlaJob = createBackgroundJob('Ticket SLA', () => checkTicketSla(client), { usesSupabase: true });
+  const ticketSlaJob = createBackgroundJob('Ticket SLA', () => checkTicketSla(client), { usesDatabase: true });
   const ticketSlaTimer = setInterval(() => { ticketSlaJob.run(); }, 60_000);
   ticketSlaTimer.unref?.();
-  const partyFinderJob = createBackgroundJob('JTC Party Finder', () => expirePartyQueues(client), { usesSupabase: true });
+  const partyFinderJob = createBackgroundJob('JTC Party Finder', () => expirePartyQueues(client), { usesDatabase: true });
   const partyFinderTimer = setInterval(() => { partyFinderJob.run(); }, 60_000);
   partyFinderTimer.unref?.();
-  const databaseHealthJob = createBackgroundJob('Database Health', () => probeDatabaseLayers());
-  databaseHealthJob.run();
-  const databaseHealthTimer = setInterval(() => { databaseHealthJob.run(); }, 5 * 60_000);
-  databaseHealthTimer.unref?.();
+  const dataHealthJob = createBackgroundJob('Data Services Health', () => Promise.all([
+    probeDatabaseLayers(),
+    probeLocalMedia(),
+  ]));
+  dataHealthJob.run();
+  const dataHealthTimer = setInterval(() => { dataHealthJob.run(); }, 5 * 60_000);
+  dataHealthTimer.unref?.();
   startAutoBackup(client);
   startCardStatusPoller(client);
   await sweepOrphanedChannels(client);

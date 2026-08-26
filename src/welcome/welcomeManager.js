@@ -1,4 +1,5 @@
 import { getSection, saveSection } from '../database/guildSettings.js';
+import { isDatabaseUnavailable } from '../database/client.js';
 import path from 'path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'url';
@@ -24,7 +25,7 @@ export async function getWelcomeConfig(guildId) {
       goodbyeBg: data.goodbyeBg ?? data.goodbye_bg ?? '',
     };
   } catch (error) {
-    console.error('[Welcome] Failed to load config:', error);
+    if (!isDatabaseUnavailable(error)) console.error('[Welcome] Failed to load config:', error);
     throw error;
   }
 }
@@ -129,7 +130,7 @@ export async function handleGuildMemberAdd(member) {
       }
     }
   } catch (err) {
-    console.error('[AutoRole] Error:', err);
+    if (!isDatabaseUnavailable(err)) console.error('[AutoRole] Error:', err);
   }
   const config = await getWelcomeConfig(member.guild.id);
   if (!config.welcomeChannel) return;

@@ -1,22 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-
-const calls = [];
-const rows = [];
-let responseError = null;
-process.env.SUPABASE_URL = 'https://project.supabase.co';
-process.env.SUPABASE_KEY = 'test-key';
-const originalFetch = globalThis.fetch;
-globalThis.fetch = async (url, options = {}) => {
-  const body = options.body ? JSON.parse(options.body) : null;
-  calls.push({ url: String(url), method: options.method, body });
-  if (String(url).includes('/rest/v1/rpc/')) return Response.json(12);
-  if (responseError) return Response.json(responseError, { status: responseError.status || 503 });
-  return Response.json(rows);
-};
-process.once('exit', () => { globalThis.fetch = originalFetch; });
-
-const {
+import {
   getAllSections,
   getConfigHistoryVersion,
   invalidateGuildSettingsCache,
@@ -25,56 +9,57 @@ const {
   saveSection,
   saveSections,
   setGuildSettingsClockForTest,
-} = await import('../database/guildSettings.js');
+} from '../database/guildSettings.js';
+import { createTestDatabase } from './databaseTestUtils.js';
 
-test('config writes use atomic history RPCs with actor metadata', async () => {
-  calls.length = 0;
-  assert.equal(await saveSection('1', 'ticket', { enabled: true }, null, {
-    actorId: 'actor', actorName: 'Admin', source: 'discord',
-  }), 12);
-  assert.match(calls[0].url, /\/rpc\/save_guild_section_with_history$/);
-  assert.deepEqual(calls[0].body, {
-    p_guild_id: '1', p_section: 'ticket', p_value: { enabled: true }, p_expected_version: null,
-    p_actor_id: 'actor', p_actor_name: 'Admin', p_source: 'discord',
-  });
+test('config history stores actor metadata and redacts provider secrets', async t => {
+  const { db, close } = await createTestDatabase();
+  t.after(close);
+  const guildId = 'history-guild';
+  t.after(() => invalidateGuildSettingsCache(guildId));
 
-  assert.equal(await saveSections('1', { welcome: { enabled: true } }, 11, {
+  assert.equal(await saveSection(guildId, 'bank', {
+    accountNo: '123', payosClientId: 'client', payosApiKey: 'key', payosChecksumKey: 'checksum',
+  }, null, { actorId: 'actor', actorName: 'Admin', source: 'discord' }, db), 1);
+  assert.equal(await saveSections(guildId, { welcome: { enabled: true } }, 1, {
     actorId: 'actor', actorName: 'Admin', source: 'dashboard',
-  }), 12);
-  assert.match(calls[1].url, /\/rpc\/save_guild_sections_with_history$/);
-  assert.equal(calls[1].body.p_expected_version, 11);
-  assert.equal(calls[1].body.p_source, 'dashboard');
+  }, db), 2);
+
+  const history = await listConfigHistory(guildId, 500, db);
+  assert.equal(history.length, 2);
+  assert.equal(history[0].actor_id, 'actor');
+  assert.equal(history[0].source, 'dashboard');
+  assert.deepEqual(history[0].changed_sections, ['welcome']);
+  const version = await getConfigHistoryVersion(guildId, history[1].id, db);
+  assert.equal(JSON.stringify(version.after_config).includes('payosApiKey'), false);
+
+  assert.equal(await rollbackConfig(guildId, version.id, 2, { actorId: 'actor', actorName: 'Admin' }, db), 3);
+  const stored = await db.execute({ sql: 'SELECT bank FROM guild_settings WHERE guild_id = ?', args: [guildId] });
+  assert.equal(JSON.parse(stored.rows[0].bank).payosApiKey, 'key');
+  await assert.rejects(() => rollbackConfig(guildId, 0, 3, null, db), /Invalid config history ID/);
+  await assert.rejects(() => saveSections(guildId, {}, 3, null, db), /Invalid settings payload/);
 });
 
-test('history list is bounded and rollback requires optimistic version', async () => {
-  calls.length = 0;
-  rows.splice(0, rows.length, { id: 7, version: 11, after_config: { ticket: {} } });
-  assert.deepEqual(await listConfigHistory('1', 500), rows);
-  assert.deepEqual(await getConfigHistoryVersion('1', 7), rows[0]);
-  calls.length = 0;
-  assert.equal(await rollbackConfig('1', 7, 12, { actorId: 'actor', actorName: 'Admin' }), 12);
-  assert.match(calls[0].url, /\/rpc\/rollback_guild_config$/);
-  assert.deepEqual(calls[0].body, {
-    p_guild_id: '1', p_history_id: 7, p_expected_version: 12,
-    p_actor_id: 'actor', p_actor_name: 'Admin',
-  });
-  await assert.rejects(() => rollbackConfig('1', 0, 12), /Invalid config history ID/);
-  await assert.rejects(() => saveSections('1', {}, 12), /Invalid settings payload/);
-});
-
-test('expired guild settings fall back to bounded stale data during REST outage', async () => {
+test('expired guild settings use bounded stale cache during Turso outage', async t => {
+  const { db, close } = await createTestDatabase();
+  t.after(close);
+  const guildId = 'stale-guild';
   let now = 1_000;
   setGuildSettingsClockForTest(() => now);
-  invalidateGuildSettingsCache('stale-guild');
-  rows.splice(0, rows.length, { guild_id: 'stale-guild', version: 3, moderation: { antiSpam: false } });
-  assert.equal((await getAllSections('stale-guild')).version, 3);
+  invalidateGuildSettingsCache(guildId);
+  t.after(() => {
+    setGuildSettingsClockForTest();
+    invalidateGuildSettingsCache(guildId);
+  });
+  await db.execute({
+    sql: 'INSERT INTO guild_settings (guild_id, moderation, version) VALUES (?, ?, ?)',
+    args: [guildId, JSON.stringify({ antiSpam: false }), 3],
+  });
+  assert.equal((await getAllSections(guildId, false, db)).version, 3);
+
   now += 20_000;
-  responseError = {
-    code: 'PGRST002', message: 'Could not query the database for the schema cache. Retrying.', status: 500,
-  };
-  assert.equal((await getAllSections('stale-guild')).moderation.antiSpam, false);
-  await assert.rejects(() => getAllSections('stale-guild', true));
-  responseError = null;
-  setGuildSettingsClockForTest();
-  invalidateGuildSettingsCache('stale-guild');
+  const unavailable = Object.assign(new Error('fetch failed'), { code: 'DB_UNAVAILABLE' });
+  const failingDb = { execute: async () => { throw unavailable; } };
+  assert.equal((await getAllSections(guildId, false, failingDb)).moderation.antiSpam, false);
+  await assert.rejects(() => getAllSections(guildId, true, failingDb), error => error === unavailable);
 });

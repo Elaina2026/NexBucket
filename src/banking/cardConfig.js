@@ -1,5 +1,10 @@
+import crypto from 'node:crypto';
 import { getSection, saveSection } from '../database/guildSettings.js';
 import { decryptOrLegacy, encryptToken } from '../utils/securityUtils.js';
+
+export function createCard2KSignature(partnerKey, code, serial) {
+    return crypto.createHash('md5').update(String(partnerKey) + String(code) + String(serial)).digest('hex');
+}
 
 export function normalizeCardDomain(value) {
     const raw = String(value || 'card2k.com').trim();

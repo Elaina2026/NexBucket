@@ -1,20 +1,8 @@
 import { EmbedBuilder } from 'discord.js';
-import { canAttemptSupabase, isSupabaseUnavailable } from '../database/supabaseClient.js';
+import { all, canAttemptDatabase, database, execute, isDatabaseUnavailable } from '../database/client.js';
 
 const INCIDENT_BACKOFF_MS = 5 * 60 * 1000;
-let supabaseClient = null;
 let incidentsUnavailableUntil = 0;
-
-async function getSupabase() {
-    if (supabaseClient) return supabaseClient;
-    try {
-        const { supabase } = await import('../database/supabaseClient.js');
-        supabaseClient = supabase;
-        return supabase;
-    } catch {
-        return null;
-    }
-}
 
 function originalError(...args) {
     (global.originalConsoleError || console.error)(...args);
@@ -30,36 +18,19 @@ export function resetIncidentCircuit() {
 
 export async function addIncident(severity, module, message, meta = {}, options = {}) {
     const now = options.now ?? Date.now();
-    if (now < incidentsUnavailableUntil || !canAttemptSupabase(now)) return false;
-    const db = options.db === undefined ? await getSupabase() : options.db;
+    if (now < incidentsUnavailableUntil || !canAttemptDatabase(now)) return false;
+    const db = options.db === undefined ? database : options.db;
     if (!db) return false;
-    const incident = {
-        id: now.toString(36) + Math.random().toString(36).slice(2, 6),
-        timestamp: new Date(now).toISOString(),
-        severity,
-        module,
-        message: String(message).substring(0, 500),
-        guild_id: meta.guildId || null,
-        guild_name: meta.guildName || null,
-        stack: meta.stack ? String(meta.stack).substring(0, 1000) : null,
-    };
     try {
-        const { error } = await db.from('incidents').insert([incident]);
-        if (error) {
-            if (error.code === 'PGRST205' || error.code === '42P01') {
-                incidentsUnavailableUntil = now + INCIDENT_BACKOFF_MS;
-                return false;
-            }
-            if (isSupabaseUnavailable(error)) {
-                pauseIncidentStorage(now);
-                return false;
-            }
-            originalError('[DB Error] Failed to log incident:', error);
-            return false;
-        }
+        await execute(`INSERT INTO incidents (id, timestamp, severity, module, message, guild_id, guild_name, stack)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, [
+            now.toString(36) + Math.random().toString(36).slice(2, 6), new Date(now).toISOString(), severity,
+            module, String(message).substring(0, 500), meta.guildId || null, meta.guildName || null,
+            meta.stack ? String(meta.stack).substring(0, 1000) : null,
+        ], db);
         return true;
     } catch (error) {
-        if (isSupabaseUnavailable(error)) {
+        if (isDatabaseUnavailable(error)) {
             pauseIncidentStorage(now);
             return false;
         }
@@ -69,38 +40,29 @@ export async function addIncident(severity, module, message, meta = {}, options 
 }
 
 export async function getIncidents({ severity, startDate, endDate, limit = 100 } = {}) {
-    if (Date.now() < incidentsUnavailableUntil || !canAttemptSupabase()) return [];
-    const supabase = await getSupabase();
-    if (!supabase) return [];
-    let query = supabase.from('incidents').select('*');
-    if (startDate) {
-        query = query.gte('timestamp', new Date(startDate).toISOString());
-    } else {
-        const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-        query = query.gte('timestamp', cutoff);
-    }
-    if (endDate) query = query.lte('timestamp', new Date(endDate).toISOString());
-    if (severity && severity !== 'all') query = query.eq('severity', severity);
-    const safeLimit = Math.min(200, Math.max(1, Number.parseInt(limit, 10) || 100));
-    const { data, error } = await query.order('timestamp', { ascending: false }).limit(safeLimit);
-    if (error) {
-        if (error.code === 'PGRST205' || error.code === '42P01' || isSupabaseUnavailable(error)) {
-            incidentsUnavailableUntil = Date.now() + INCIDENT_BACKOFF_MS;
-            return [];
-        }
-        console.error('[DB Error] Fetching incidents failed:', error);
+    if (Date.now() < incidentsUnavailableUntil || !canAttemptDatabase() || !database) return [];
+    const where = ['timestamp >= ?'];
+    const args = [startDate ? new Date(startDate).toISOString() : new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()];
+    if (endDate) { where.push('timestamp <= ?'); args.push(new Date(endDate).toISOString()); }
+    if (severity && severity !== 'all') { where.push('severity = ?'); args.push(severity); }
+    args.push(Math.min(200, Math.max(1, Number.parseInt(limit, 10) || 100)));
+    try {
+        const rows = await all(`SELECT * FROM incidents WHERE ${where.join(' AND ')} ORDER BY timestamp DESC LIMIT ?`, args);
+        return rows.map(incident => ({
+            id: incident.id,
+            timestamp: incident.timestamp,
+            severity: incident.severity,
+            module: incident.module,
+            message: incident.message,
+            guildId: incident.guild_id,
+            guildName: incident.guild_name,
+            stack: incident.stack,
+        }));
+    } catch (error) {
+        if (isDatabaseUnavailable(error)) incidentsUnavailableUntil = Date.now() + INCIDENT_BACKOFF_MS;
+        else console.error('[DB Error] Fetching incidents failed:', error);
         return [];
     }
-    return (data || []).map(incident => ({
-        id: incident.id,
-        timestamp: incident.timestamp,
-        severity: incident.severity,
-        module: incident.module,
-        message: incident.message,
-        guildId: incident.guild_id,
-        guildName: incident.guild_name,
-        stack: incident.stack,
-    }));
 }
 
 export async function getIncidentSummary(options = {}) {
@@ -141,26 +103,26 @@ export function setupErrorHandler(client) {
         }
         const shouldPersist = (args, msg) => !msg.includes('[DB Error]')
             && !msg.includes('[IncidentLogger]')
-            && !args.some(value => isSupabaseUnavailable(value))
-            && !isSupabaseUnavailable(msg);
+            && !args.some(value => isDatabaseUnavailable(value))
+            && !isDatabaseUnavailable(msg);
         console.error = function (...args) {
             global.originalConsoleError.apply(console, args);
             const msg = args.map(value => (value instanceof Error ? value.message : String(value))).join(' ');
             const stack = args.find(value => value instanceof Error)?.stack || null;
             if (shouldPersist(args, msg)) addIncident('error', 'Global Logger', msg, { stack }).catch(() => {});
-            if (!isSupabaseUnavailable(msg)) sendGlobalAlert('Global App Error', msg, stack).catch(() => {});
+            if (!isDatabaseUnavailable(msg)) sendGlobalAlert('Global App Error', msg, stack).catch(() => {});
         };
         console.warn = function (...args) {
             global.originalConsoleWarn.apply(console, args);
             const msg = args.map(value => (value instanceof Error ? value.message : String(value))).join(' ');
             const stack = args.find(value => value instanceof Error)?.stack || null;
             if (shouldPersist(args, msg)) addIncident('warning', 'Global Logger', msg, { stack }).catch(() => {});
-            if (!isSupabaseUnavailable(msg)) sendGlobalAlert('Global App Warning', msg, stack).catch(() => {});
+            if (!isDatabaseUnavailable(msg)) sendGlobalAlert('Global App Warning', msg, stack).catch(() => {});
         };
     }
     process.on('unhandledRejection', async (reason, promise) => {
         console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-        if (ownerId && client.isReady() && !isSupabaseUnavailable(reason)) {
+        if (ownerId && client.isReady() && !isDatabaseUnavailable(reason)) {
             const owner = await client.users.fetch(ownerId).catch(() => null);
             if (owner) {
                 const embed = new EmbedBuilder()

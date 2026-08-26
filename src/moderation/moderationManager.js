@@ -1,6 +1,7 @@
 import { EmbedBuilder } from '../utils/embed.js';
 import { MessageFlags, PermissionFlagsBits } from 'discord.js';
-import { supabase } from '../database/supabaseClient.js';
+import { all, execute, one } from '../database/client.js';
+import { encodeJson } from '../database/codecs.js';
 import { getSection, saveSection } from '../database/guildSettings.js';
 
 import ms from 'ms';
@@ -50,9 +51,7 @@ export async function saveModConfig(guildId, patch) {
 export async function getModData(guildId) {
   const config = await getModConfig(guildId);
   const emptyState = { warnings: {}, tempbans: {}, hardmutes: {}, mutes: {} };
-  if (!supabase) return { ...config, ...emptyState };
-  const { data, error } = await supabase.from('moderation').select('*').eq('guild_id', guildId).maybeSingle();
-  if (error) throw error;
+  const data = await one('SELECT * FROM moderation WHERE guild_id = ? LIMIT 1', [guildId]);
   if (!data) return { ...config, ...emptyState };
   return {
     ...config,
@@ -63,15 +62,19 @@ export async function getModData(guildId) {
   };
 }
 export async function saveModData(guildId, modData) {
-  if (!supabase) return;
-  const { error } = await supabase.from('moderation').upsert({
-    guild_id: guildId,
-    warnings_json: modData.warnings,
-    tempbans_json: modData.tempbans,
-    hardmutes_json: modData.hardmutes,
-    mutes_json: modData.mutes
-  });
-  if (error) throw error;
+  await execute(`INSERT INTO moderation (guild_id, warnings_json, tempbans_json, hardmutes_json, mutes_json)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(guild_id) DO UPDATE SET
+      warnings_json = excluded.warnings_json,
+      tempbans_json = excluded.tempbans_json,
+      hardmutes_json = excluded.hardmutes_json,
+      mutes_json = excluded.mutes_json`, [
+    guildId,
+    encodeJson(modData.warnings || {}),
+    encodeJson(modData.tempbans || {}),
+    encodeJson(modData.hardmutes || {}),
+    encodeJson(modData.mutes || {}),
+  ]);
 }
 function isSnowflake(value) {
   return typeof value === 'string' && /^\d{17,20}$/.test(value);
@@ -84,10 +87,7 @@ function isProtectedUser(target, executor) {
   return false;
 }
 async function getAllModData() {
-  if (!supabase) return [];
-  const { data, error } = await supabase.from('moderation').select('guild_id, tempbans_json, hardmutes_json, mutes_json');
-  if (error) throw error;
-  return data || [];
+  return all('SELECT guild_id, tempbans_json, hardmutes_json, mutes_json FROM moderation');
 }
 export async function checkModExpirations(client) {
   const allData = await getAllModData();

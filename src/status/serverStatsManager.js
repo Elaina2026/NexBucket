@@ -1,28 +1,22 @@
 import { ChannelType, PermissionFlagsBits, SlashCommandBuilder, MessageFlags } from 'discord.js';
-import { supabase } from '../database/supabaseClient.js';
+import { all } from '../database/client.js';
 import { getSection, saveSection } from '../database/guildSettings.js';
 import { scheduleBackgroundJob } from '../runtime/backgroundJob.js';
 
 export async function getStatsConfig() {
-  if (!supabase) return {};
-  const { data, error } = await supabase
-    .from('guild_settings')
-    .select('guild_id, server_stats');
-  if (error) throw error;
+  const rows = await all('SELECT guild_id, server_stats FROM guild_settings');
   const config = {};
-  if (data) {
-    data.forEach(row => {
-      const s = row.server_stats;
-      if (s && s.categoryId) {
-        config[row.guild_id] = {
-          categoryId: s.categoryId,
-          allMembersChannelId: s.allMembersId,
-          humansChannelId: s.humansId,
-          staffOnlineChannelId: s.staffOnlineId,
-          botCountChannelId: s.botCountId,
-        };
-      }
-    });
+  for (const row of rows) {
+    const s = row.server_stats;
+    if (s && s.categoryId) {
+      config[row.guild_id] = {
+        categoryId: s.categoryId,
+        allMembersChannelId: s.allMembersId,
+        humansChannelId: s.humansId,
+        staffOnlineChannelId: s.staffOnlineId,
+        botCountChannelId: s.botCountId,
+      };
+    }
   }
   return config;
 }
@@ -161,7 +155,7 @@ export function startServerStatsUpdater(client) {
       if (guild) await updateServerStatsForGuild(guild, config[guildId]);
     }
   };
-  const job = scheduleBackgroundJob('ServerStats', runUpdate, 600000, { usesSupabase: true });
+  const job = scheduleBackgroundJob('ServerStats', runUpdate, 600000, { usesDatabase: true });
   job.run();
   return job;
 }

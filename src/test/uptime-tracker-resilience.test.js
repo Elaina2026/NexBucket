@@ -3,73 +3,62 @@ import test from 'node:test';
 import { cleanupOldData } from '../utils/uptimeTracker.js';
 
 function cleanupDatabase(errors = {}) {
-    const calls = [];
-    return {
-        calls,
-        from(table) {
-            return {
-                delete() { return this; },
-                async lt(column, cutoff) {
-                    calls.push({ table, column, cutoff });
-                    return { error: errors[table] || null };
-                },
-            };
-        },
-    };
+  const calls = [];
+  return {
+    calls,
+    async execute(statement) {
+      calls.push(statement);
+      const table = statement.sql.includes('uptime_checks') ? 'uptime_checks' : 'incidents';
+      if (errors[table]) throw errors[table];
+      return { rows: [], rowsAffected: 0 };
+    },
+  };
 }
 
 async function captureCleanupErrors(run) {
-    const logs = [];
-    const originalError = console.error;
-    console.error = (...args) => logs.push(args);
-    try {
-        await run();
-    } finally {
-        console.error = originalError;
-    }
-    return logs;
+  const logs = [];
+  const originalError = console.error;
+  console.error = (...args) => logs.push(args);
+  try { await run(); } finally { console.error = originalError; }
+  return logs;
 }
 
-test('cleanup stops after an uptime REST outage without logging duplicate errors', async () => {
-    const unavailable = { code: 'REST_UNAVAILABLE', message: 'Supabase REST API is temporarily unavailable' };
-    const db = cleanupDatabase({ uptime_checks: unavailable });
-    const logs = await captureCleanupErrors(async () => {
-        await assert.rejects(cleanupOldData(db, 1_000_000), error => error === unavailable);
-    });
-
-    assert.deepEqual(db.calls.map(call => call.table), ['uptime_checks']);
-    assert.equal(logs.length, 0);
+test('cleanup keeps 30 hours of uptime checks and 7 days of incidents', async () => {
+  const db = cleanupDatabase();
+  const now = Date.UTC(2026, 7, 26, 12);
+  await cleanupOldData(db, now);
+  assert.match(db.calls[0].sql, /DELETE FROM uptime_checks/);
+  assert.equal(db.calls[0].args[0], new Date(now - 30 * 3600000).toISOString());
+  assert.match(db.calls[1].sql, /DELETE FROM incidents/);
+  assert.equal(db.calls[1].args[0], new Date(now - 7 * 24 * 3600000).toISOString());
 });
 
-test('cleanup propagates an incident REST outage without logging it', async () => {
-    const unavailable = { code: 'REST_TIMEOUT', message: 'Supabase REST API request timed out' };
-    const db = cleanupDatabase({ incidents: unavailable });
-    const logs = await captureCleanupErrors(async () => {
-        await assert.rejects(cleanupOldData(db, 1_000_000), error => error === unavailable);
-    });
-
-    assert.deepEqual(db.calls.map(call => call.table), ['uptime_checks', 'incidents']);
-    assert.equal(logs.length, 0);
+test('cleanup stops after Turso outage without duplicate error logs', async () => {
+  const unavailable = Object.assign(new Error('fetch failed'), { code: 'DB_UNAVAILABLE' });
+  const db = cleanupDatabase({ uptime_checks: unavailable });
+  const logs = await captureCleanupErrors(async () => {
+    await assert.rejects(cleanupOldData(db, 1_000_000), error => error === unavailable);
+  });
+  assert.equal(db.calls.length, 1);
+  assert.equal(logs.length, 0);
 });
 
-test('cleanup logs a genuine uptime error and still cleans incidents', async () => {
-    const databaseError = { code: '42501', message: 'permission denied' };
-    const db = cleanupDatabase({ uptime_checks: databaseError });
-    const logs = await captureCleanupErrors(() => cleanupOldData(db, 1_000_000));
-
-    assert.deepEqual(db.calls.map(call => call.table), ['uptime_checks', 'incidents']);
-    assert.equal(logs.length, 1);
-    assert.equal(logs[0][0], '[DB Cleanup Error] uptime_checks:');
-    assert.equal(logs[0][1], databaseError);
+test('cleanup propagates incident timeout without logging it', async () => {
+  const unavailable = Object.assign(new Error('operation was aborted due to timeout'), { code: 'DB_TIMEOUT' });
+  const db = cleanupDatabase({ incidents: unavailable });
+  const logs = await captureCleanupErrors(async () => {
+    await assert.rejects(cleanupOldData(db, 1_000_000), error => error === unavailable);
+  });
+  assert.equal(db.calls.length, 2);
+  assert.equal(logs.length, 0);
 });
 
-test('cleanup keeps genuine incident errors visible', async () => {
-    const databaseError = { code: '42P01', message: 'relation does not exist' };
-    const db = cleanupDatabase({ incidents: databaseError });
-    const logs = await captureCleanupErrors(() => cleanupOldData(db, 1_000_000));
-
-    assert.deepEqual(db.calls.map(call => call.table), ['uptime_checks', 'incidents']);
-    assert.equal(logs.length, 1);
-    assert.equal(logs[0][0], '[DB Cleanup Error] incidents:');
-    assert.equal(logs[0][1], databaseError);
+test('cleanup logs genuine error once', async () => {
+  const databaseError = Object.assign(new Error('no such table'), { code: 'SQLITE_ERROR' });
+  const db = cleanupDatabase({ uptime_checks: databaseError });
+  const logs = await captureCleanupErrors(() => cleanupOldData(db, 1_000_000));
+  assert.equal(db.calls.length, 1);
+  assert.equal(logs.length, 1);
+  assert.equal(logs[0][0], '[DB Cleanup Error]:');
+  assert.equal(logs[0][1], databaseError);
 });

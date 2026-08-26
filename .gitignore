@@ -13,6 +13,8 @@ logs/
 coverage/
 dist/
 build/
+migration-*-report.json
+migration-*-failure.json
 
 .vscode/
 .idea/

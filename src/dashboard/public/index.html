@@ -13,7 +13,7 @@
   <meta name="twitter:card" content="summary" />
   <title>NexBucket — Discord Server Management</title>
   <meta name="description" content="Manage tickets, moderation, payments, Minecraft status and server automation securely with NexBucket.">
-  <link rel="stylesheet" href="/style.css?v=1.7" />
+  <link rel="stylesheet" href="/style.css?v=1.8" />
   <script src="/theme-init.js"></script>
   <script type="module" src="/i18n.js?v=1.1"></script>
 </head>
@@ -113,7 +113,7 @@
           </div>
           <h2 data-i18n="creator_title">Crafted with Care</h2>
           <p class="creator-desc"><span data-i18n="creator_desc">NexBucket is developed and maintained by</span> <strong data-i18n="creator_name">Elaina</strong></p>
-          <p class="creator-tech" data-i18n="creator_detail">Built with Node.js, Discord.js, and Supabase. Designed to be fast, reliable, and beautiful.</p>
+          <p class="creator-tech" data-i18n="creator_detail">Built with Node.js, Discord.js, and Turso. Designed to be fast, reliable, and beautiful.</p>
         </div>
       </section>
     </div>
@@ -169,7 +169,7 @@
 
   <template id="dashboardSectionsTemplate">
               <div class="content-section active" id="sec-general"><div class="section-card"><div class="section-card-title"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4"/></svg> General Configuration</div><div class="form-group"><label class="field-label">Auto-Role</label><div class="picker-wrap" data-picker-id="autoRoleId" data-picker-type="role"><div class="picker-display" tabindex="0"><span class="ph">Select a role...</span><span class="selected-text hidden"></span><svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg></div><div class="picker-dropdown"><input type="text" class="picker-search" placeholder="Search roles..."/><div class="picker-options"></div></div></div><span class="field-hint">Automatically assigned to new members.</span></div></div></div><div class="content-section" id="sec-learn"><div class="section-card">
-                      <div class="learn-heading"><div><div class="section-card-title"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> Learn / Auto Responder</div><span class="field-hint">Create text, image, or combined replies. Administrator permission required.</span></div><button type="button" id="btnAddLearn" class="btn-add-type"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Add response</button></div>
+                      <div class="learn-heading"><div><div class="section-card-title"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> Learn / Auto Responder</div><span class="field-hint">Create text, image, video, or combined replies. Administrator permission required.</span></div><button type="button" id="btnAddLearn" class="btn-add-type"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Add response</button></div>
                       <input id="learnSearch" class="text-input learn-search" type="search" placeholder="Search triggers or responses..." aria-label="Search learned responses"/>
                       <div id="learnList" class="learn-list"><div class="empty-state">Open this section to load responses.</div></div>
                     </div></div><div class="content-section" id="sec-welcome"><div class="section-card"><div class="section-card-title"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> Welcome Messages</div>
@@ -339,10 +339,10 @@
       <h3 id="learnModalTitle">Learned Response</h3>
       <div class="form-group"><label class="field-label" for="learnTriggerInput">Trigger</label><input type="text" id="learnTriggerInput" class="text-input" placeholder="hello"/><span class="field-hint">Matched anywhere in a message.</span></div>
       <div id="learnDuplicateWarning" class="learn-warning" hidden>This trigger already exists.</div>
-      <div class="form-group"><label class="field-label" for="learnResponseInput">Response Text</label><textarea id="learnResponseInput" class="text-input" placeholder="Optional when an image is selected" rows="4"></textarea><span class="field-hint">Maximum 2,000 characters.</span></div>
-      <div class="form-group"><label class="field-label">Response Image</label><input id="learnImageInput" class="learn-image-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif"/><label id="learnImageDropZone" class="learn-image-upload" for="learnImageInput"><span class="learn-image-upload-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg></span><span class="learn-image-upload-copy"><strong>Choose or drop an image</strong><small>PNG, JPEG, WebP, or GIF · Up to 5 MB · Public response image</small><span id="learnImageFileName" class="learn-image-file-name">No image selected</span></span><span class="learn-image-upload-action">Browse</span></label><div id="learnImageError" class="learn-warning learn-image-error" role="alert" aria-live="polite" hidden></div></div>
-      <label id="learnRemoveImageLabel" class="learn-remove-image" hidden><input id="learnRemoveImage" type="checkbox"/> Remove current image</label>
-      <div class="discord-preview learn-preview"><img class="discord-preview-avatar" src="/api/bot-avatar" alt="NexBucket"/><div class="discord-preview-body"><div class="discord-preview-author">NexBucket <span>APP</span></div><div id="learnPreviewText" class="discord-preview-message"></div><img id="learnPreviewImage" class="learn-preview-image" alt="Response image preview"/></div></div>
+      <div class="form-group"><label class="field-label" for="learnResponseInput">Response Text</label><textarea id="learnResponseInput" class="text-input" placeholder="Optional when media is selected" rows="4"></textarea><span class="field-hint">Maximum 2,000 characters.</span></div>
+      <div class="form-group"><label class="field-label">Response Media</label><input id="learnMediaInput" class="learn-media-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif,video/mp4,video/webm"/><label id="learnMediaDropZone" class="learn-media-upload" for="learnMediaInput"><span class="learn-media-upload-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg></span><span class="learn-media-upload-copy"><strong>Choose or drop media</strong><small>PNG, JPEG, WebP, GIF up to 5 MB · MP4 or WebM up to 25 MB</small><span id="learnMediaFileName" class="learn-media-file-name">No media selected</span></span><span class="learn-media-upload-action">Browse</span></label><div id="learnMediaError" class="learn-warning learn-media-error" role="alert" aria-live="polite" hidden></div></div>
+      <label id="learnRemoveMediaLabel" class="learn-remove-media" hidden><input id="learnRemoveMedia" type="checkbox"/> Remove current media</label>
+      <div class="discord-preview learn-preview"><img class="discord-preview-avatar" src="/api/bot-avatar" alt="NexBucket"/><div class="discord-preview-body"><div class="discord-preview-author">NexBucket <span>APP</span></div><div id="learnPreviewText" class="discord-preview-message"></div><img id="learnPreviewImage" class="learn-preview-media" alt="Response image preview"/><video id="learnPreviewVideo" class="learn-preview-media" controls preload="metadata" hidden></video></div></div>
       <div id="learnModalError" class="learn-warning" hidden></div>
       <div class="modal-actions"><button type="button" class="btn-modal" id="btnCancelLearn">Cancel</button><button type="button" class="btn-modal primary" id="btnSaveLearn">Save</button></div>
     </div>
@@ -351,7 +351,7 @@
   <template id="learnDeleteModalTemplate">
     <div class="modal" role="alertdialog" aria-modal="true" aria-labelledby="learnDeleteTitle">
       <h3 id="learnDeleteTitle">Delete Learned Response</h3>
-      <p>Delete trigger <strong id="learnDeleteTrigger"></strong>? This also removes its uploaded image.</p>
+      <p>Delete trigger <strong id="learnDeleteTrigger"></strong>? This also removes its uploaded media.</p>
       <div class="modal-actions"><button type="button" class="btn-modal" id="btnCancelLearnDelete">Cancel</button><button type="button" class="btn-modal danger" id="btnConfirmLearnDelete">Delete</button></div>
     </div>
   </template>
@@ -431,7 +431,7 @@
     <p>NexBucket Dashboard &bull; <a href="/tos" class="footer-link" data-i18n="footer_tos">Terms of Service</a> &bull; <a href="/privacy" class="footer-link" data-i18n="footer_privacy">Privacy Policy</a></p>
   </footer>
 </div>
-<script type="module" src="/dashboard.js?v=1.7"></script>
+<script type="module" src="/dashboard.js?v=1.8"></script>
 <script type="module" src="/index-scripts.js"></script>
 </body>
 </html>

@@ -1,18 +1,10 @@
-import { supabase } from '../database/supabaseClient.js';
+import { execute, isDatabaseUnavailable } from '../database/client.js';
+
 export async function logActivity(guildId, guildName, userId, action, details) {
-  if (!supabase) return;
   try {
-    const { error } = await supabase.from('bot_activities').insert([{
-      guild_id: guildId || null,
-      guild_name: guildName || null,
-      user_id: userId || null,
-      action: action,
-      details: details
-    }]);
-    if (error) {
-      console.error('[ActivityLogger] Failed to insert activity:', error.message);
-    }
-  } catch (err) {
-    console.error('[ActivityLogger] Exception while inserting activity:', err.message);
+    await execute(`INSERT INTO bot_activities (guild_id, guild_name, user_id, action, details)
+      VALUES (?, ?, ?, ?, ?)`, [guildId || null, guildName || null, userId || null, action, details]);
+  } catch (error) {
+    if (!isDatabaseUnavailable(error)) console.error('[ActivityLogger] Failed to insert activity:', error.message);
   }
 }

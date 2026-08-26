@@ -18,6 +18,75 @@ async function applyBotRolesOverwrites(channel, guildId, perms) {
   }
 }
 
+const MESSAGE_PERMISSIONS = [
+  PermissionFlagsBits.SendMessages,
+  PermissionFlagsBits.CreatePublicThreads,
+  PermissionFlagsBits.CreatePrivateThreads,
+  PermissionFlagsBits.SendMessagesInThreads,
+];
+
+function overwriteState(channel, guildId, permission) {
+  const overwrite = channel.permissionOverwrites.cache.get(guildId);
+  if (overwrite?.deny.has(permission)) return 'deny';
+  if (overwrite?.allow.has(permission)) return 'allow';
+  return 'unset';
+}
+
+function permissionsAre(channel, guildId, permissions, state) {
+  return permissions.every(permission => overwriteState(channel, guildId, permission) === state);
+}
+
+export function channelStateMatches(channel, guildId, state) {
+  if (state === 'locked') return permissionsAre(channel, guildId, MESSAGE_PERMISSIONS, 'deny');
+  if (state === 'unlocked') return permissionsAre(channel, guildId, MESSAGE_PERMISSIONS, 'unset');
+  if (state === 'hidden') return overwriteState(channel, guildId, PermissionFlagsBits.ViewChannel) === 'deny';
+  if (state === 'visible') return overwriteState(channel, guildId, PermissionFlagsBits.ViewChannel) === 'unset';
+  if (state === 'voice-locked') return overwriteState(channel, guildId, PermissionFlagsBits.Connect) === 'deny';
+  if (state === 'voice-unlocked') return overwriteState(channel, guildId, PermissionFlagsBits.Connect) === 'unset';
+  throw new TypeError(`Invalid channel state: ${state}`);
+}
+
+async function applyCategoryMessageState(interaction, category, locking) {
+  const channels = interaction.guild.channels.cache.filter(channel => channel.parentId === category.id && channel.isTextBased());
+  let changed = 0;
+  let already = 0;
+  let failed = 0;
+  for (const channel of channels.values()) {
+    if (channelStateMatches(channel, interaction.guild.id, locking ? 'locked' : 'unlocked')) {
+      already++;
+      continue;
+    }
+    try {
+      await channel.permissionOverwrites.edit(interaction.guild.id, locking ? {
+        SendMessages: false,
+        CreatePublicThreads: false,
+        CreatePrivateThreads: false,
+        SendMessagesInThreads: false,
+      } : {
+        SendMessages: null,
+        CreatePublicThreads: null,
+        CreatePrivateThreads: null,
+        SendMessagesInThreads: null,
+      });
+      await applyBotRolesOverwrites(channel, interaction.guild.id, locking ? {
+        SendMessages: true,
+        CreatePublicThreads: true,
+        CreatePrivateThreads: true,
+        SendMessagesInThreads: true,
+      } : {
+        SendMessages: null,
+        CreatePublicThreads: null,
+        CreatePrivateThreads: null,
+        SendMessagesInThreads: null,
+      });
+      changed++;
+    } catch {
+      failed++;
+    }
+  }
+  return { changed, already, failed };
+}
+
 export function createAvatarEmbed(user, requestedBy) {
   const avatarUrl = user.displayAvatarURL({ size: 1024, extension: 'png' });
   const decorUrl = user.avatarDecorationURL();
@@ -362,73 +431,47 @@ export async function handleUtilCommand(interaction) {
     await interaction.reply({ embeds: [embed] });
     return;
   }
-  if (cmd === 'lock') {
+  if (cmd === 'lock' || cmd === 'unlock') {
+    const locking = cmd === 'lock';
     const category = interaction.options.getChannel('category');
     await interaction.deferReply();
     if (category) {
-      const channels = interaction.guild.channels.cache.filter(c => c.parentId === category.id);
-      let count = 0;
-      for (const ch of channels.values()) {
-        if (ch.isTextBased()) {
-          await ch.permissionOverwrites.edit(interaction.guild.id, {
-            SendMessages: false,
-            CreatePublicThreads: false,
-            CreatePrivateThreads: false,
-            SendMessagesInThreads: false
-          }).catch(() => {});
-          await applyBotRolesOverwrites(ch, interaction.guild.id, {
-            SendMessages: true, CreatePublicThreads: true, CreatePrivateThreads: true, SendMessagesInThreads: true
-          });
-          count++;
-        }
+      const result = await applyCategoryMessageState(interaction, category, locking);
+      if (!result.changed && !result.failed) {
+        await interaction.editReply(`${locking ? '🔒' : '🔓'} **${category.name}** is already ${locking ? 'locked' : 'unlocked'} (${result.already} channels).`);
+      } else {
+        const details = [`${result.changed} changed`, `${result.already} already ${locking ? 'locked' : 'unlocked'}`];
+        if (result.failed) details.push(`${result.failed} failed`);
+        await interaction.editReply(`${locking ? '🔒' : '🔓'} ${locking ? 'Locked' : 'Unlocked'} **${category.name}** (${details.join(', ')}).`);
       }
-      await interaction.editReply(`🔒 Locked **${category.name}** (${count} channels).`);
     } else {
-      await interaction.channel.permissionOverwrites.edit(interaction.guild.id, {
+      if (channelStateMatches(interaction.channel, interaction.guild.id, locking ? 'locked' : 'unlocked')) {
+        await interaction.editReply(`${locking ? '🔒' : '🔓'} Channel is already ${locking ? 'locked' : 'unlocked'}.`);
+        return;
+      }
+      await interaction.channel.permissionOverwrites.edit(interaction.guild.id, locking ? {
         SendMessages: false,
         CreatePublicThreads: false,
         CreatePrivateThreads: false,
-        SendMessagesInThreads: false
-      });
-      await applyBotRolesOverwrites(interaction.channel, interaction.guild.id, {
-        SendMessages: true, CreatePublicThreads: true, CreatePrivateThreads: true, SendMessagesInThreads: true
-      });
-      await interaction.editReply('🔒 Channel locked.');
-    }
-    return;
-  }
-  if (cmd === 'unlock') {
-    const category = interaction.options.getChannel('category');
-    await interaction.deferReply();
-    if (category) {
-      const channels = interaction.guild.channels.cache.filter(c => c.parentId === category.id);
-      let count = 0;
-      for (const ch of channels.values()) {
-        if (ch.isTextBased()) {
-          await ch.permissionOverwrites.edit(interaction.guild.id, {
-            SendMessages: null,
-            CreatePublicThreads: null,
-            CreatePrivateThreads: null,
-            SendMessagesInThreads: null
-          }).catch(() => {});
-          await applyBotRolesOverwrites(ch, interaction.guild.id, {
-            SendMessages: null, CreatePublicThreads: null, CreatePrivateThreads: null, SendMessagesInThreads: null
-          });
-          count++;
-        }
-      }
-      await interaction.editReply(`🔓 Unlocked **${category.name}** (${count} channels).`);
-    } else {
-      await interaction.channel.permissionOverwrites.edit(interaction.guild.id, {
+        SendMessagesInThreads: false,
+      } : {
         SendMessages: null,
         CreatePublicThreads: null,
         CreatePrivateThreads: null,
-        SendMessagesInThreads: null
+        SendMessagesInThreads: null,
       });
-      await applyBotRolesOverwrites(interaction.channel, interaction.guild.id, {
-        SendMessages: null, CreatePublicThreads: null, CreatePrivateThreads: null, SendMessagesInThreads: null
+      await applyBotRolesOverwrites(interaction.channel, interaction.guild.id, locking ? {
+        SendMessages: true,
+        CreatePublicThreads: true,
+        CreatePrivateThreads: true,
+        SendMessagesInThreads: true,
+      } : {
+        SendMessages: null,
+        CreatePublicThreads: null,
+        CreatePrivateThreads: null,
+        SendMessagesInThreads: null,
       });
-      await interaction.editReply('🔓 Channel unlocked.');
+      await interaction.editReply(`${locking ? '🔒 Channel locked.' : '🔓 Channel unlocked.'}`);
     }
     return;
   }
@@ -455,6 +498,7 @@ export async function handleLockCommand(message) {
     const isVunmute = message.content.toLowerCase().startsWith('!vunmute') || message.content.toLowerCase().startsWith('?vunmute');
     const isDc = message.content.toLowerCase().startsWith('!disconnect') || message.content.toLowerCase().startsWith('?disconnect') || message.content.toLowerCase().startsWith('!dc') || message.content.toLowerCase().startsWith('?dc');
     if (isLocking) {
+      if (channelStateMatches(channel, message.guild.id, 'locked')) return message.reply('🔒 Channel is already locked.');
       await channel.permissionOverwrites.edit(message.guild.id, {
         SendMessages: false,
         CreatePublicThreads: false,
@@ -466,6 +510,7 @@ export async function handleLockCommand(message) {
       });
       await message.reply('🔒 Channel locked.');
     } else if (isUnlocking) {
+      if (channelStateMatches(channel, message.guild.id, 'unlocked')) return message.reply('🔓 Channel is already unlocked.');
       await channel.permissionOverwrites.edit(message.guild.id, {
         SendMessages: null,
         CreatePublicThreads: null,
@@ -477,12 +522,14 @@ export async function handleLockCommand(message) {
       });
       await message.reply('🔓 Channel unlocked.');
     } else if (isHiding) {
+      if (channelStateMatches(channel, message.guild.id, 'hidden')) return message.reply('🙈 Channel is already hidden.');
       await channel.permissionOverwrites.edit(message.guild.id, {
         ViewChannel: false
       });
       await applyBotRolesOverwrites(channel, message.guild.id, { ViewChannel: true });
       await message.reply('🙈 Channel hidden.');
     } else if (isUnhiding) {
+      if (channelStateMatches(channel, message.guild.id, 'visible')) return message.reply('👁️ Channel is already visible.');
       await channel.permissionOverwrites.edit(message.guild.id, {
         ViewChannel: null
       });
@@ -496,6 +543,11 @@ export async function handleLockCommand(message) {
       }
       if (seconds < 0 || seconds > 21600) {
         return message.reply('❌ Slowmode must be 0–21,600 seconds.');
+      }
+      if (channel.rateLimitPerUser === seconds) {
+        return message.reply(seconds === 0
+          ? '🐌 Slowmode is already disabled.'
+          : `🐌 Slowmode is already set to ${seconds} seconds.`);
       }
       await channel.setRateLimitPerUser(seconds);
       if (seconds === 0) {
@@ -567,11 +619,13 @@ export async function handleLockCommand(message) {
         return message.reply('❌ Join a voice channel first.');
       }
       if (isVlock) {
+        if (channelStateMatches(voiceChannel, message.guild.id, 'voice-locked')) return message.reply('🔒 Voice channel is already locked.');
         await voiceChannel.permissionOverwrites.edit(message.guild.id, {
           Connect: false
         });
         await message.reply('🔒 Voice channel locked.');
       } else {
+        if (channelStateMatches(voiceChannel, message.guild.id, 'voice-unlocked')) return message.reply('🔓 Voice channel is already unlocked.');
         await voiceChannel.permissionOverwrites.edit(message.guild.id, {
           Connect: null
         });
@@ -587,7 +641,12 @@ export async function handleLockCommand(message) {
       if (isNaN(limit) || limit < 0 || limit > 99) {
         return message.reply('❌ Enter a limit from 0 to 99.');
       }
-      await voiceChannel.setUserLimit(limit).catch(() => {});
+      if (voiceChannel.userLimit === limit) {
+        return message.reply(limit === 0
+          ? '👥 Voice limit is already disabled.'
+          : `👥 Voice limit is already set to ${limit}.`);
+      }
+      await voiceChannel.setUserLimit(limit);
       if (limit === 0) {
         await message.reply('👥 Voice limit removed.');
       } else {
@@ -602,10 +661,12 @@ export async function handleLockCommand(message) {
         return message.reply('❌ User is not in a voice channel.');
       }
       if (isVmute) {
-        await targetUser.voice.setMute(true, 'Voice Muted by Admin').catch(() => {});
+        if (targetUser.voice.serverMute === true) return message.reply(`🔇 ${targetUser.user.username} is already muted.`);
+        await targetUser.voice.setMute(true, 'Voice Muted by Admin');
         await message.reply(`🔇 ${targetUser.user.username} muted.`);
       } else {
-        await targetUser.voice.setMute(false, 'Voice Unmuted by Admin').catch(() => {});
+        if (targetUser.voice.serverMute === false) return message.reply(`🔊 ${targetUser.user.username} is already unmuted.`);
+        await targetUser.voice.setMute(false, 'Voice Unmuted by Admin');
         await message.reply(`🔊 ${targetUser.user.username} unmuted.`);
       }
     } else if (isDc) {

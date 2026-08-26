@@ -1,4 +1,5 @@
-import { isSupabaseUnavailable } from '../database/supabaseClient.js';
+import { all, database, execute, isDatabaseUnavailable, probeDatabase } from '../database/client.js';
+import { batch } from '../database/sql.js';
 import { createBackgroundJob } from '../runtime/backgroundJob.js';
 
 const HISTORY_SLOTS = 30;
@@ -7,7 +8,7 @@ const CLEANUP_INTERVAL = 24 * 60 * 60 * 1000;
 const HISTORY_CACHE_MS = 25 * 1000;
 const SERVICES = {
     'bot-core': { name: 'Discord Bot Core', description: 'WebSocket connection, command handling, and event processing.' },
-    'database': { name: 'Database (Supabase)', description: 'PostgreSQL database for storing configurations and user data.' },
+    'database': { name: 'Database (Turso)', description: 'Turso/libSQL database for configurations and user data.' },
     'tickets': { name: 'Ticket System', description: 'Support ticket creation, claiming, closing, and transcript generation.' },
     'welcome': { name: 'Welcome & Goodbye', description: 'Automated welcome/goodbye banners and auto-role assignment.' },
     'moderation': { name: 'Moderation & Anti-Raid', description: 'Ban, kick, mute, anti-spam, and anti-raid protection systems.' },
@@ -15,48 +16,33 @@ const SERVICES = {
     'banking': { name: 'Banking & PayOS', description: 'QR bank payments, card top-ups, and PayOS payment processing.' },
     'jtc': { name: 'Join-To-Create Voice', description: 'Automatic temporary voice channel creation and management.' },
 };
-let supabaseClient = null;
 let historyCache = null;
 let historyPending = null;
 
-async function getSupabase() {
-    if (supabaseClient) return supabaseClient;
-    try {
-        const { supabase } = await import('../database/supabaseClient.js');
-        supabaseClient = supabase;
-        return supabase;
-    } catch { return null; }
-}
-
-async function recordChecks(statuses) {
-    const supabase = await getSupabase();
-    if (!supabase) return;
+async function recordChecks(statuses, db = database) {
+    if (!db) return;
     const timestamp = new Date().toISOString();
-    const rows = Object.entries(statuses).map(([serviceId, status]) => ({
-        timestamp,
-        service_id: serviceId,
-        status,
-    }));
-    const { error } = await supabase.from('uptime_checks').insert(rows);
-    if (!error) historyCache = null;
+    await batch(db, Object.entries(statuses).map(([serviceId, status]) => ({
+        sql: 'INSERT INTO uptime_checks (timestamp, service_id, status) VALUES (?, ?, ?)',
+        args: [timestamp, serviceId, status],
+    })));
+    historyCache = null;
 }
 
-async function loadRecentHistory() {
+async function loadRecentHistory(db = database) {
     const now = Date.now();
     if (historyCache && historyCache.expiresAt > now) return historyCache.rows;
     if (historyPending) return historyPending;
     historyPending = (async () => {
-        const supabase = await getSupabase();
-        if (!supabase) return [];
-        const cutoff = new Date(now - HISTORY_SLOTS * 3600000).toISOString();
-        const { data, error } = await supabase
-            .from('uptime_checks')
-            .select('service_id, status, timestamp')
-            .gte('timestamp', cutoff)
-            .order('timestamp', { ascending: true });
-        if (error) return [];
-        historyCache = { rows: data || [], expiresAt: Date.now() + HISTORY_CACHE_MS };
-        return historyCache.rows;
+        if (!db) return [];
+        try {
+            const rows = await all(`SELECT service_id, status, timestamp FROM uptime_checks
+                WHERE timestamp >= ? ORDER BY timestamp ASC`, [new Date(now - HISTORY_SLOTS * 3600000).toISOString()], db);
+            historyCache = { rows, expiresAt: Date.now() + HISTORY_CACHE_MS };
+            return rows;
+        } catch {
+            return [];
+        }
     })();
     try {
         return await historyPending;
@@ -99,17 +85,18 @@ function getUptimeBars(rawHistory) {
     return bars;
 }
 
-export async function cleanupOldData(db = null, now = Date.now()) {
-    const supabase = db || await getSupabase();
-    if (!supabase) return;
-    const sevenDaysAgo = new Date(now - 7 * 24 * 3600000).toISOString();
-    const { error: uptimeError } = await supabase.from('uptime_checks').delete().lt('timestamp', sevenDaysAgo);
-    if (isSupabaseUnavailable(uptimeError)) throw uptimeError;
-    if (uptimeError) console.error('[DB Cleanup Error] uptime_checks:', uptimeError);
-    else historyCache = null;
-    const { error: incidentError } = await supabase.from('incidents').delete().lt('timestamp', sevenDaysAgo);
-    if (isSupabaseUnavailable(incidentError)) throw incidentError;
-    if (incidentError) console.error('[DB Cleanup Error] incidents:', incidentError);
+export async function cleanupOldData(db = database, now = Date.now()) {
+    if (!db) return;
+    const uptimeCutoff = new Date(now - HISTORY_SLOTS * 3600000).toISOString();
+    const incidentCutoff = new Date(now - 7 * 24 * 3600000).toISOString();
+    try {
+        await execute('DELETE FROM uptime_checks WHERE timestamp < ?', [uptimeCutoff], db);
+        historyCache = null;
+        await execute('DELETE FROM incidents WHERE timestamp < ?', [incidentCutoff], db);
+    } catch (error) {
+        if (isDatabaseUnavailable(error)) throw error;
+        console.error('[DB Cleanup Error]:', error);
+    }
 }
 
 async function moduleLoads(path) {
@@ -121,21 +108,13 @@ async function moduleLoads(path) {
     }
 }
 
-async function runHealthChecks(client) {
+async function runHealthChecks(client, db = database) {
     const statuses = {
         'bot-core': !client.isReady() ? 'down' : (client.ws.ping > 500 ? 'degraded' : 'up'),
         moderation: client.isReady() ? 'up' : 'down',
     };
-    try {
-        const supabase = await getSupabase();
-        if (!supabase) statuses.database = 'down';
-        else {
-            const { error } = await supabase.from('guild_settings').select('guild_id').limit(1);
-            statuses.database = error ? 'degraded' : 'up';
-        }
-    } catch {
-        statuses.database = 'down';
-    }
+    const result = await probeDatabase(db);
+    statuses.database = result.ok ? 'up' : 'down';
     const modules = await Promise.all([
         moduleLoads('../ticket/configManager.js'),
         moduleLoads('../welcome/welcomeManager.js'),
@@ -144,18 +123,18 @@ async function runHealthChecks(client) {
         moduleLoads('../utils/jtcManager.js'),
     ]);
     [statuses.tickets, statuses.welcome, statuses.status, statuses.banking, statuses.jtc] = modules;
-    await recordChecks(statuses);
+    await recordChecks(statuses, db);
 }
 
 export function startUptimeTracker(client) {
-    if (!process.env.SUPABASE_URL) {
-        console.warn('⚠️ [UptimeTracker] No Supabase URL. Dashboard will not show incidents.');
+    if (!database) {
+        console.warn('⚠️ [UptimeTracker] Turso is not configured. Dashboard will not show incidents.');
         return;
     }
     runHealthChecks(client).catch(console.error);
     const checkTimer = setInterval(() => runHealthChecks(client).catch(console.error), CHECK_INTERVAL);
     checkTimer.unref?.();
-    const cleanupJob = createBackgroundJob('DB Cleanup', cleanupOldData, { usesSupabase: true });
+    const cleanupJob = createBackgroundJob('DB Cleanup', cleanupOldData, { usesDatabase: true });
     const cleanupTimer = setInterval(() => { cleanupJob.run(); }, CLEANUP_INTERVAL);
     cleanupTimer.unref?.();
     cleanupJob.run();

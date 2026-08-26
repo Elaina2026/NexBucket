@@ -1,33 +1,28 @@
-import crypto from 'crypto';
-import { canAttemptSupabase, getSupabaseBackoffDelay, getSupabaseAvailability, isSupabaseUnavailable, supabase } from '../database/supabaseClient.js';
-import { inspectCardConfig } from './cardConfig.js';
+import {
+    all,
+    canAttemptDatabase,
+    database,
+    getDatabaseAvailability,
+    getDatabaseBackoffDelay,
+    isDatabaseUnavailable,
+} from '../database/client.js';
+import { createCard2KSignature, inspectCardConfig } from './cardConfig.js';
 import { getSection } from '../database/guildSettings.js';
 import { applyCardResult, PENDING_STATUSES, isFinalStatus, shouldExpirePending } from './cardResult.js';
-
-
-
-
-
 
 const POLL_INTERVAL_MS = 10 * 1000;
 const GRACE_PERIOD_MS = 5 * 1000;
 const BATCH_SIZE = 15;
 const REQUEST_GAP_MS = 300;
 const EMPTY_BACKOFF_MAX_MS = 2 * 60 * 1000;
-
-
-
-
 const BACKOFF_TIERS = [
     { maxAge: 2 * 60 * 1000, every: 10 * 1000 },
     { maxAge: 10 * 60 * 1000, every: 30 * 1000 },
     { maxAge: 60 * 60 * 1000, every: 5 * 60 * 1000 },
     { maxAge: Infinity, every: 20 * 60 * 1000 },
 ];
-
-
-
 const lastCheckedAt = new Map();
+const LAST_CHECKED_MAX_ENTRIES = 1000;
 let emptyPolls = 0;
 let databaseFailures = 0;
 let nextDatabasePollAt = 0;
@@ -39,7 +34,7 @@ export function getEmptyPollDelay(emptyCount) {
 }
 
 export function getDatabaseFailureDelay(failureCount) {
-    return getSupabaseBackoffDelay(failureCount, POLL_INTERVAL_MS, 5 * 60 * 1000);
+    return getDatabaseBackoffDelay(failureCount, POLL_INTERVAL_MS, 5 * 60 * 1000);
 }
 
 export function wakeCardStatusPoller() {
@@ -56,61 +51,42 @@ function shouldCheckNow(requestId, ageMs, now) {
     return (now - last) >= tier.every;
 }
 
-const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 async function checkCardStatus(txn, row) {
     const config = inspectCardConfig(row);
     if (!config.configured) return null;
     const { partnerId, partnerKey, domain } = config;
-
-
-    const sign = crypto.createHash('md5')
-        .update(partnerKey + txn.code + txn.serial)
-        .digest('hex');
-
-    const form = new URLSearchParams();
-    form.append('telco', txn.telco);
-    form.append('code', txn.code);
-    form.append('serial', txn.serial);
-    form.append('amount', String(txn.amount));
-    form.append('request_id', txn.request_id);
-    form.append('partner_id', partnerId);
-    form.append('sign', sign);
-    form.append('command', 'check');
-
+    const sign = createCard2KSignature(partnerKey, txn.code, txn.serial);
+    const form = new URLSearchParams({
+        telco: txn.telco, code: txn.code, serial: txn.serial, amount: String(txn.amount),
+        request_id: txn.request_id, partner_id: partnerId, sign, command: 'check',
+    });
     const response = await fetch(`https://${domain}/chargingws/v2`, {
         method: 'POST',
-        headers: {
-            'Accept': 'application/json',
-            'Content-Type': 'application/x-www-form-urlencoded',
-        },
+        headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' },
         body: form.toString(),
         signal: AbortSignal.timeout(15000),
     });
-    return await response.json();
+    return response.json();
 }
 
 async function pollPendingCards(client) {
-    if (!supabase) return;
-
+    if (!database) return;
     const now = Date.now();
     if (now < nextDatabasePollAt) return;
-    const { data: pending, error } = await supabase
-        .from('card_transactions')
-        .select('request_id, guild_id, telco, amount, code, serial, status, created_at')
-        .in('status', PENDING_STATUSES)
-        .lte('created_at', new Date(now - GRACE_PERIOD_MS).toISOString())
-        .order('created_at', { ascending: true })
-        .limit(BATCH_SIZE);
-
-    if (error) {
+    let pending;
+    try {
+        pending = await all(`SELECT request_id, guild_id, telco, amount, code, serial, status, created_at
+            FROM card_transactions WHERE status IN (${PENDING_STATUSES.map(() => '?').join(', ')}) AND created_at <= ?
+            ORDER BY created_at ASC LIMIT ?`, [...PENDING_STATUSES, new Date(now - GRACE_PERIOD_MS).toISOString(), BATCH_SIZE]);
+    } catch (error) {
         databaseFailures++;
-        const delay = isSupabaseUnavailable(error)
-            ? Math.max(getDatabaseFailureDelay(databaseFailures), getSupabaseAvailability(now).retryAt - now)
+        const delay = isDatabaseUnavailable(error)
+            ? Math.max(getDatabaseFailureDelay(databaseFailures), getDatabaseAvailability(now).retryAt - now)
             : POLL_INTERVAL_MS;
         nextDatabasePollAt = now + delay;
-        if (isSupabaseUnavailable(error)) throw error;
+        if (isDatabaseUnavailable(error)) throw error;
         if (now >= nextDatabaseErrorLogAt) {
             console.error(`[Card2K Poller] Failed to load pending transactions; retrying in ${Math.ceil(delay / 1000)}s:`, error.message);
             nextDatabaseErrorLogAt = now + Math.max(delay, 5 * 60 * 1000);
@@ -119,7 +95,7 @@ async function pollPendingCards(client) {
     }
     databaseFailures = 0;
     nextDatabaseErrorLogAt = 0;
-    if (!pending || pending.length === 0) {
+    if (!pending.length) {
         emptyPolls++;
         nextDatabasePollAt = now + getEmptyPollDelay(emptyPolls);
         lastCheckedAt.clear();
@@ -127,26 +103,17 @@ async function pollPendingCards(client) {
     }
     emptyPolls = 0;
     nextDatabasePollAt = now + POLL_INTERVAL_MS;
-
-
     const stillPending = new Set(pending.map(t => t.request_id));
-    for (const id of lastCheckedAt.keys()) {
-        if (!stillPending.has(id)) lastCheckedAt.delete(id);
-    }
-
-
+    for (const id of lastCheckedAt.keys()) if (!stillPending.has(id)) lastCheckedAt.delete(id);
+    while (lastCheckedAt.size > LAST_CHECKED_MAX_ENTRIES) lastCheckedAt.delete(lastCheckedAt.keys().next().value);
     const configCache = new Map();
     let resolved = 0;
     let checked = 0;
-
     for (const txn of pending) {
         const ageMs = now - new Date(txn.created_at).getTime();
         if (shouldExpirePending(txn.status, txn.created_at, now)) {
             const outcome = await applyCardResult(client, {
-                request_id: txn.request_id,
-                status: 100,
-                message: 'Card2K không trả kết quả sau 24 giờ',
-                declared_value: txn.amount,
+                request_id: txn.request_id, status: 100, message: 'Card2K không trả kết quả sau 24 giờ', declared_value: txn.amount,
             }, 'Poller timeout');
             if (outcome.applied) resolved++;
             lastCheckedAt.delete(txn.request_id);
@@ -162,51 +129,35 @@ async function pollPendingCards(client) {
             }
             const config = configCache.get(txn.guild_id);
             if (!config) continue;
-
             const result = await checkCardStatus(txn, config);
-            if (!result) continue;
-
-            if (!isFinalStatus(result.status)) continue;
-
+            if (!result || !isFinalStatus(result.status)) continue;
             const outcome = await applyCardResult(client, {
-                request_id: txn.request_id,
-                status: result.status,
-                message: result.message,
-                trans_id: result.trans_id,
-                value: result.value,
-                declared_value: result.declared_value ?? txn.amount,
+                request_id: txn.request_id, status: result.status, message: result.message,
+                trans_id: result.trans_id, value: result.value, declared_value: result.declared_value ?? txn.amount,
             }, 'Poller');
-
-            if (outcome.applied) {
-                resolved++;
-                lastCheckedAt.delete(txn.request_id);
-            }
-        } catch (err) {
-            if (isSupabaseUnavailable(err)) throw err;
-            console.error(`[Card2K Poller] Error checking ${txn.request_id}:`, err.message);
+            if (outcome.applied) { resolved++; lastCheckedAt.delete(txn.request_id); }
+        } catch (error) {
+            if (isDatabaseUnavailable(error)) throw error;
+            console.error(`[Card2K Poller] Error checking ${txn.request_id}:`, error.message);
         }
         await sleep(REQUEST_GAP_MS);
     }
-
-    if (resolved > 0) {
-        console.log(`[Card2K Poller] Resolved ${resolved}/${checked} checked (${pending.length} pending).`);
-    }
+    if (resolved > 0) console.log(`[Card2K Poller] Resolved ${resolved}/${checked} checked (${pending.length} pending).`);
 }
 
 export function startCardStatusPoller(client) {
-
-
     let isRunning = false;
-    setInterval(async () => {
-        if (isRunning || !canAttemptSupabase()) return;
+    const timer = setInterval(async () => {
+        if (isRunning || !canAttemptDatabase()) return;
         isRunning = true;
         try {
             await pollPendingCards(client);
-        } catch (err) {
-            if (!isSupabaseUnavailable(err)) console.error('[Card2K Poller] Unhandled error:', err.message);
+        } catch (error) {
+            if (!isDatabaseUnavailable(error)) console.error('[Card2K Poller] Unhandled error:', error.message);
         } finally {
             isRunning = false;
         }
     }, POLL_INTERVAL_MS);
+    timer.unref?.();
     console.log(`💳 Card2K status poller started (tick ${POLL_INTERVAL_MS / 1000}s, adaptive backoff)`);
 }

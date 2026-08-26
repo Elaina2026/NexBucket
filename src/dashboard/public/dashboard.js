@@ -782,6 +782,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     const date = new Date(timestamp);
     return `${esc(name)} · ${Number.isNaN(date.getTime()) ? '' : esc(date.toLocaleString())}`;
   }
+  const LEARN_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
+  const LEARN_VIDEO_TYPES = new Set(['video/mp4', 'video/webm']);
+  function learnMedia(entry) {
+    const url = entry?.mediaUrl || entry?.imageUrl || '';
+    const mediaPath = entry?.mediaPath || entry?.imagePath || '';
+    let type = entry?.mediaType || '';
+    if (!type && /\.(?:mp4)(?:$|[?#])/i.test(url)) type = 'video/mp4';
+    if (!type && /\.(?:webm)(?:$|[?#])/i.test(url)) type = 'video/webm';
+    return { url, path: mediaPath, type, kind: type.startsWith('video/') ? 'video' : 'image' };
+  }
   function renderLearnEntries() {
     const list = document.getElementById('learnList');
     if (!list) return;
@@ -794,14 +804,20 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     list.innerHTML = '';
     for (const [trigger, entry] of entries) {
+      const media = learnMedia(entry);
+      const thumbnail = media.url
+        ? media.kind === 'video'
+          ? `<video class="learn-thumb" src="${esc(media.url)}" preload="metadata" muted aria-label="Video preview for ${esc(trigger)}"></video>`
+          : `<img class="learn-thumb" src="${esc(media.url)}" alt="Preview for ${esc(trigger)}"/>`
+        : '';
       const item = document.createElement('div');
       item.className = `learn-item${entry.enabled === false ? ' disabled' : ''}`;
       item.innerHTML = `<div class="learn-item-main">
         <div class="learn-trigger">${esc(trigger)}</div>
-        <div class="learn-response">${entry.response ? esc(entry.response) : '<em>Image-only response</em>'}</div>
-        <div class="learn-meta">${entry.imageUrl ? 'Image attached · ' : ''}Updated by ${learnActor(entry)}</div>
+        <div class="learn-response">${entry.response ? esc(entry.response) : '<em>Media-only response</em>'}</div>
+        <div class="learn-meta">${media.url ? `${media.kind === 'video' ? 'Video' : 'Image'} attached · ` : ''}Updated by ${learnActor(entry)}</div>
       </div>
-      ${entry.imageUrl ? `<img class="learn-thumb" src="${esc(entry.imageUrl)}" alt="Preview for ${esc(trigger)}"/>` : ''}
+      ${thumbnail}
       <div class="learn-actions">
         <label class="toggle-switch" title="Enable response"><input type="checkbox" data-learn-toggle="${esc(trigger)}" ${entry.enabled === false ? '' : 'checked'}/><span class="toggle-slider"></span></label>
         <button type="button" class="tt-edit" data-learn-edit="${esc(trigger)}" title="Edit response">${I.edit}</button>
@@ -827,40 +843,60 @@ document.addEventListener('DOMContentLoaded', async () => {
       list.appendChild(item);
     }
   }
-  async function cleanupUploadedLearnImage(imagePath) {
-    if (!imagePath) return;
-    await fetch(`/api/guilds/${currentGuildId}/learn/image`, {
-      method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ imagePath }),
+  async function cleanupUploadedLearnMedia(mediaPath) {
+    if (!mediaPath) return;
+    await fetch(`/api/guilds/${currentGuildId}/learn/media`, {
+      method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mediaPath }),
     }).catch(() => {});
   }
   function showLearnModal(originalTrigger = null) {
     const current = originalTrigger ? learnEntries[originalTrigger] : null;
+    const currentMedia = learnMedia(current);
     const overlay = showTemplateModal('learnModalTemplate');
     overlay.querySelector('#learnModalTitle').textContent = `${current ? 'Edit' : 'Add'} Learned Response`;
     const triggerInput = overlay.querySelector('#learnTriggerInput');
     const responseInput = overlay.querySelector('#learnResponseInput');
-    const imageInput = overlay.querySelector('#learnImageInput');
-    const imageFileName = overlay.querySelector('#learnImageFileName');
-    const imageDropZone = overlay.querySelector('#learnImageDropZone');
-    const imageError = overlay.querySelector('#learnImageError');
-    const removeImage = overlay.querySelector('#learnRemoveImage');
+    const mediaInput = overlay.querySelector('#learnMediaInput');
+    const mediaFileName = overlay.querySelector('#learnMediaFileName');
+    const mediaDropZone = overlay.querySelector('#learnMediaDropZone');
+    const mediaError = overlay.querySelector('#learnMediaError');
+    const removeMedia = overlay.querySelector('#learnRemoveMedia');
     const duplicateWarning = overlay.querySelector('#learnDuplicateWarning');
     const previewText = overlay.querySelector('#learnPreviewText');
     const previewImage = overlay.querySelector('#learnPreviewImage');
+    const previewVideo = overlay.querySelector('#learnPreviewVideo');
     const errorBox = overlay.querySelector('#learnModalError');
     const saveButton = overlay.querySelector('#btnSaveLearn');
     triggerInput.value = originalTrigger || '';
     responseInput.value = current?.response || '';
-    overlay.querySelector('#learnRemoveImageLabel').hidden = !current?.imageUrl;
+    overlay.querySelector('#learnRemoveMediaLabel').hidden = !currentMedia.url;
     let previewUrl = '';
     let selectedFile = null;
     const clearPreviewUrl = () => { if (previewUrl) URL.revokeObjectURL(previewUrl); previewUrl = ''; };
+    const clearElementSource = element => {
+      if (!element.hasAttribute('src')) return;
+      element.removeAttribute('src');
+      if (element instanceof HTMLMediaElement) element.load();
+    };
     const normalizedTrigger = value => value.trim().toLowerCase();
     const renderPreview = () => {
-      previewText.textContent = responseInput.value.trim() || (selectedFile || (current?.imageUrl && !removeImage.checked) ? '' : 'Response preview');
-      const source = previewUrl || (current?.imageUrl && !removeImage.checked ? current.imageUrl : '');
-      previewImage.src = source;
-      previewImage.hidden = !source;
+      const hasCurrent = Boolean(currentMedia.url && !removeMedia.checked);
+      previewText.textContent = responseInput.value.trim() || (selectedFile || hasCurrent ? '' : 'Response preview');
+      const source = removeMedia.checked ? '' : (previewUrl || currentMedia.url);
+      const kind = selectedFile ? (selectedFile.type.startsWith('video/') ? 'video' : 'image') : currentMedia.kind;
+      const showVideo = Boolean(source && kind === 'video');
+      previewImage.hidden = !source || showVideo;
+      previewVideo.hidden = !showVideo;
+      if (source && !showVideo) {
+        if (previewImage.getAttribute('src') !== source) previewImage.src = source;
+      } else {
+        clearElementSource(previewImage);
+      }
+      if (showVideo) {
+        if (previewVideo.getAttribute('src') !== source) previewVideo.src = source;
+      } else {
+        clearElementSource(previewVideo);
+      }
     };
     const checkDuplicate = () => {
       const trigger = normalizedTrigger(triggerInput.value);
@@ -868,62 +904,80 @@ document.addEventListener('DOMContentLoaded', async () => {
       duplicateWarning.hidden = !duplicate;
       saveButton.disabled = duplicate;
     };
-    const selectLearnImage = file => {
-      imageError.hidden = true;
-      imageError.textContent = '';
+    const clearSelectedMedia = () => {
+      selectedFile = null;
+      mediaInput.value = '';
+      clearPreviewUrl();
+      mediaFileName.textContent = 'No media selected';
+      mediaFileName.classList.remove('selected');
+    };
+    const showMediaError = message => {
+      mediaError.textContent = message;
+      mediaError.hidden = !message;
+    };
+    const selectLearnMedia = file => {
+      showMediaError('');
       if (!file) {
-        selectedFile = null;
-        clearPreviewUrl();
-        imageFileName.textContent = 'No image selected';
-        imageFileName.classList.remove('selected');
+        clearSelectedMedia();
         renderPreview();
         return;
       }
-      if (!['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(file.type)) {
-        imageError.textContent = 'Choose a PNG, JPEG, WebP, or GIF image.';
-        imageError.hidden = false;
+      const isImage = LEARN_IMAGE_TYPES.has(file.type);
+      const isVideo = LEARN_VIDEO_TYPES.has(file.type);
+      if (!isImage && !isVideo) {
+        clearSelectedMedia();
+        showMediaError('Choose PNG, JPEG, WebP, GIF, MP4, or WebM media.');
+        renderPreview();
         return;
       }
-      if (file.size > 5 * 1024 * 1024) {
-        imageError.textContent = 'Image must be 5 MB or smaller.';
-        imageError.hidden = false;
+      const maximum = isVideo ? 25 * 1024 * 1024 : 5 * 1024 * 1024;
+      if (file.size > maximum) {
+        clearSelectedMedia();
+        showMediaError(`${isVideo ? 'Video' : 'Image'} must be ${isVideo ? '25' : '5'} MB or smaller.`);
+        renderPreview();
         return;
       }
       selectedFile = file;
       clearPreviewUrl();
       previewUrl = URL.createObjectURL(file);
-      imageFileName.textContent = file.name;
-      imageFileName.classList.add('selected');
-      removeImage.checked = false;
+      mediaFileName.textContent = file.name;
+      mediaFileName.classList.add('selected');
+      removeMedia.checked = false;
       renderPreview();
     };
     triggerInput.addEventListener('input', checkDuplicate);
     responseInput.addEventListener('input', renderPreview);
-    removeImage.addEventListener('change', renderPreview);
-    imageInput.addEventListener('change', () => selectLearnImage(imageInput.files[0]));
+    removeMedia.addEventListener('change', () => {
+      if (removeMedia.checked) clearSelectedMedia();
+      renderPreview();
+    });
+    mediaInput.addEventListener('change', () => selectLearnMedia(mediaInput.files[0]));
     for (const eventName of ['dragenter', 'dragover']) {
-      imageDropZone.addEventListener(eventName, event => {
+      mediaDropZone.addEventListener(eventName, event => {
         event.preventDefault();
         if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
-        imageDropZone.classList.add('is-dragover');
+        mediaDropZone.classList.add('is-dragover');
       });
     }
     for (const eventName of ['dragleave', 'drop']) {
-      imageDropZone.addEventListener(eventName, event => {
+      mediaDropZone.addEventListener(eventName, event => {
         event.preventDefault();
-        imageDropZone.classList.remove('is-dragover');
+        mediaDropZone.classList.remove('is-dragover');
       });
     }
-    imageDropZone.addEventListener('drop', event => {
+    mediaDropZone.addEventListener('drop', event => {
       const files = [...(event.dataTransfer?.files || [])];
       if (files.length !== 1) {
-        imageError.textContent = 'Drop exactly one image.';
-        imageError.hidden = false;
+        showMediaError('Drop exactly one media file.');
         return;
       }
-      selectLearnImage(files[0]);
+      selectLearnMedia(files[0]);
     });
-    const close = () => { clearPreviewUrl(); overlay.classList.remove('show'); };
+    const close = () => {
+      clearPreviewUrl();
+      clearElementSource(previewVideo);
+      overlay.classList.remove('show');
+    };
     overlay.querySelector('#btnCancelLearn').addEventListener('click', close);
     overlay.addEventListener('click', event => { if (event.target === overlay) close(); });
     saveButton.addEventListener('click', async () => {
@@ -932,17 +986,21 @@ document.addEventListener('DOMContentLoaded', async () => {
       let uploadedPath = '';
       try {
         const file = selectedFile;
-        let imagePath = removeImage.checked ? '' : (current?.imagePath || '');
+        let mediaPath = removeMedia.checked ? '' : currentMedia.path;
+        let mediaUrl = removeMedia.checked ? '' : currentMedia.url;
+        let mediaType = removeMedia.checked ? '' : currentMedia.type;
         if (file) {
-          const uploaded = await learnRequest(`/api/guilds/${currentGuildId}/learn/image`, {
+          const uploaded = await learnRequest(`/api/guilds/${currentGuildId}/learn/media`, {
             method: 'POST', headers: { 'Content-Type': file.type }, body: file,
           });
-          imagePath = uploaded.imagePath;
-          uploadedPath = imagePath;
+          mediaPath = uploaded.mediaPath;
+          mediaUrl = uploaded.mediaUrl;
+          mediaType = uploaded.mediaType;
+          uploadedPath = mediaPath;
         }
         const payload = {
           originalTrigger, trigger: triggerInput.value, response: responseInput.value,
-          imagePath, enabled: current?.enabled !== false,
+          mediaPath, mediaUrl, mediaType, enabled: current?.enabled !== false,
         };
         const result = await learnRequest(`/api/guilds/${currentGuildId}/learn`, {
           method: current ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
@@ -953,7 +1011,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         close();
         renderLearnEntries();
       } catch (error) {
-        await cleanupUploadedLearnImage(uploadedPath);
+        if (error.status) await cleanupUploadedLearnMedia(uploadedPath);
         errorBox.textContent = error.message;
         errorBox.hidden = false;
         saveButton.disabled = false;
@@ -1318,7 +1376,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
   btnSave?.addEventListener('click', async () => {
     if (!currentGuildId) return;
-    showStatus('Saving to Supabase...', 'info');
+    showStatus('Saving to Turso...', 'info');
     btnSave.disabled = true;
     const payload = {
       configVersion,

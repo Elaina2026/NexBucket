@@ -38,7 +38,7 @@ export {};
       creator_title: 'Crafted with Care',
       creator_desc: 'NexBucket is developed and maintained by',
       creator_name: 'Elaina',
-      creator_detail: 'Built with Node.js, Discord.js, and Supabase. Designed to be fast, reliable, and beautiful.',
+      creator_detail: 'Built with Node.js, Discord.js, and Turso. Designed to be fast, reliable, and beautiful.',
 
       your_servers: 'Your Servers',
       back_to_servers: 'Back to Servers',
@@ -59,7 +59,7 @@ export {};
       auto_role: 'Auto-Role on Join',
       auto_role_hint: 'Automatically assign this role when a member joins the server.',
 
-      saving: 'Saving to Supabase...',
+      saving: 'Saving to Turso...',
       save_success: 'Configuration saved successfully!',
       load_config: 'Loading configuration...',
 
@@ -135,7 +135,7 @@ export {};
       creator_title: 'Được tạo ra với tâm huyết',
       creator_desc: 'NexBucket được phát triển và duy trì bởi',
       creator_name: 'Elaina',
-      creator_detail: 'Xây dựng bằng Node.js, Discord.js và Supabase. Được thiết kế nhanh, đáng tin cậy và đẹp mắt.',
+      creator_detail: 'Xây dựng bằng Node.js, Discord.js và Turso. Được thiết kế nhanh, đáng tin cậy và đẹp mắt.',
 
       your_servers: 'Máy chủ của bạn',
       back_to_servers: 'Quay lại Máy chủ',
@@ -156,7 +156,7 @@ export {};
       auto_role: 'Tự động gán Role khi tham gia',
       auto_role_hint: 'Tự động gán role này khi thành viên mới tham gia máy chủ.',
 
-      saving: 'Đang lưu vào Supabase...',
+      saving: 'Đang lưu vào Turso...',
       save_success: 'Cấu hình đã lưu thành công!',
       load_config: 'Đang tải cấu hình...',
 

@@ -1,20 +1,21 @@
 import { getSection, saveSection } from '../database/guildSettings.js';
+import { database } from '../database/client.js';
 import PayOS from '@payos/node';
 import { encryptToken, decryptToken } from '../utils/securityUtils.js';
 
-export async function getPayOS(guildId) {
-    const config = await getBankConfig(guildId);
+export async function getPayOS(guildId, db = database) {
+    const config = await getBankConfig(guildId, db);
     if (config.payosClientId && config.payosApiKey && config.payosChecksumKey) {
         return new PayOS(config.payosClientId, config.payosApiKey, config.payosChecksumKey);
     }
     return null;
 }
 
-export async function getBankConfig(guildId) {
+export async function getBankConfig(guildId, db = database) {
     const empty = { bankBin: '', accountNo: '', accountName: '', notificationChannelId: '', payosClientId: '', payosApiKey: '', payosChecksumKey: '' };
     if (!guildId) return empty;
     try {
-        const data = await getSection(guildId, 'bank');
+        const data = await getSection(guildId, 'bank', false, db);
         if (!data || !data.bankBin) return empty;
         return {
             bankBin: data.bankBin || '',
@@ -31,7 +32,7 @@ export async function getBankConfig(guildId) {
     }
 }
 
-export async function saveBankConfig(guildId, data) {
+export async function saveBankConfig(guildId, data, db = database) {
     if (!guildId) return;
     try {
         await saveSection(guildId, 'bank', {
@@ -42,15 +43,15 @@ export async function saveBankConfig(guildId, data) {
             payosClientId: encryptToken(data.payosClientId),
             payosApiKey: encryptToken(data.payosApiKey),
             payosChecksumKey: encryptToken(data.payosChecksumKey)
-        });
+        }, null, null, db);
     } catch (err) {
         console.error('[BankManager] Error saving config:', err);
         throw err;
     }
 }
 
-export async function generateVietQRUrl(guildId, amount, addInfo) {
-    const config = await getBankConfig(guildId);
+export async function generateVietQRUrl(guildId, amount, addInfo, db = database) {
+    const config = await getBankConfig(guildId, db);
     if (!config.bankBin || !config.accountNo) {
         return null;
     }
@@ -64,8 +65,8 @@ export async function generateVietQRUrl(guildId, amount, addInfo) {
     return url;
 }
 
-export async function createPaymentLink({ guildId, orderCode, amount, description }) {
-    const payos = await getPayOS(guildId);
+export async function createPaymentLink({ guildId, orderCode, amount, description }, db = database) {
+    const payos = await getPayOS(guildId, db);
     if (!payos) {
         console.error('[PayOS] Client not initialized. Check your config keys.');
         return null;

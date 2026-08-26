@@ -9,13 +9,14 @@
   "scripts": {
     "test": "node --test src/test/*.test.js",
     "assets:prepare": "node scripts/prepare-mc-banner-assets.cjs",
+    "migrate:data": "node scripts/migrate/index.js",
     "start": "node index.js",
     "dev": "node --watch index.js"
   },
   "dependencies": {
+    "@libsql/client": "^0.17.4",
     "@napi-rs/canvas": "^1.0.3",
     "@payos/node": "^1.0.10",
-    "@supabase/supabase-js": "^2.110.0",
     "axios": "^1.18.0",
     "cors": "^2.8.6",
     "discord-html-transcripts": "3.2.0",
@@ -24,10 +25,11 @@
     "express": "^5.2.1",
     "express-rate-limit": "^8.6.0",
     "ms": "^2.1.3",
-    "pg": "^8.22.0",
     "sharp": "^0.35.3",
-    "uuid": "^14.0.1",
     "yauzl": "^3.4.0"
+  },
+  "devDependencies": {
+    "pg": "^8.22.0"
   },
   "overrides": {
     "discord-html-transcripts": {

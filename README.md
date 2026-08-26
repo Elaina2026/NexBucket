@@ -12,16 +12,16 @@
   <a href="https://github.com/Elaina2026/NexBucket"><img alt="Repository" src="https://img.shields.io/badge/GitHub-Elaina2026%2FNexBucket-181717?logo=github"></a>
   <a href="https://nodejs.org/"><img alt="Node.js 24+" src="https://img.shields.io/badge/Node.js-24%2B-339933?logo=nodedotjs&logoColor=white"></a>
   <a href="https://discord.js.org/"><img alt="Discord.js 14" src="https://img.shields.io/badge/discord.js-14-5865F2?logo=discord&logoColor=white"></a>
-  <a href="https://supabase.com/"><img alt="Supabase" src="https://img.shields.io/badge/Supabase-PostgreSQL-3FCF8E?logo=supabase&logoColor=white"></a>
+  <a href="https://turso.tech/"><img alt="Turso" src="https://img.shields.io/badge/Turso-libSQL-4FF8D2"></a>
   <a href="https://expressjs.com/"><img alt="Express 5" src="https://img.shields.io/badge/Express-5-000000?logo=express&logoColor=white"></a>
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/License-CC--BY--NC--4.0-ef9421?logo=creativecommons&logoColor=white"></a>
 </p>
 
 ## Overview
 
-NexBucket combines a multi-server Discord bot with an OAuth2-protected management dashboard. Each guild has isolated configuration backed by Supabase/PostgreSQL, while sensitive credentials and database access remain on the server.
+NexBucket combines a multi-server Discord bot with an OAuth2-protected management dashboard. Turso/libSQL stores guild-isolated structured data. Persistent local storage holds Learn images and videos. Credentials and data APIs remain server-side.
 
-The project uses Node.js ESM, Discord.js 14, Express 5, Supabase, Sharp, and `@napi-rs/canvas`.
+Stack: Node.js ESM, Discord.js 14, Express 5, Turso/libSQL, local filesystem storage, Sharp, and `@napi-rs/canvas`.
 
 ## Features
 
@@ -29,7 +29,7 @@ The project uses Node.js ESM, Discord.js 14, Express 5, Supabase, Sharp, and `@n
 | --- | --- |
 | Tickets | Category-based ticket panels, staff claims, access controls, editing, ratings, password-protected web transcripts, and automatic expiry |
 | Moderation | Ban, temporary ban, kick, timeout, mute, warnings, anti-spam, anti-link, anti-raid, banned words, and threshold-based auto-ban |
-| Learn manager | Text, image, or mixed automatic responses; dashboard search, preview, duplicate warnings, enable/disable state, metadata, and Administrator-only CRUD |
+| Learn manager | Text, image, video, or mixed automatic responses; dashboard search, preview, duplicate warnings, enable/disable state, metadata, and Administrator-only CRUD |
 | Network tools | RDAP-powered WHOIS summaries, DNS records, public IP/domain availability checks, ISP/location metadata, and private-network protection |
 | Minecraft | Java server ping, SRV resolution, MOTD rendering, favicon support, local backgrounds, caching, and Discord-ready status banners |
 | Community | Welcome/goodbye cards, auto-role, Join-to-Create rooms, giveaways, reminders, AFK status, statistics channels, and backups |
@@ -51,47 +51,47 @@ The project uses Node.js ESM, Discord.js 14, Express 5, Supabase, Sharp, and `@n
 | `/qrbank`, `/setup-card` | Configure payment and card top-up workflows |
 | `/status`, `/setup-serverstats` | Monitor services and publish live guild statistics |
 
-Run `/help` and `/botguide` in Discord for the complete command list. Administrative commands still enforce their Discord permission requirements.
+Run `/help` and `/botguide` in Discord for full command list. Discord permission checks remain enforced.
 
 ## Architecture
 
 ```text
 index.js                         Composition root
    |
-   +-- src/runtime/              Startup, scheduled jobs, event registration
-   +-- src/events/               Discord interaction, message, guild, and member routing
+   +-- src/runtime/              Startup, jobs, event registration
+   +-- src/events/               Discord routing
    |      |
    |      +-- feature modules    Tickets, moderation, welcome, JTC, payments, status
-   |      +-- src/network/       RDAP, DNS, and safe availability checks
+   |      +-- src/network/       RDAP, DNS, safe availability checks
    |
    +-- src/dashboard/server.js   Express, OAuth2, sessions, APIs, callbacks
           |
-          +-- Supabase/PostgreSQL
+          +-- Turso/libSQL       Structured data and transcripts
+          +-- Local media        Learn images and videos
           +-- Discord API and guild cache
 ```
 
-### Project structure
-
 ```text
 NexBucket/
-├── index.js                     Bot entrypoint and dependency wiring
+├── index.js
 ├── src/
-│   ├── runtime/                 Startup jobs and event registration
-│   ├── events/                  Discord event handlers and routing
-│   ├── network/                 DNS, RDAP, IP metadata, and availability checks
-│   ├── dashboard/               Express server and browser interface
-│   ├── database/                Supabase client, schema, migrations, and settings
-│   ├── ticket/                  Ticket commands, components, and transcripts
-│   ├── moderation/              Moderation and automatic protection
-│   ├── status/                  Minecraft and service monitoring
-│   ├── banking/                 VietQR, PayOS, and Card2K integrations
-│   ├── welcome/                 Welcome/goodbye cards and auto-role
-│   ├── giveaway/                Giveaway lifecycle
-│   ├── utils/                   Shared utilities and community features
-│   └── test/                    Central Node.js test suite
-├── scripts/                     Asset preparation scripts
-├── assets/                      Runtime images and optional banner backgrounds
-├── .env.example                 Environment template
+│   ├── runtime/
+│   ├── events/
+│   ├── network/
+│   ├── dashboard/
+│   ├── database/                libSQL client, schema, migrations, settings
+│   ├── storage/                 Persistent local media adapter
+│   ├── ticket/
+│   ├── moderation/
+│   ├── status/
+│   ├── banking/
+│   ├── welcome/
+│   ├── giveaway/
+│   ├── utils/
+│   └── test/
+├── scripts/migrate/             Supabase-to-Turso/local migration tooling
+├── assets/
+├── .env.example
 ├── LICENSE
 └── NOTICE.md
 ```
@@ -100,10 +100,12 @@ NexBucket/
 
 - Node.js 24 or newer
 - npm
-- A Discord application and bot token
-- A Supabase project with a backend `service_role` key
-- A PostgreSQL session or transaction pooler URL for migrations
-- An HTTPS origin for the production dashboard and OAuth callback
+- Discord application and bot token
+- Turso database and private auth token
+- Persistent writable volume for `LOCAL_MEDIA_DIR` in production
+- HTTPS dashboard origin in production
+
+PostgreSQL and Supabase credentials are needed only for one-time migration from an existing deployment.
 
 ## Quick start
 
@@ -113,16 +115,11 @@ cd NexBucket
 npm install
 npm run assets:prepare
 cp .env.example .env
-```
-
-Windows users can copy `.env.example` to `.env` manually. Fill in the required credentials, then validate and start the project:
-
-```bash
 npm test
 npm run dev
 ```
 
-Production mode:
+Production:
 
 ```bash
 npm start
@@ -130,58 +127,70 @@ npm start
 
 ## Discord application setup
 
-1. Create an application in the [Discord Developer Portal](https://discord.com/developers/applications).
-2. Create its bot user and enable **Server Members Intent**, **Presence Intent**, and **Message Content Intent**. Presence Intent is required for JTC's Game action.
-3. Set `DISCORD_TOKEN`, `CLIENT_ID`, and `CLIENT_SECRET` in `.env`.
-4. Add the production OAuth2 redirect URL:
+1. Create application in [Discord Developer Portal](https://discord.com/developers/applications).
+2. Create bot user. Enable **Server Members Intent**, **Presence Intent**, and **Message Content Intent**. Presence Intent supports JTC Game action.
+3. Set `DISCORD_TOKEN`, `CLIENT_ID`, and `CLIENT_SECRET`.
+4. Add callback URL:
 
 ```text
 https://your-domain.example/api/auth/callback
 ```
 
-For local development:
+Local callback:
 
 ```text
 http://localhost:3000/api/auth/callback
 ```
 
-The dashboard only exposes guilds where the signed-in user has Administrator or Manage Server permission and the bot is present. Learn management requires Discord Administrator permission.
+Dashboard exposes only guilds where signed-in user has Administrator or Manage Server permission and bot is present. Learn management requires Administrator permission.
 
-## Join-to-Create voice rooms
+## Turso and local media
 
-Run `/setup-jtc`, then select the temporary-room category and LFM text channel in the server dashboard. Room owners receive Discord-native controls for name, limit, status, current game, LFM posts, bitrate, region, native text chat, NSFW, claim, lock, permit/reject, invite, visibility, and ownership transfer.
-
-**Save Current** stores the room as the member's private profile for that server. **Load Settings** applies it to an active room. **Dashboard** opens `/jtc/:guildId`, where any authenticated guild member can edit only their own profile; it does not grant access to server administration.
-
-Grant the bot View Channels, Manage Channels, Create Invite, Move Members, Manage Roles, Send Messages, and Embed Links. Enable Presence Intent for automatic Game naming. When an owner leaves, ownership transfers to another non-bot member; the room is deleted only after it becomes empty.
-
-## Supabase and migrations
-
-Configure the backend service-role client and PostgreSQL poolers:
+Runtime configuration:
 
 ```env
-SUPABASE_URL=https://your-project-id.supabase.co
-SUPABASE_KEY=your-backend-service-role-key
-DATABASE_URL=postgresql://postgres.your-project-id:ENCODED_PASSWORD@aws-0-region.pooler.supabase.com:6543/postgres?pgbouncer=true
-DIRECT_URL=postgresql://postgres.your-project-id:ENCODED_PASSWORD@aws-0-region.pooler.supabase.com:5432/postgres
+TURSO_DATABASE_URL=libsql://your-database-your-org.turso.io
+TURSO_AUTH_TOKEN=your-private-token
+LOCAL_MEDIA_DIR=data/media
 ```
 
-`SUPABASE_KEY` is backend-only. Never expose it to browser code, commit it, or substitute it with a public client key.
+Keep Turso credentials backend-only. Runtime applies ordered SQL under `src/database/libsql/`; `schema_migrations` records applied versions. `LOCAL_MEDIA_DIR` defaults to `data/media`. Production must mount it on persistent writable storage and back up it with Turso data; ephemeral container filesystems lose uploaded media after redeploy.
 
-Startup applies the canonical schema and pending files from `src/database/migrations/`. Applied migrations are recorded in `schema_migrations`; `DIRECT_URL` is preferred over `DATABASE_URL`.
+## Existing Supabase migration
 
-Before applying migrations to an existing deployment:
+Migration tooling supports `dry-run`, `apply`, and strict `verify` for all active tables plus every object in source `learn-images` bucket.
 
-1. Back up PostgreSQL.
-2. Verify the migration on staging.
-3. Inspect application logs and query behavior.
-4. Approve the production rollout separately.
+Migration-only credentials:
 
-Use `src/database/security_policies.sql` in the Supabase SQL Editor when RLS policies need reconciliation.
+```env
+SOURCE_DATABASE_URL=postgresql://...
+SOURCE_SUPABASE_URL=https://your-project.supabase.co
+SOURCE_SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+SOURCE_SUPABASE_BUCKET=learn-images
+```
+
+Run only during planned migration:
+
+```bash
+npm run migrate:data -- dry-run all
+npm run migrate:data -- apply all
+npm run migrate:data -- verify all
+```
+
+Database import pages by deterministic primary key, upserts resumably, rewrites Learn entries to local `/media/...` URLs, preserves explicit IDs, and checks canonical SHA-256 hashes, row counts, `PRAGMA integrity_check`, foreign keys, and SQLite sequences. Object import writes atomically under `LOCAL_MEDIA_DIR`, preserves every source key, skips exact byte/hash matches, and verifies missing, extra, size, and checksum drift. Reports contain keys, counts, and hashes, not row contents.
+
+Production cutover:
+
+1. Provision empty staging Turso database and persistent `LOCAL_MEDIA_DIR`, then run `dry-run`.
+2. Test new runtime against staging.
+3. Stop every production bot/dashboard instance to freeze writes.
+4. Run final `apply`, then `verify`; do not start new runtime if any check fails.
+5. Switch runtime secrets, start one instance, test Discord events, dashboard, payments, jobs, transcripts, Learn images, and health.
+6. Keep old Supabase resources intact and read-only through retention window. Delete them only after separate confirmation.
+
+Rollback before new runtime accepts writes: restart previous release with untouched Supabase credentials. Rollback after Turso accepts writes needs explicit reconciliation; one-time import does not provide dual writes.
 
 ## Environment variables
-
-See `.env.example` for the deployment template.
 
 | Variable | Required | Purpose |
 | --- | --- | --- |
@@ -189,80 +198,81 @@ See `.env.example` for the deployment template.
 | `CLIENT_ID` | Yes | Discord application and OAuth client ID |
 | `CLIENT_SECRET` | Yes | Discord OAuth2 client secret |
 | `BOT_OWNER_ID` | Recommended | Owner-only bot and dashboard access |
-| `SUPABASE_URL` | Yes | Supabase project URL |
-| `SUPABASE_KEY` | Yes | Backend-only Supabase service-role key |
-| `DATABASE_URL` | Yes | Runtime PostgreSQL pooler and migration fallback |
-| `DIRECT_URL` | Recommended | PostgreSQL session pooler for migrations |
-| `ENCRYPTION_SECRET` | Yes | AES-256-GCM key source for stored OAuth/payment secrets |
+| `TURSO_DATABASE_URL` | Yes | Runtime libSQL database URL |
+| `TURSO_AUTH_TOKEN` | Cloud Turso | Private runtime database token |
+| `LOCAL_MEDIA_DIR` | Production media | Persistent writable directory; defaults to `data/media` |
+| `SOURCE_SUPABASE_BUCKET` | Migration only | Source media bucket; defaults to `learn-images` |
+| `SOURCE_DATABASE_URL` | Migration only | Source PostgreSQL connection |
+| `SOURCE_SUPABASE_URL` | Migration only | Source Storage API URL |
+| `SOURCE_SUPABASE_SERVICE_ROLE_KEY` | Migration only | Source Storage service-role key |
+| `ENCRYPTION_SECRET` | Yes | AES-256-GCM key source for OAuth/payment secrets |
 | `DASHBOARD_PORT` | No | Express port; defaults to `3000` |
 | `DASHBOARD_URL` | Production | Exact public dashboard origin; use HTTPS |
-| `UPDATE_INTERVAL` | No | Minecraft status refresh interval in milliseconds |
-| `GUILD_SETTINGS_CACHE_MS` | No | Per-guild settings cache lifetime |
-| `MINECRAFT_CONFIG_CACHE_MS` | No | Tracked Minecraft server cache lifetime |
+| `UPDATE_INTERVAL` | No | Minecraft refresh interval in milliseconds |
+| `GUILD_SETTINGS_CACHE_MS` | No | Guild settings cache lifetime |
+| `MINECRAFT_CONFIG_CACHE_MS` | No | Tracked Minecraft cache lifetime |
 | `DEBUG_WEBHOOKS` | No | Card2K diagnostics; keep disabled in production |
 
-Do not change `ENCRYPTION_SECRET` after encrypted data exists unless existing ciphertext has been migrated. Losing this value makes saved OAuth, PayOS, and Card2K credentials unreadable.
+Do not change `ENCRYPTION_SECRET` after encrypted data exists unless ciphertext is migrated. Losing it makes saved OAuth, PayOS, and Card2K credentials unreadable.
+
+## Join-to-Create voice rooms
+
+Run `/setup-jtc`, select temporary-room category and LFM channel. Grant bot View Channels, Manage Channels, Create Invite, Move Members, Manage Roles, Send Messages, and Embed Links. Enable Presence Intent for automatic Game naming.
+
+**Save Current** stores member profile per guild. **Load Settings** applies it to active room. `/jtc/:guildId` lets authenticated members edit only their own profile. Ownership transfers when owner leaves; room deletes only when empty.
 
 ## Minecraft banner assets
-
-Prepare verified assets once per deployment:
 
 ```bash
 npm run assets:prepare
 ```
 
-Relevant options are documented in `.env.example`. Place optional PNG, JPEG, or WebP backgrounds in `assets/banners/`.
-
-Keep `MC_BANNER_ALLOW_PRIVATE_HOSTS=false` on public deployments. Enabling it permits connections to private/LAN targets and should only be used in explicitly trusted environments.
+Options live in `.env.example`. Put optional PNG/JPEG/WebP backgrounds in `assets/banners/`. Keep `MC_BANNER_ALLOW_PRIVATE_HOSTS=false` on public deployments.
 
 ## Security notes
 
-- Serve the dashboard through HTTPS and set `DASHBOARD_URL` to the exact public origin.
-- Keep Discord, Supabase, PostgreSQL, Anthropic, PayOS, Card2K, and encryption secrets on the backend.
+- Serve dashboard through HTTPS; set exact `DASHBOARD_URL`.
+- Keep Discord, Turso, migration-source, PayOS, Card2K, and encryption secrets server-side.
 - Preserve OAuth state validation, HttpOnly/SameSite cookies, origin checks, CSP, HSTS, frame denial, and MIME sniffing protection.
-- Verify payment signatures before changing transaction state.
-- Never log card codes, serials, signatures, access tokens, or provider secrets.
+- Verify payment signatures before transaction changes.
+- Never log card codes, serials, signatures, OAuth tokens, provider secrets, transcripts, or config payloads.
 - Keep `DEBUG_WEBHOOKS=0` in production.
-- Keep public network checks restricted to public addresses; localhost, private, link-local, and reserved ranges are blocked.
-- Back up data before migrations or restore operations. Restore is intentionally destructive and requires confirmation.
+- Restrict public network checks to public addresses.
+- Back up data before migrations or restore operations.
 
-The image proxy accepts HTTPS images only from an explicit allowlist, blocks redirects, and limits response type and size. Learn uploads validate declared MIME type, decoded format, file size, and dimensions before storage.
+Image proxy accepts allowlisted HTTPS domains, blocks redirects, and limits type/size. Learn images validate MIME, decoded format, dimensions, and a 5 MB limit. Learn MP4/WebM videos validate container signatures and a 25 MB limit before atomic local write.
 
 ## Testing
-
-The complete Node.js test suite lives in `src/test/`:
 
 ```bash
 npm test
 ```
 
-Tests cover dashboard security helpers, payments, moderation, Learn entries and image validation, network input/SSRF boundaries, command embeds, Minecraft resolution/rendering, welcome cards, and shared utilities. Network tests use injected dependencies and do not require live Internet access.
+Tests cover database transactions, migration transforms, local media behavior, dashboard helpers, payments, moderation, Learn text/images/videos, network boundaries, Minecraft rendering, welcome cards, tickets, and shared utilities.
 
 ## Troubleshooting
 
 ### OAuth callback fails
 
-- Confirm `DASHBOARD_URL` exactly matches the Discord redirect origin.
-- Confirm the callback path is `/api/auth/callback`.
-- Check `CLIENT_ID`, `CLIENT_SECRET`, reverse-proxy forwarding, HTTPS, and cookie settings.
+- Confirm `DASHBOARD_URL` exactly matches Discord redirect origin.
+- Confirm callback path `/api/auth/callback`.
+- Check `CLIENT_ID`, `CLIENT_SECRET`, reverse proxy, HTTPS, and cookie settings.
 
 ### Database is unavailable or slow
 
-- Check the Supabase project and pooler credentials.
-- URL-encode special characters in PostgreSQL passwords.
-- Inspect Supabase Observability or `pg_stat_statements` before increasing polling frequency.
+- Check `TURSO_DATABASE_URL`, token, and Turso service status.
+- Use dashboard data-service health view.
+- Confirm schema migrations succeeded at startup.
 
-### Minecraft banner assets are missing
+### Learn media fails
 
-```bash
-npm run assets:prepare
-```
-
-Then verify that `MC_BANNER_ASSET_DIR` is persistent and readable by the bot.
+- Confirm `LOCAL_MEDIA_DIR` exists on a persistent volume and bot process can read, write, rename, and delete files there.
+- Confirm reverse proxy forwards `/media/...` requests and HTTP Range headers for video playback.
+- Check available disk space, local-media health, and volume backup/restore policy.
 
 ### Saved secrets cannot be decrypted
 
-Restore the original `ENCRYPTION_SECRET`. For an intentional rotation, migrate existing ciphertext before removing the old key.
+Restore original `ENCRYPTION_SECRET`. For rotation, migrate existing ciphertext before removing old key.
 
 ## Contributors
 
@@ -277,4 +287,4 @@ Created and maintained by **Elaina2026**.
 
 NexBucket is licensed under [Creative Commons Attribution-NonCommercial 4.0 International](LICENSE).
 
-The Minecraft banner integration has separate dual-license permission for use in NexBucket and retains upstream attribution. See [NOTICE.md](NOTICE.md). Third-party dependencies and downloaded Mojang assets retain their respective terms and trademarks.
+Minecraft banner integration has separate dual-license permission for NexBucket and retains upstream attribution. See [NOTICE.md](NOTICE.md). Third-party dependencies and downloaded Mojang assets retain respective terms and trademarks.

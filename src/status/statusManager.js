@@ -2,7 +2,7 @@ import { EmbedBuilder } from '../utils/embed.js';
 import NetworkGuard from './mc-banner/network-guard.js';
 import dns from 'node:dns';
 import { AttachmentBuilder, MessageFlags } from 'discord.js';
-import { isSupabaseUnavailable, supabase } from '../database/supabaseClient.js';
+import { all, database, execute, isDatabaseUnavailable } from '../database/client.js';
 import { getAllSections, saveSection } from '../database/guildSettings.js';
 import {
     getMinecraftBannerFallback,
@@ -87,26 +87,23 @@ export function normalizeServerList(servers, guildId) {
 }
 
 export async function getServers(guildId = null, options = {}) {
-    const db = options.db === undefined ? supabase : options.db;
+    const db = options.db === undefined ? database : options.db;
     if (!db) return [];
     try {
         if (guildId) {
-            const settings = await getAllSections(guildId);
+            const settings = await getAllSections(guildId, false, db);
             return normalizeServerList(settings.minecraft?.servers, guildId);
         }
         const now = options.now ?? Date.now();
         if (allServersSnapshot && allServersSnapshot.expiresAt > now) {
             return structuredClone(allServersSnapshot.servers);
         }
-        const { data, error } = await db.from('guild_settings').select('guild_id, minecraft');
-        if (error) throw error;
-        const servers = (data || []).flatMap(row =>
-            normalizeServerList(row.minecraft?.servers, row.guild_id)
-        );
+        const rows = await all('SELECT guild_id, minecraft FROM guild_settings', [], db);
+        const servers = rows.flatMap(row => normalizeServerList(row.minecraft?.servers, row.guild_id));
         allServersSnapshot = { servers: structuredClone(servers), expiresAt: now + SERVER_SNAPSHOT_MS };
         return servers;
     } catch (error) {
-        if (isSupabaseUnavailable(error)) {
+        if (isDatabaseUnavailable(error)) {
             return !guildId && allServersSnapshot
                 ? structuredClone(allServersSnapshot.servers)
                 : [];
@@ -178,21 +175,17 @@ export async function removeServer(channelId, guildId = null) {
 }
 
 export async function getBlacklist() {
-    if (!supabase) return [];
     try {
-        const { data, error } = await supabase.from('blacklist').select('*');
-        if (error) throw error;
-        return (data || []).map(row => ({ guildId: row.user_id, reason: row.reason }));
+        return (await all('SELECT user_id, reason FROM blacklist')).map(row => ({ guildId: row.user_id, reason: row.reason }));
     } catch {
         return [];
     }
 }
 
 export async function saveBlacklist(list) {
-    if (!supabase) return;
     for (const item of list) {
-        const { error } = await supabase.from('blacklist').upsert({ user_id: item.guildId, reason: item.reason });
-        if (error) throw error;
+        await execute(`INSERT INTO blacklist (user_id, reason) VALUES (?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET reason = excluded.reason`, [item.guildId, item.reason]);
     }
 }
 

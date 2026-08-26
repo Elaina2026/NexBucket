@@ -1,5 +1,6 @@
-import { supabase } from '../../database/supabaseClient.js';
-import crypto from 'crypto';
+import crypto from 'node:crypto';
+import { database, execute } from '../../database/sql.js';
+import { encodeJson } from '../../database/codecs.js';
 import { hashTranscriptPassword } from '../../dashboard/dashboardUtils.js';
 
 
@@ -8,9 +9,9 @@ import { hashTranscriptPassword } from '../../dashboard/dashboardUtils.js';
 
 
 
-export async function createWebTranscript(channel, closedBy, creatorId) {
-  if (!supabase) {
-    console.warn('[Transcript] Supabase is not configured. Skipping transcript generation.');
+export async function createWebTranscript(channel, closedBy, creatorId, db = database) {
+  if (!db) {
+    console.warn('[Transcript] Database is not configured. Skipping transcript generation.');
     return null;
   }
 
@@ -93,22 +94,19 @@ export async function createWebTranscript(channel, closedBy, creatorId) {
     const transcriptId = crypto.randomUUID();
     const password = crypto.randomBytes(16).toString('hex');
 
-    const { error } = await supabase.from('ticket_transcripts').insert({
-      id: transcriptId,
-      guild_id: channel.guildId,
-      ticket_name: channel.name,
-      password: hashTranscriptPassword(password),
-      closed_by: closedBy,
-      creator_id: creatorId || '',
-      claimed_by: claimedBy || '',
-      messages: serializedMessages,
-      expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
-    });
-
-    if (error) {
-      console.error('[Transcript] Failed to save to Supabase:', error.message);
-      return null;
-    }
+    await execute(db, `INSERT INTO ticket_transcripts (
+      id, guild_id, ticket_name, password, closed_by, creator_id, claimed_by, messages, expires_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+      transcriptId,
+      channel.guildId,
+      channel.name,
+      hashTranscriptPassword(password),
+      String(closedBy || ''),
+      String(creatorId || ''),
+      claimedBy || null,
+      encodeJson(serializedMessages),
+      new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+    ]);
 
     const dashboardUrl = process.env.DASHBOARD_URL || 'http://localhost:3000';
     return {

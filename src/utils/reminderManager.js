@@ -1,5 +1,6 @@
 import { EmbedBuilder } from './embed.js';
-import { supabase } from '../database/supabaseClient.js';
+import { all, database as defaultDatabase, execute, one } from '../database/sql.js';
+import { encodeJson } from '../database/codecs.js';
 
 export const REMINDER_MESSAGE_MAX_LENGTH = 4096;
 export const CHANNEL_SCHEDULE_MESSAGE_MAX_LENGTH = 2000;
@@ -11,9 +12,8 @@ const RECURRENCES = new Set(['once', 'daily', 'weekly', 'monthly']);
 const SCHEDULE_RETRY_MAX = 3;
 const timeZoneFormatters = new Map();
 
-function database(db) {
+function requireDatabase(db) {
   if (!db) throw new Error('Database not configured');
-  return db;
 }
 
 function reminderId(value) {
@@ -200,75 +200,71 @@ function toReminder(row) {
   };
 }
 
-export async function addReminder(input, db = supabase, now = Date.now()) {
+export async function addReminder(input, db = defaultDatabase, now = Date.now()) {
+  requireDatabase(db);
   const clean = normalizeReminderInput(input, now);
   const createdAt = Number.isSafeInteger(input.createdAt) ? input.createdAt : now;
-  const { data, error } = await database(db).from('reminders').insert({
-    user_id: userId(input.userId), message: clean.message, end_time: clean.endTime,
-    created_at: createdAt, done: false, processing_at: null, target_type: 'dm',
-  }).select(REMINDER_COLUMNS).single();
-  if (error) throw error;
-  return toReminder(data);
+  return toReminder(await one(db, `INSERT INTO reminders (
+    user_id, message, end_time, created_at, done, processing_at, target_type
+  ) VALUES (?, ?, ?, ?, 0, NULL, 'dm') RETURNING ${REMINDER_COLUMNS}`,
+  [userId(input.userId), clean.message, clean.endTime, createdAt]));
 }
 
-export async function addChannelSchedule(input, db = supabase, now = Date.now()) {
+export async function addChannelSchedule(input, db = defaultDatabase, now = Date.now()) {
+  requireDatabase(db);
   const clean = normalizeChannelScheduleInput(input, now);
-  const { data, error } = await database(db).from('reminders').insert({
-    user_id: userId(input.userId), message: clean.message, end_time: clean.endTime,
-    created_at: now, done: false, processing_at: null, target_type: 'channel',
-    guild_id: clean.guildId, channel_id: clean.channelId, recurrence: clean.recurrence,
-    time_zone: clean.timeZone, local_time: clean.localTime, weekdays: clean.weekdays,
-    day_of_month: clean.dayOfMonth, embed: clean.embed, paused: false, retry_count: 0,
-  }).select(REMINDER_COLUMNS).single();
-  if (error) throw error;
-  return toReminder(data);
+  return toReminder(await one(db, `INSERT INTO reminders (
+    user_id, message, end_time, created_at, done, processing_at, target_type,
+    guild_id, channel_id, recurrence, time_zone, local_time, weekdays, day_of_month, embed, paused, retry_count
+  ) VALUES (?, ?, ?, ?, 0, NULL, 'channel', ?, ?, ?, ?, ?, ?, ?, ?, 0, 0) RETURNING ${REMINDER_COLUMNS}`,
+  [userId(input.userId), clean.message, clean.endTime, now, clean.guildId, clean.channelId,
+    clean.recurrence, clean.timeZone, clean.localTime, clean.weekdays === null ? null : encodeJson(clean.weekdays),
+    clean.dayOfMonth, clean.embed === null ? null : encodeJson(clean.embed)]));
 }
 
-export async function listPendingReminders(owner, db = supabase) {
-  const { data, error } = await database(db).from('reminders').select(REMINDER_COLUMNS)
-    .eq('user_id', userId(owner)).eq('done', false).is('processing_at', null)
-    .order('end_time', { ascending: true }).limit(100);
-  if (error) throw error;
-  return (data || []).map(toReminder);
+export async function listPendingReminders(owner, db = defaultDatabase) {
+  requireDatabase(db);
+  return (await all(db, `SELECT ${REMINDER_COLUMNS} FROM reminders
+    WHERE user_id = ? AND done = 0 AND processing_at IS NULL ORDER BY end_time ASC LIMIT 100`,
+  [userId(owner)])).map(toReminder);
 }
 
-export async function updatePendingReminder(idValue, owner, input, db = supabase, now = Date.now()) {
+export async function updatePendingReminder(idValue, owner, input, db = defaultDatabase, now = Date.now()) {
+  requireDatabase(db);
   const clean = normalizeReminderInput(input, now);
-  const { data, error } = await database(db).from('reminders')
-    .update({ message: clean.message, end_time: clean.endTime })
-    .eq('id', reminderId(idValue)).eq('user_id', userId(owner)).eq('target_type', 'dm')
-    .eq('done', false).is('processing_at', null).select(REMINDER_COLUMNS).maybeSingle();
-  if (error) throw error;
-  return data ? toReminder(data) : null;
+  const row = await one(db, `UPDATE reminders SET message = ?, end_time = ?
+    WHERE id = ? AND user_id = ? AND target_type = 'dm' AND done = 0 AND processing_at IS NULL
+    RETURNING ${REMINDER_COLUMNS}`,
+  [clean.message, clean.endTime, reminderId(idValue), userId(owner)]);
+  return row ? toReminder(row) : null;
 }
 
-export async function updateChannelSchedule(idValue, owner, input, db = supabase, now = Date.now()) {
+export async function updateChannelSchedule(idValue, owner, input, db = defaultDatabase, now = Date.now()) {
+  requireDatabase(db);
   const clean = normalizeChannelScheduleInput(input, now);
-  const { data, error } = await database(db).from('reminders')
-    .update({
-      message: clean.message, end_time: clean.endTime, guild_id: clean.guildId,
-      channel_id: clean.channelId, recurrence: clean.recurrence, time_zone: clean.timeZone,
-      local_time: clean.localTime, weekdays: clean.weekdays, day_of_month: clean.dayOfMonth,
-      embed: clean.embed, retry_count: 0,
-    })
-    .eq('id', reminderId(idValue)).eq('user_id', userId(owner)).eq('target_type', 'channel')
-    .eq('done', false).is('processing_at', null).select(REMINDER_COLUMNS).maybeSingle();
-  if (error) throw error;
-  return data ? toReminder(data) : null;
+  const row = await one(db, `UPDATE reminders SET
+    message = ?, end_time = ?, guild_id = ?, channel_id = ?, recurrence = ?, time_zone = ?, local_time = ?,
+    weekdays = ?, day_of_month = ?, embed = ?, retry_count = 0
+    WHERE id = ? AND user_id = ? AND target_type = 'channel' AND done = 0 AND processing_at IS NULL
+    RETURNING ${REMINDER_COLUMNS}`,
+  [clean.message, clean.endTime, clean.guildId, clean.channelId, clean.recurrence, clean.timeZone, clean.localTime,
+    clean.weekdays === null ? null : encodeJson(clean.weekdays), clean.dayOfMonth,
+    clean.embed === null ? null : encodeJson(clean.embed), reminderId(idValue), userId(owner)]);
+  return row ? toReminder(row) : null;
 }
 
-export async function setSchedulePaused(idValue, owner, paused, db = supabase) {
-  const { data, error } = await database(db).from('reminders').update({ paused: paused === true, processing_at: null })
-    .eq('id', reminderId(idValue)).eq('user_id', userId(owner)).eq('target_type', 'channel')
-    .eq('done', false).select(REMINDER_COLUMNS).maybeSingle();
-  if (error) throw error;
-  return data ? toReminder(data) : null;
+export async function setSchedulePaused(idValue, owner, paused, db = defaultDatabase) {
+  requireDatabase(db);
+  const row = await one(db, `UPDATE reminders SET paused = ?, processing_at = NULL
+    WHERE id = ? AND user_id = ? AND target_type = 'channel' AND done = 0 RETURNING ${REMINDER_COLUMNS}`,
+  [paused ? 1 : 0, reminderId(idValue), userId(owner)]);
+  return row ? toReminder(row) : null;
 }
 
-export async function cloneChannelSchedule(idValue, owner, db = supabase, now = Date.now()) {
-  const { data, error } = await database(db).from('reminders').select(REMINDER_COLUMNS)
-    .eq('id', reminderId(idValue)).eq('user_id', userId(owner)).eq('target_type', 'channel').maybeSingle();
-  if (error) throw error;
+export async function cloneChannelSchedule(idValue, owner, db = defaultDatabase, now = Date.now()) {
+  requireDatabase(db);
+  const data = await one(db, `SELECT ${REMINDER_COLUMNS} FROM reminders
+    WHERE id = ? AND user_id = ? AND target_type = 'channel' LIMIT 1`, [reminderId(idValue), userId(owner)]);
   if (!data) return null;
   const reminder = toReminder(data);
   return addChannelSchedule({
@@ -279,37 +275,33 @@ export async function cloneChannelSchedule(idValue, owner, db = supabase, now = 
   }, db, now);
 }
 
-export async function cancelPendingReminder(idValue, owner, db = supabase) {
-  const { data, error } = await database(db).from('reminders').delete()
-    .eq('id', reminderId(idValue)).eq('user_id', userId(owner)).eq('done', false)
-    .is('processing_at', null).select('id').maybeSingle();
-  if (error) throw error;
-  return Boolean(data);
+export async function cancelPendingReminder(idValue, owner, db = defaultDatabase) {
+  requireDatabase(db);
+  return Boolean(await one(db, `DELETE FROM reminders
+    WHERE id = ? AND user_id = ? AND done = 0 AND processing_at IS NULL RETURNING id`,
+  [reminderId(idValue), userId(owner)]));
 }
 
 async function dueReminders(now, db) {
   const leaseExpiredAt = now - REMINDER_LEASE_MS;
-  const { data, error } = await database(db).from('reminders').select(REMINDER_COLUMNS)
-    .eq('done', false).lte('end_time', now)
-    .or(`processing_at.is.null,processing_at.lt.${leaseExpiredAt}`)
-    .order('end_time', { ascending: true }).limit(100);
-  if (error) throw error;
-  return (data || []).map(toReminder);
+  return (await all(db, `SELECT ${REMINDER_COLUMNS} FROM reminders
+    WHERE done = 0 AND end_time <= ? AND (processing_at IS NULL OR processing_at < ?)
+    ORDER BY end_time ASC LIMIT 100`, [now, leaseExpiredAt])).map(toReminder);
 }
 
-export async function claimReminder(reminder, now, db = supabase) {
-  let query = database(db).from('reminders').update({ processing_at: now })
-    .eq('id', reminderId(reminder.id)).eq('done', false);
-  query = reminder.processingAt === null ? query.is('processing_at', null) : query.eq('processing_at', reminder.processingAt);
-  const { data, error } = await query.select(REMINDER_COLUMNS).maybeSingle();
-  if (error) throw error;
-  return data ? toReminder(data) : null;
+export async function claimReminder(reminder, now, db = defaultDatabase) {
+  requireDatabase(db);
+  const leasePredicate = reminder.processingAt === null ? 'processing_at IS NULL' : 'processing_at = ?';
+  const args = reminder.processingAt === null
+    ? [now, reminderId(reminder.id)]
+    : [now, reminderId(reminder.id), reminder.processingAt];
+  const row = await one(db, `UPDATE reminders SET processing_at = ?
+    WHERE id = ? AND done = 0 AND ${leasePredicate} RETURNING ${REMINDER_COLUMNS}`, args);
+  return row ? toReminder(row) : null;
 }
 
 async function finishReminder(id, processingAt, db) {
-  const { error } = await database(db).from('reminders').update({ done: true, processing_at: null })
-    .eq('id', id).eq('processing_at', processingAt);
-  if (error) throw error;
+  await execute(db, 'UPDATE reminders SET done = 1, processing_at = NULL WHERE id = ? AND processing_at = ?', [id, processingAt]);
 }
 
 async function rescheduleReminder(reminder, processingAt, now, db) {
@@ -321,22 +313,15 @@ async function rescheduleReminder(reminder, processingAt, now, db) {
     weekdays: reminder.weekdays || [],
     dayOfMonth: reminder.dayOfMonth,
   }, now);
-  const { error } = await database(db).from('reminders').update({
-    end_time: endTime, processing_at: null, retry_count: 0, last_run_at: now,
-  }).eq('id', reminder.id).eq('processing_at', processingAt);
-  if (error) throw error;
+  await execute(db, `UPDATE reminders SET end_time = ?, processing_at = NULL, retry_count = 0, last_run_at = ?
+    WHERE id = ? AND processing_at = ?`, [endTime, now, reminder.id, processingAt]);
 }
 
 async function retryReminder(reminder, processingAt, now, db) {
   const retryCount = reminder.retryCount + 1;
   const delay = Math.min(5 * 60_000 * (2 ** Math.min(retryCount - 1, 4)), 60 * 60_000);
-  const { error } = await database(db).from('reminders').update({
-    end_time: now + delay,
-    processing_at: null,
-    retry_count: Math.min(retryCount, SCHEDULE_RETRY_MAX),
-    last_run_at: now,
-  }).eq('id', reminder.id).eq('processing_at', processingAt);
-  if (error) throw error;
+  await execute(db, `UPDATE reminders SET end_time = ?, processing_at = NULL, retry_count = ?, last_run_at = ?
+    WHERE id = ? AND processing_at = ?`, [now + delay, Math.min(retryCount, SCHEDULE_RETRY_MAX), now, reminder.id, processingAt]);
 }
 
 function scheduleMessagePayload(reminder) {
@@ -355,30 +340,29 @@ function scheduleMessagePayload(reminder) {
 
 async function createScheduleRun(reminder, now, db) {
   if (reminder.targetType !== 'channel') return null;
-  const { data, error } = await database(db).from('schedule_runs').insert({
-    reminder_id: reminder.id, scheduled_for: reminder.endTime, status: 'running',
-  }).select('id').maybeSingle();
-  if (error?.code === '23505') return false;
-  if (error) throw error;
-  return data?.id || null;
+  try {
+    return (await one(db, `INSERT INTO schedule_runs (reminder_id, scheduled_for, status)
+      VALUES (?, ?, 'running') RETURNING id`, [reminder.id, reminder.endTime]))?.id || null;
+  } catch (error) {
+    if (error?.code === 'UNIQUE_CONSTRAINT') return false;
+    throw error;
+  }
 }
 
 async function finishScheduleRun(runId, status, errorMessage, db) {
   if (!runId) return;
-  const { error } = await database(db).from('schedule_runs').update({
-    status, error: errorMessage ? String(errorMessage).slice(0, 1000) : null,
-    completed_at: new Date().toISOString(),
-  }).eq('id', runId);
-  if (error) throw error;
+  await execute(db, `UPDATE schedule_runs SET status = ?, error = ?, completed_at = ? WHERE id = ?`,
+  [status, errorMessage ? String(errorMessage).slice(0, 1000) : null, new Date().toISOString(), runId]);
 }
 
-export async function checkReminders(client, db = supabase, now = Date.now()) {
+export async function checkReminders(client, db = defaultDatabase, now = Date.now()) {
+  requireDatabase(db);
   const due = await dueReminders(now, db);
   for (const candidate of due) {
     const reminder = await claimReminder(candidate, now, db);
     if (!reminder) continue;
     if (reminder.paused) {
-      await database(db).from('reminders').update({ processing_at: null }).eq('id', reminder.id).eq('processing_at', now);
+      await execute(db, 'UPDATE reminders SET processing_at = NULL WHERE id = ? AND processing_at = ?', [reminder.id, now]);
       continue;
     }
 

@@ -224,7 +224,7 @@ function renderSecurityLog(data) {
 
 function renderDatabaseHealth(health) {
   if (!health?.layers) return;
-  const labels = { postgres: 'PostgreSQL', auth: 'Supabase Auth', postgrest: 'PostgREST' };
+  const labels = { database: 'Turso/libSQL', storage: 'Local Media' };
   const container = document.getElementById('databaseHealthLayers');
   if (container) {
     container.replaceChildren();
@@ -237,7 +237,7 @@ function renderDatabaseHealth(health) {
       main.append(title, detail); item.appendChild(main); container.appendChild(item);
     }
   }
-  document.getElementById('dbStatus').textContent = `PostgREST ${health.layers.postgrest.status}`;
+  document.getElementById('dbStatus').textContent = `Turso ${health.layers.database?.status || 'unknown'}`;
   document.getElementById('dbSize').textContent = `Circuit ${health.circuit?.state || 'unknown'}`;
 }
 

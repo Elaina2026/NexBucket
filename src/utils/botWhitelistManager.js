@@ -1,21 +1,13 @@
-import { supabase } from '../database/supabaseClient.js';
+import { all, execute, one } from '../database/client.js';
 import axios from 'axios';
+
 export async function isBotWhitelisted(guildId, botId) {
-  if (!supabase) return false;
   try {
-    const { data, error } = await supabase
-      .from('bot_whitelist')
-      .select('*')
-      .eq('guild_id', guildId)
-      .eq('bot_id', botId)
-      .maybeSingle();
-    if (error || !data) return false;
-    return true;
-  } catch (e) {
+    return Boolean(await one('SELECT 1 AS found FROM bot_whitelist WHERE guild_id = ? AND bot_id = ? LIMIT 1', [guildId, botId]));
+  } catch {
     return false;
   }
 }
-
 
 const topGGCache = new Map();
 const TOPGG_CACHE_TTL = 6 * 60 * 60 * 1000;
@@ -49,7 +41,6 @@ export async function isBotListedOnTopGG(botId, httpClient = axios) {
 export async function checkAndAutoWhitelist(guildId, user) {
   if (!user?.bot) return false;
   if (await isBotWhitelisted(guildId, user.id)) return true;
-
   const now = Date.now();
   const cached = topGGCache.get(user.id);
   if (cached && now - cached.at < TOPGG_CACHE_TTL) {
@@ -61,49 +52,36 @@ export async function checkAndAutoWhitelist(guildId, user) {
     }
     return false;
   }
-
   const listed = await isBotListedOnTopGG(user.id);
   cacheTopGGResult(user.id, listed, now);
   if (!listed) return false;
   await addBotToWhitelist(guildId, user.id, 'SYSTEM_AUTO_TOPGG');
   return true;
 }
+
 export async function addBotToWhitelist(guildId, botId, addedBy) {
-  if (!supabase) return false;
   try {
-    const { error } = await supabase.from('bot_whitelist').upsert({
-      guild_id: guildId,
-      bot_id: botId,
-      added_by: addedBy
-    });
-    return !error;
-  } catch (e) {
+    await execute(`INSERT INTO bot_whitelist (guild_id, bot_id, added_by) VALUES (?, ?, ?)
+      ON CONFLICT(guild_id, bot_id) DO UPDATE SET added_by = excluded.added_by`, [guildId, botId, addedBy]);
+    return true;
+  } catch {
     return false;
   }
 }
+
 export async function removeBotFromWhitelist(guildId, botId) {
-  if (!supabase) return false;
   try {
-    const { error } = await supabase
-      .from('bot_whitelist')
-      .delete()
-      .eq('guild_id', guildId)
-      .eq('bot_id', botId);
-    return !error;
-  } catch (e) {
+    await execute('DELETE FROM bot_whitelist WHERE guild_id = ? AND bot_id = ?', [guildId, botId]);
+    return true;
+  } catch {
     return false;
   }
 }
+
 export async function getWhitelistedBots(guildId) {
-  if (!supabase) return [];
   try {
-    const { data, error } = await supabase
-      .from('bot_whitelist')
-      .select('bot_id')
-      .eq('guild_id', guildId);
-    if (error) return [];
-    return data.map(row => row.bot_id);
-  } catch (e) {
+    return (await all('SELECT bot_id FROM bot_whitelist WHERE guild_id = ?', [guildId])).map(row => row.bot_id);
+  } catch {
     return [];
   }
 }

@@ -1,5 +1,5 @@
 import { getSection, saveSection } from '../database/guildSettings.js';
-import { isSupabaseUnavailable } from '../database/supabaseClient.js';
+import { all, isDatabaseUnavailable } from '../database/client.js';
 
 export function getStaffRoleIds(config) {
   if (config.staffRoleIds && Array.isArray(config.staffRoleIds) && config.staffRoleIds.length > 0) {
@@ -17,7 +17,7 @@ class ConfigManager {
       const data = await getSection(guildId, 'ticket');
       return { ...this.getDefaultConfig(), ...data };
     } catch (err) {
-      if (isSupabaseUnavailable(err)) throw err;
+      if (isDatabaseUnavailable(err)) throw err;
       console.error('[ConfigManager] Error:', err);
       return this.getDefaultConfig();
     }
@@ -36,20 +36,14 @@ class ConfigManager {
 
   static async getAllConfigs() {
     try {
-
-      const { supabase } = await import('../database/supabaseClient.js');
-      if (!supabase) return {};
-      const { data, error } = await supabase
-        .from('guild_settings')
-        .select('guild_id, ticket');
-      if (error) throw error;
+      const rows = await all('SELECT guild_id, ticket FROM guild_settings');
       const allConfigs = {};
-      for (const row of (data || [])) {
+      for (const row of rows) {
         allConfigs[row.guild_id] = { ...this.getDefaultConfig(), ...(row.ticket || {}) };
       }
       return allConfigs;
     } catch (err) {
-      if (isSupabaseUnavailable(err)) throw err;
+      if (isDatabaseUnavailable(err)) throw err;
       console.error('[ConfigManager] Error in getAllConfigs:', err);
       return {};
     }

@@ -17,7 +17,7 @@ import { formatJtcChannelName, getJtcProfile, getJtcSettings, normalizeJtcConfig
 import { getIncidents } from '../utils/errorHandler.js';
 import { getAllServicesStatus, getOverallStatus } from '../utils/uptimeTracker.js';
 import { getBankConfig } from '../banking/bankManager.js';
-import { getCardConfig, normalizeCardDomain } from '../banking/cardConfig.js';
+import { createCard2KSignature, getCardConfig, normalizeCardDomain } from '../banking/cardConfig.js';
 import { getStatsConfigForGuild } from '../status/serverStatsManager.js';
 import {
     getAllSections,
@@ -42,9 +42,19 @@ import {
 import { getModConfig } from '../moderation/moderationManager.js';
 import { parseTrackedMinecraftAddress } from '../status/minecraftBanner.js';
 import { applyCardResult } from '../banking/cardResult.js';
-import { getDatabaseHealthSnapshot, isSupabaseUnavailable, probeDatabaseLayers, supabase } from '../database/supabaseClient.js';
+import { all, database, execute, getDatabaseHealthSnapshot, isDatabaseUnavailable, one, probeDatabaseLayers } from '../database/client.js';
 import { encryptToken, decryptToken, generateCsrfToken, sanitizePayload } from '../utils/securityUtils.js';
-import { LEARN_IMAGE_MAX_BYTES, validateLearnImage } from '../utils/learnImage.js';
+import { LEARN_MEDIA_MAX_BYTES, validateLearnMedia } from '../utils/learnImage.js';
+import {
+    deleteLocalMedia,
+    getLocalMediaHealthSnapshot,
+    getLocalMediaRoot,
+    localMediaUrl,
+    mediaMimeType,
+    probeLocalMedia,
+    putLocalMedia,
+    validateMediaKey,
+} from '../storage/localMedia.js';
 import { PermissionFlagsBits } from 'discord.js';
 import { addChannelSchedule, cancelPendingReminder, cloneChannelSchedule, listPendingReminders, setSchedulePaused, updateChannelSchedule, updatePendingReminder } from '../utils/reminderManager.js';
 import { createBackgroundJob } from '../runtime/backgroundJob.js';
@@ -72,14 +82,10 @@ function isSessionId(value) {
         && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
-function isDatabaseUnavailable(error) {
-    return error?.code === 'TIMEOUT' || isSupabaseUnavailable(error);
-}
-
 function sendDatabaseUnavailable(res, error) {
-    console.error('[Dashboard] Supabase unavailable:', error?.message || error);
+    console.error('[Dashboard] Database unavailable:', error?.message || error);
     return res.status(503).json({
-        error: 'Database temporarily unavailable. Supabase may be paused or waking up. Try again in a few seconds.',
+        error: 'Database temporarily unavailable. Try again in a few seconds.',
         code: 'DATABASE_UNAVAILABLE',
         retryAfter: 15,
     });
@@ -90,6 +96,27 @@ async function getGuildMember(guild, userId) {
     const cached = guild.members.cache.get(userId);
     if (cached) return cached;
     return guild.members.fetch(userId).catch(() => null);
+}
+
+export function createLocalMediaHandler(root = getLocalMediaRoot()) {
+    return (req, res) => {
+        try {
+            const key = validateMediaKey(`${req.params.guildId}/${req.params.filename}`);
+            const contentType = mediaMimeType(key);
+            if (!contentType) return res.status(404).end();
+            res.setHeader('Content-Type', contentType);
+            res.setHeader('X-Content-Type-Options', 'nosniff');
+            res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+            return res.sendFile(key, { root, dotfiles: 'deny', acceptRanges: true }, error => {
+                if (!error || res.headersSent) return;
+                if (error.statusCode === 404 || error.code === 'ENOENT') return res.status(404).end();
+                res.status(500).end();
+            });
+        } catch (error) {
+            if (error instanceof TypeError) return res.status(404).end();
+            return res.status(500).end();
+        }
+    };
 }
 
 export function startDashboard(client) {
@@ -143,7 +170,8 @@ export function startDashboard(client) {
             "script-src 'self' https://static.cloudflareinsights.com",
             "style-src 'self' https://fonts.googleapis.com",
             "font-src 'self' https://fonts.gstatic.com",
-            "img-src 'self' data: blob: https://cdn.discordapp.com https://media.discordapp.net https://img.vietqr.io https://*.supabase.co",
+            "img-src 'self' data: blob: https://cdn.discordapp.com https://media.discordapp.net https://img.vietqr.io",
+            "media-src 'self' blob:",
             "connect-src 'self' https://cloudflareinsights.com",
             "object-src 'none'",
             "frame-ancestors 'none'",
@@ -160,7 +188,7 @@ export function startDashboard(client) {
         origin: function(origin, callback) {
             if (!origin) return callback(null, true);
             if (allowedOrigins.includes(origin)) return callback(null, true);
-            callback(new Error('CORS: DASHBOARD_URL not configured or origin not allowed'));
+            callback(null, false);
         },
         methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
         allowedHeaders: ['Content-Type', 'Authorization'],
@@ -189,6 +217,7 @@ export function startDashboard(client) {
     const builtPublicPath = path.join(__dirname, '..', '..', 'dist', 'dashboard', 'public');
     app.use(express.static(builtPublicPath, { maxAge: 0, etag: true, dotfiles: 'deny' }));
     app.use(express.static(sourcePublicPath, { maxAge: 0, etag: true, dotfiles: 'deny' }));
+    app.get('/media/:guildId/:filename', createLocalMediaHandler());
     app.get('/favicon.ico', (req, res) => {
         if (!client || !client.user) return res.status(404).end();
         res.redirect(client.user.displayAvatarURL({ extension: 'png', size: 128 }));
@@ -224,8 +253,12 @@ export function startDashboard(client) {
 
     app.get('/api/admin/database-health', requireAdmin, async (req, res) => {
         try {
-            if (req.query.refresh === '1') await probeDatabaseLayers();
-            res.json(getDatabaseHealthSnapshot({ detailed: true }));
+            if (req.query.refresh === '1') await Promise.all([probeDatabaseLayers(), probeLocalMedia()]);
+            const health = getDatabaseHealthSnapshot({ detailed: true });
+            res.json({
+                ...health,
+                layers: { ...health.layers, storage: getLocalMediaHealthSnapshot({ detailed: true }) },
+            });
         } catch (error) {
             sendInternalError(res, error, 'Database health failed');
         }
@@ -292,7 +325,7 @@ export function startDashboard(client) {
                     free: diskFree
                 },
                 db: {
-                    status: supabase ? 'Connected (Remote)' : 'Disconnected',
+                    status: database ? 'Connected (Turso)' : 'Disconnected',
                     size: 'Cloud'
                 }
             });
@@ -317,15 +350,15 @@ export function startDashboard(client) {
         res.sendFile(path.join(sourcePublicPath, 'index.html'));
     });
     async function logSecurityEvent(eventType, ipAddress, userAgent, details) {
-        if (!supabase) return;
+        if (!database) return;
         try {
-            const { error } = await supabase.from('security_logs').insert([{
-                event_type: eventType,
-                ip_address: ipAddress || 'unknown',
-                user_agent: (userAgent || '').substring(0, 500),
-                details: (details || '').substring(0, 2000),
-            }]);
-            if (error) throw error;
+            await execute(`INSERT INTO security_logs (event_type, ip_address, user_agent, details)
+                VALUES (?, ?, ?, ?)`, [
+                eventType,
+                ipAddress || 'unknown',
+                (userAgent || '').substring(0, 500),
+                (details || '').substring(0, 2000),
+            ]);
         } catch (err) {
             console.error('[Security] Failed to log event:', err.message);
         }
@@ -423,19 +456,27 @@ export function startDashboard(client) {
             const encryptedRefreshToken = encryptToken(refresh_token);
             const sessionId = crypto.randomUUID();
             const expiresAt = new Date(Date.now() + expires_in * 1000).toISOString();
-            if (!supabase) return res.status(500).send('❌ Database not configured');
-            const { error: sessionError } = await supabase.from('user_sessions').upsert({
-                session_id: sessionId,
-                user_id: userData.id,
-                username: userData.username,
-                discriminator: userData.discriminator,
-                avatar: userData.avatar,
-                access_token_encrypted: encryptedAccessToken,
-                refresh_token_encrypted: encryptedRefreshToken,
-                expires_at: expiresAt,
-                updated_at: new Date().toISOString()
-            });
-            if (sessionError) throw sessionError;
+            if (!database) return res.status(500).send('❌ Database not configured');
+            await execute(`INSERT INTO user_sessions (
+                session_id, user_id, username, discriminator, avatar, access_token_encrypted,
+                refresh_token_encrypted, expires_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(session_id) DO UPDATE SET
+                user_id = excluded.user_id, username = excluded.username,
+                discriminator = excluded.discriminator, avatar = excluded.avatar,
+                access_token_encrypted = excluded.access_token_encrypted,
+                refresh_token_encrypted = excluded.refresh_token_encrypted,
+                expires_at = excluded.expires_at, updated_at = excluded.updated_at`, [
+                sessionId,
+                userData.id,
+                userData.username,
+                userData.discriminator || null,
+                userData.avatar || null,
+                encryptedAccessToken,
+                encryptedRefreshToken || null,
+                expiresAt,
+                new Date().toISOString(),
+            ]);
             res.append('Set-Cookie', cookieHeader('session_id', sessionId, { maxAge: 604800, secure: secureCookies }));
             res.append('Set-Cookie', cookieHeader('oauth_return', '', { maxAge: 0, secure: secureCookies }));
             const returnTo = /^\/(?:jtc\/\d{17,20}|dashboard(?:\/\d{17,20}(?:\/[\w-]+)?)?)$/.test(cookies.oauth_return || '') ? cookies.oauth_return : '/';
@@ -452,16 +493,14 @@ export function startDashboard(client) {
     async function getAuthenticatedUser(req) {
         const cookies = parseCookies(req);
         const sessionId = cookies.session_id;
-        if (!isSessionId(sessionId) || !supabase) return null;
-        let { data: session, error } = await supabase
-            .from('user_sessions')
-            .select('session_id, user_id, username, discriminator, avatar, access_token_encrypted, refresh_token_encrypted, expires_at, created_at, updated_at')
-            .eq('session_id', sessionId)
-            .maybeSingle();
-        if (error || !session) return null;
+        if (!isSessionId(sessionId) || !database) return null;
+        const session = await one(`SELECT session_id, user_id, username, discriminator, avatar,
+            access_token_encrypted, refresh_token_encrypted, expires_at, created_at, updated_at
+            FROM user_sessions WHERE session_id = ? LIMIT 1`, [sessionId]);
+        if (!session) return null;
         const createdAt = new Date(session.created_at).getTime();
         if (!Number.isFinite(createdAt) || Date.now() - createdAt > 7 * 24 * 60 * 60 * 1000) {
-            await supabase.from('user_sessions').delete().eq('session_id', sessionId);
+            await execute('DELETE FROM user_sessions WHERE session_id = ?', [sessionId]);
             return null;
         }
 
@@ -476,25 +515,25 @@ export function startDashboard(client) {
                     refresh_token: refreshToken
                 }), { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
 
-                const { access_token, refresh_token: new_refresh_token, expires_in } = tokenResponse.data;
+                const { access_token, refresh_token: newRefreshToken, expires_in } = tokenResponse.data;
                 const newExpiresAt = new Date(Date.now() + expires_in * 1000).toISOString();
-
                 const encryptedNewAccessToken = encryptToken(access_token);
-                const encryptedNewRefreshToken = encryptToken(new_refresh_token);
-                const { error: refreshError } = await supabase.from('user_sessions')
-                    .update({
-                        access_token_encrypted: encryptedNewAccessToken,
-                        refresh_token_encrypted: encryptedNewRefreshToken,
-                        expires_at: newExpiresAt,
-                        updated_at: new Date().toISOString()
-                    })
-                    .eq('session_id', sessionId);
-                if (refreshError) throw refreshError;
+                const encryptedNewRefreshToken = newRefreshToken
+                    ? encryptToken(newRefreshToken)
+                    : session.refresh_token_encrypted;
+                await execute(`UPDATE user_sessions SET access_token_encrypted = ?,
+                    refresh_token_encrypted = ?, expires_at = ?, updated_at = ? WHERE session_id = ?`, [
+                    encryptedNewAccessToken,
+                    encryptedNewRefreshToken,
+                    newExpiresAt,
+                    new Date().toISOString(),
+                    sessionId,
+                ]);
 
                 session.access_token_encrypted = encryptedNewAccessToken;
                 session.refresh_token_encrypted = encryptedNewRefreshToken;
                 session.expires_at = newExpiresAt;
-            } catch (err) {
+            } catch {
                 return null;
             }
         }
@@ -611,7 +650,7 @@ export function startDashboard(client) {
             const request = await createPrivacyRequest(auth.session.user_id, req.body);
             res.status(201).json({ request });
         } catch (error) {
-            if (error?.code === '23505') return res.status(409).json({ error: 'A deletion request is already pending' });
+            if (error?.code === 'UNIQUE_CONSTRAINT') return res.status(409).json({ error: 'A deletion request is already pending' });
             if (error instanceof TypeError || error instanceof RangeError) return res.status(422).json({ error: error.message });
             sendInternalError(res, error, 'Privacy request failed');
         }
@@ -846,9 +885,8 @@ export function startDashboard(client) {
     app.post('/api/auth/logout', async (req, res) => {
         try {
             const cookies = parseCookies(req);
-            if (isSessionId(cookies.session_id) && supabase) {
-                const { error } = await supabase.from('user_sessions').delete().eq('session_id', cookies.session_id);
-                if (error) throw error;
+            if (isSessionId(cookies.session_id) && database) {
+                await execute('DELETE FROM user_sessions WHERE session_id = ?', [cookies.session_id]);
             }
             res.setHeader('Set-Cookie', cookieHeader('session_id', '', { maxAge: 0, secure: secureCookies }));
             res.json({ success: true });
@@ -930,26 +968,8 @@ export function startDashboard(client) {
             sendInternalError(res, err, 'Welcome preview failed');
         }
     });
-    const learnBucket = 'learn-images';
-    let learnBucketPromise;
-    function ensureLearnBucket() {
-        if (!learnBucketPromise) {
-            learnBucketPromise = supabase.storage.createBucket(learnBucket, {
-                public: true,
-                fileSizeLimit: LEARN_IMAGE_MAX_BYTES,
-                allowedMimeTypes: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'],
-            }).then(({ error }) => {
-                if (error && !/already exists|duplicate/i.test(error.message || '')) throw error;
-            }).catch(error => {
-                learnBucketPromise = null;
-                throw error;
-            });
-        }
-        return learnBucketPromise;
-    }
-    function learnImageUrl(imagePath) {
-        if (!imagePath) return '';
-        return supabase.storage.from(learnBucket).getPublicUrl(imagePath).data.publicUrl;
+    function learnMediaUrl(mediaPath) {
+        return mediaPath ? localMediaUrl(mediaPath) : '';
     }
     function learnActor(auth) {
         return {
@@ -958,16 +978,21 @@ export function startDashboard(client) {
         };
     }
     function learnEntryFromRequest(body, guildId, current, actor, now) {
-        const imagePath = body.imagePath === undefined
-            ? String(current?.imagePath || '')
-            : String(body.imagePath || '').trim();
-        if (imagePath && (!imagePath.startsWith(`${guildId}/`) || imagePath.includes('..'))) {
-            throw new TypeError('Invalid Learn image path');
+        const existingPath = current?.mediaPath || current?.imagePath || '';
+        const incomingPath = body.mediaPath === undefined ? body.imagePath : body.mediaPath;
+        const mediaPath = incomingPath === undefined ? String(existingPath) : String(incomingPath || '').trim();
+        if (mediaPath) {
+            validateMediaKey(mediaPath);
+            if (!mediaPath.startsWith(`${guildId}/`)) throw new TypeError('Invalid Learn media path');
         }
+        const mediaType = mediaPath
+            ? String(body.mediaType || current?.mediaType || mediaMimeType(mediaPath) || '')
+            : '';
         return {
             response: typeof body.response === 'string' ? body.response : '',
-            imageUrl: learnImageUrl(imagePath),
-            imagePath,
+            mediaUrl: learnMediaUrl(mediaPath),
+            mediaPath,
+            mediaType,
             enabled: body.enabled !== false,
             createdAt: current?.createdAt || now,
             createdBy: current?.createdBy || actor.id,
@@ -977,10 +1002,21 @@ export function startDashboard(client) {
             updatedByName: actor.name,
         };
     }
-    async function removeLearnImage(guildId, imagePath) {
-        if (!imagePath || !imagePath.startsWith(`${guildId}/`) || imagePath.includes('..')) return;
-        const { error } = await supabase.storage.from(learnBucket).remove([imagePath]);
-        if (error) console.error('[Learn] Failed to remove image:', error.message || error);
+    function learnMediaIsReferenced(entries, mediaPath, ignoredTrigger = '') {
+        if (!mediaPath) return false;
+        return Object.entries(entries).some(([trigger, entry]) =>
+            trigger !== ignoredTrigger && (entry?.mediaPath || entry?.imagePath || '') === mediaPath
+        );
+    }
+    async function removeLearnMedia(guildId, mediaPath) {
+        if (!mediaPath) return;
+        try {
+            validateMediaKey(mediaPath);
+            if (!mediaPath.startsWith(`${guildId}/`)) return;
+            await deleteLocalMedia(mediaPath);
+        } catch (error) {
+            console.error('[Learn] Failed to remove media:', error.message || error);
+        }
     }
 
     app.get('/api/guilds/:guildId/learn', async (req, res) => {
@@ -995,39 +1031,39 @@ export function startDashboard(client) {
             sendInternalError(res, error, 'Learn list failed');
         }
     });
-    app.post('/api/guilds/:guildId/learn/image', express.raw({
+    app.post('/api/guilds/:guildId/learn/media', express.raw({
         type: () => true,
-        limit: LEARN_IMAGE_MAX_BYTES,
+        limit: LEARN_MEDIA_MAX_BYTES,
     }), async (req, res) => {
         try {
             const access = await requireGuildAdministrator(req, res);
             if (!access) return;
-            if (!supabase) return res.status(503).json({ error: 'Database not configured' });
-            const image = await validateLearnImage(req.body, req.headers['content-type']);
-            await ensureLearnBucket();
-            const imagePath = `${req.params.guildId}/${crypto.randomUUID()}.${image.extension}`;
-            const { error } = await supabase.storage.from(learnBucket).upload(imagePath, req.body, {
-                contentType: image.mimeType,
-                upsert: false,
-                cacheControl: '31536000',
-            });
-            if (error) throw error;
-            res.status(201).json({ imagePath, imageUrl: learnImageUrl(imagePath) });
+            const media = await validateLearnMedia(req.body, req.headers['content-type']);
+            const mediaPath = `${req.params.guildId}/${crypto.randomUUID()}.${media.extension}`;
+            await putLocalMedia(mediaPath, req.body);
+            res.status(201).json({ mediaPath, mediaUrl: learnMediaUrl(mediaPath), mediaType: media.mimeType });
         } catch (error) {
             if (error instanceof TypeError || error instanceof RangeError) {
                 return res.status(422).json({ error: error.message });
             }
-            sendInternalError(res, error, 'Learn image upload failed');
+            sendInternalError(res, error, 'Learn media upload failed');
         }
     });
-    app.delete('/api/guilds/:guildId/learn/image', async (req, res) => {
+    app.delete('/api/guilds/:guildId/learn/media', async (req, res) => {
         try {
             const access = await requireGuildAdministrator(req, res);
             if (!access) return;
-            await removeLearnImage(req.params.guildId, String(req.body?.imagePath || ''));
+            const mediaPath = String(req.body?.mediaPath || req.body?.imagePath || '');
+            const { getArData } = await import('../utils/chatFeatures.js');
+            const all = await getArData();
+            const current = all[req.params.guildId] || {};
+            if (learnMediaIsReferenced(current, mediaPath)) {
+                return res.status(409).json({ error: 'Learn media is still referenced by a response' });
+            }
+            await removeLearnMedia(req.params.guildId, mediaPath);
             res.json({ success: true });
         } catch (error) {
-            sendInternalError(res, error, 'Learn image cleanup failed');
+            sendInternalError(res, error, 'Learn media cleanup failed');
         }
     });
     app.post('/api/guilds/:guildId/learn', async (req, res) => {
@@ -1066,8 +1102,10 @@ export function startDashboard(client) {
             delete next[originalTrigger];
             next[trigger] = entry;
             await saveArData(req.params.guildId, next);
-            if (original.imagePath && original.imagePath !== entry.imagePath) {
-                await removeLearnImage(req.params.guildId, original.imagePath);
+            const originalMediaPath = original.mediaPath || original.imagePath || '';
+            if (originalMediaPath && originalMediaPath !== entry.mediaPath
+                && !learnMediaIsReferenced(next, originalMediaPath, trigger)) {
+                await removeLearnMedia(req.params.guildId, originalMediaPath);
             }
             res.json({ trigger, entry });
         } catch (error) {
@@ -1088,7 +1126,8 @@ export function startDashboard(client) {
             const next = { ...current };
             delete next[trigger];
             await saveArData(req.params.guildId, next);
-            await removeLearnImage(req.params.guildId, entry.imagePath);
+            const mediaPath = entry.mediaPath || entry.imagePath || '';
+            if (!learnMediaIsReferenced(next, mediaPath)) await removeLearnMedia(req.params.guildId, mediaPath);
             res.json({ success: true });
         } catch (error) {
             if (error instanceof TypeError || error instanceof RangeError) return res.status(400).json({ error: error.message });
@@ -1198,7 +1237,7 @@ export function startDashboard(client) {
             res.json({ success: true, configVersion: Number(nextVersion) });
         } catch (error) {
             if (configConflict(error)) return res.status(409).json({ error: 'Settings changed. Reload before rolling back.' });
-            if (error?.code === 'PGRST116' || error?.code === 'P0002' || String(error?.message || '').includes('CONFIG_HISTORY_NOT_FOUND')) {
+            if (error?.code === 'NOT_FOUND') {
                 return res.status(404).json({ error: 'Configuration history version not found' });
             }
             if (/^Invalid /.test(error.message || '')) return res.status(400).json({ error: error.message });
@@ -1427,7 +1466,7 @@ export function startDashboard(client) {
             if (!guildMember || (!guildMember.permissions.has('Administrator') && !guildMember.permissions.has('ManageGuild'))) {
                 return res.status(403).json({ error: 'Forbidden: You do not have Administrator permissions on this server.' });
             }
-            if (!supabase) return res.status(500).json({ error: 'Database not configured' });
+            if (!database) return res.status(500).json({ error: 'Database not configured' });
             const cleanBody = sanitizePayload(req.body);
             const expectedVersion = Number(cleanBody.configVersion);
             if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 0) {
@@ -1564,7 +1603,7 @@ export function startDashboard(client) {
                     name: server.port === 25565 ? server.ip : `${server.ip}:${server.port}`,
                 }, client).catch(err => console.error('Immediate status update error:', err))).catch(console.error);
             }
-            res.json({ success: true, configVersion: Number(nextVersion), message: 'Configuration saved to Supabase successfully!' });
+            res.json({ success: true, configVersion: Number(nextVersion), message: 'Configuration saved successfully!' });
         } catch (err) {
             console.error('[Dashboard Config Save Error]:', err);
             sendInternalError(res, err, 'API request failed');
@@ -1587,13 +1626,10 @@ export function startDashboard(client) {
                 return res.status(400).json({ error: 'Invalid payment data' });
             }
             if (code !== '00') return res.json({ success: true });
-            if (!supabase) return res.status(503).json({ error: 'Database unavailable' });
+            if (!database) return res.status(503).json({ error: 'Database unavailable' });
 
-            const { data: txn, error: txnError } = await supabase.from('bank_transactions')
-                .select('guild_id, channel_id, user_id, amount, status')
-                .eq('order_code', normalizedOrderCode)
-                .maybeSingle();
-            if (txnError) throw txnError;
+            const txn = await one(`SELECT guild_id, channel_id, user_id, amount, status
+                FROM bank_transactions WHERE order_code = ? LIMIT 1`, [normalizedOrderCode]);
             if (!txn) return res.status(404).json({ error: 'Transaction not found' });
 
             const bankConfig = await getBankConfig(txn.guild_id);
@@ -1612,13 +1648,9 @@ export function startDashboard(client) {
             if (String(txn.status).toLowerCase() === 'paid') return res.json({ success: true });
 
             const paidAt = new Date().toISOString();
-            const { data: updated, error: paidError } = await supabase.from('bank_transactions')
-                .update({ status: 'paid', paid_at: paidAt, updated_at: paidAt })
-                .eq('order_code', normalizedOrderCode)
-                .neq('status', 'paid')
-                .select('order_code')
-                .maybeSingle();
-            if (paidError) throw paidError;
+            const updated = await one(`UPDATE bank_transactions SET status = 'paid', paid_at = ?, updated_at = ?
+                WHERE order_code = ? AND lower(status) != 'paid' RETURNING order_code`,
+            [paidAt, paidAt, normalizedOrderCode]);
             if (!updated) return res.json({ success: true });
 
             const notifChannelId = bankConfig?.notificationChannelId;
@@ -1669,44 +1701,35 @@ export function startDashboard(client) {
                 return res.status(400).json({ error: 'Invalid payload' });
             }
 
-            if (supabase) {
-                wlog('lookup request_id=', normalizedRequestId);
-                const { data: txn, error: txnError } = await supabase.from('card_transactions').select('guild_id, channel_id, message_id, status').eq('request_id', normalizedRequestId).maybeSingle();
-
-                if (txnError || !txn) {
-                    console.warn(`[Card2K Webhook] Transaction not found: request_id=${normalizedRequestId}`);
-                    return res.status(404).json({ error: 'Transaction not found' });
-                }
-
-                const cardCfg = await getCardConfig(txn.guild_id);
-
-                if (cardCfg.configured) {
-                    const partnerKey = cardCfg.partnerKey;
-                    const signString = partnerKey + normalizedCode + normalizedSerial;
-                    const computedSignature = crypto.createHash('md5').update(signString).digest('hex');
-
-
-                    if (!safeEqualString(computedSignature, normalizedSignature)) {
-                        console.warn(`[Card2K Webhook] Signature mismatch for request_id=${normalizedRequestId}`);
-                        return res.status(401).json({ error: 'Invalid Signature - Unauthorized' });
-                    }
-                    wlog('signature ok, status=', status, 'telco=', telco, 'trans_id=', trans_id);
-
-
-
-                    const outcome = await applyCardResult(client, {
-                        request_id: normalizedRequestId,
-                        status,
-                        message: String(message || '').slice(0, 1000),
-                        trans_id: String(trans_id || '').slice(0, 128),
-                        value,
-                        declared_value,
-                    }, 'Webhook');
-                    wlog('apply result:', outcome.applied ? 'applied' : `skipped (${outcome.reason})`);
-                } else {
-                    console.warn('[Card2K Webhook] Card2K config unavailable for guild:', txn.guild_id);
-                }
+            if (!database) return res.status(503).json({ error: 'Database unavailable' });
+            wlog('lookup request_id=', normalizedRequestId);
+            const txn = await one(`SELECT guild_id, channel_id, message_id, status
+                FROM card_transactions WHERE request_id = ? LIMIT 1`, [normalizedRequestId]);
+            if (!txn) {
+                console.warn(`[Card2K Webhook] Transaction not found: request_id=${normalizedRequestId}`);
+                return res.status(404).json({ error: 'Transaction not found' });
             }
+
+            const cardCfg = await getCardConfig(txn.guild_id);
+            if (!cardCfg.configured) {
+                console.warn('[Card2K Webhook] Card2K config unavailable for guild:', txn.guild_id);
+                return res.status(503).json({ error: 'Card2K config unavailable' });
+            }
+            const computedSignature = createCard2KSignature(cardCfg.partnerKey, normalizedCode, normalizedSerial);
+            if (!safeEqualString(computedSignature, normalizedSignature)) {
+                console.warn(`[Card2K Webhook] Signature mismatch for request_id=${normalizedRequestId}`);
+                return res.status(401).json({ error: 'Invalid Signature - Unauthorized' });
+            }
+            wlog('signature ok, status=', status, 'telco=', telco, 'trans_id=', trans_id);
+            const outcome = await applyCardResult(client, {
+                request_id: normalizedRequestId,
+                status,
+                message: String(message || '').slice(0, 1000),
+                trans_id: String(trans_id || '').slice(0, 128),
+                value,
+                declared_value,
+            }, 'Webhook');
+            wlog('apply result:', outcome.applied ? 'applied' : `skipped (${outcome.reason})`);
             res.json({ success: true });
         } catch (err) {
             console.error('[Card2K Webhook Error]:', err);
@@ -1783,14 +1806,9 @@ export function startDashboard(client) {
             if (!auth || auth.session.user_id !== process.env.BOT_OWNER_ID) {
                 return res.status(403).json({ error: 'Forbidden: Admin access only' });
             }
-            if (!supabase) return res.json([]);
-            const { data, error } = await supabase
-                .from('bot_activities')
-                .select('timestamp, guild_name, user_id, action, details')
-                .order('timestamp', { ascending: false })
-                .limit(100);
-            if (error) throw error;
-            res.json(data || []);
+            if (!database) return res.json([]);
+            res.json(await all(`SELECT timestamp, guild_name, user_id, action, details
+                FROM bot_activities ORDER BY timestamp DESC LIMIT 100`));
         } catch (err) {
             sendInternalError(res, err, 'API request failed');
         }
@@ -1801,7 +1819,7 @@ export function startDashboard(client) {
             res.json({
                 overall: await getOverallStatus(),
                 services: await getAllServicesStatus(),
-                databaseLayers: health.layers,
+                databaseLayers: { ...health.layers, storage: getLocalMediaHealthSnapshot() },
                 databaseCircuit: health.circuit,
                 databaseUpdatedAt: health.updatedAt,
             });
@@ -1825,9 +1843,9 @@ export function startDashboard(client) {
             let totalUsers = 0;
             client.guilds.cache.forEach(g => { totalUsers += g.memberCount; });
             let activeSessions = 0;
-            if (supabase) {
-                const { count } = await supabase.from('user_sessions').select('*', { count: 'exact', head: true }).gt('expires_at', new Date().toISOString());
-                activeSessions = count || 0;
+            if (database) {
+                const row = await one('SELECT COUNT(*) AS total FROM user_sessions WHERE expires_at > ?', [new Date().toISOString()]);
+                activeSessions = Number(row?.total || 0);
             }
             res.json({
                 guilds: client.guilds.cache.size,
@@ -1850,30 +1868,21 @@ export function startDashboard(client) {
     });
     app.get('/api/admin/growth', requireAdmin, async (req, res) => {
         try {
-            if (!supabase) return res.json([]);
-            const { data, error } = await supabase
-                .from('bot_growth_snapshots')
-                .select('id, timestamp, guild_count, user_count, memory_mb, avg_ping')
-                .order('timestamp', { ascending: true })
-                .limit(200);
-            if (error) throw error;
-            res.json(data || []);
+            if (!database) return res.json([]);
+            res.json(await all(`SELECT id, timestamp, guild_count, user_count, memory_mb, avg_ping
+                FROM bot_growth_snapshots ORDER BY timestamp ASC LIMIT 200`));
         } catch (err) {
             sendInternalError(res, err, 'API request failed');
         }
     });
     app.get('/api/admin/sessions', requireAdmin, async (req, res) => {
         try {
-            if (!supabase) return res.json([]);
-            const { data, error } = await supabase
-                .from('user_sessions')
-                .select('session_id, user_id, username, avatar, updated_at, expires_at')
-                .order('updated_at', { ascending: false })
-                .limit(50);
-            if (error) throw error;
+            if (!database) return res.json([]);
+            const data = await all(`SELECT session_id, user_id, username, avatar, updated_at, expires_at
+                FROM user_sessions ORDER BY updated_at DESC LIMIT 50`);
             const revokeSecret = process.env.ENCRYPTION_SECRET;
             if (!revokeSecret) throw new Error('ENCRYPTION_SECRET must be set');
-            res.json((data || []).map(session => ({
+            res.json(data.map(session => ({
                 user_id: session.user_id,
                 username: session.username,
                 avatar: session.avatar,
@@ -1887,11 +1896,10 @@ export function startDashboard(client) {
     });
     app.post('/api/admin/sessions/revoke', requireAdmin, async (req, res) => {
         try {
-            if (!supabase) return res.status(500).json({ error: 'No database' });
+            if (!database) return res.status(500).json({ error: 'No database' });
             const sessionId = parseSessionRevokeToken(req.body?.token, process.env.ENCRYPTION_SECRET);
             if (!isSessionId(sessionId)) return res.status(400).json({ error: 'Invalid or expired revoke token' });
-            const { error } = await supabase.from('user_sessions').delete().eq('session_id', sessionId);
-            if (error) throw error;
+            await execute('DELETE FROM user_sessions WHERE session_id = ?', [sessionId]);
             const forwardedFor = req.headers['x-forwarded-for'];
             const ip = (Array.isArray(forwardedFor) ? forwardedFor[0] : forwardedFor)?.split(',')[0]?.trim() || req.socket.remoteAddress;
             logSecurityEvent('SESSION_REVOKE', ip, req.headers['user-agent'], 'Revoked dashboard session');
@@ -1902,29 +1910,24 @@ export function startDashboard(client) {
     });
     app.get('/api/admin/security-log', requireAdmin, async (req, res) => {
         try {
-            if (!supabase) return res.json([]);
-            const { data, error } = await supabase
-                .from('security_logs')
-                .select('id, timestamp, event_type, ip_address, user_agent, details')
-                .order('timestamp', { ascending: false })
-                .limit(100);
-            if (error) throw error;
-            res.json(data || []);
+            if (!database) return res.json([]);
+            res.json(await all(`SELECT id, timestamp, event_type, ip_address, user_agent, details
+                FROM security_logs ORDER BY timestamp DESC LIMIT 100`));
         } catch (err) {
             sendInternalError(res, err, 'API request failed');
         }
     });
     async function saveGrowthSnapshot() {
-        if (!supabase) return;
+        if (!database) return;
         let totalUsers = 0;
         client.guilds.cache.forEach(g => { totalUsers += g.memberCount; });
-        const { error } = await supabase.from('bot_growth_snapshots').insert([{
-            guild_count: client.guilds.cache.size,
-            user_count: totalUsers,
-            memory_mb: +(process.memoryUsage().rss / 1024 / 1024).toFixed(2),
-            avg_ping: client.ws.ping,
-        }]);
-        if (error) throw error;
+        await execute(`INSERT INTO bot_growth_snapshots (guild_count, user_count, memory_mb, avg_ping)
+            VALUES (?, ?, ?, ?)`, [
+            client.guilds.cache.size,
+            totalUsers,
+            +(process.memoryUsage().rss / 1024 / 1024).toFixed(2),
+            client.ws.ping,
+        ]);
         console.log('[Admin] Growth snapshot saved.');
     }
     const growthSnapshotJob = createBackgroundJob('Admin Growth Snapshot', saveGrowthSnapshot);
@@ -1945,23 +1948,25 @@ export function startDashboard(client) {
             if (!guildMember || (!guildMember.permissions.has('Administrator') && !guildMember.permissions.has('ManageGuild'))) {
                 return res.status(403).json({ error: 'Forbidden' });
             }
-            if (!supabase) return res.status(500).json({ error: 'Database not configured' });
+            if (!database) return res.status(500).json({ error: 'Database not configured' });
             const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1);
             const pageSize = Math.min(100, Math.max(1, Number.parseInt(req.query.limit, 10) || 50));
             const from = (page - 1) * pageSize;
-            const { data, error, count } = await supabase
-                .from('ticket_transcripts')
-                .select('id, ticket_name, created_at, creator_id, closed_by, claimed_by', { count: 'exact' })
-                .eq('guild_id', guildId)
-                .order('created_at', { ascending: false })
-                .range(from, from + pageSize - 1);
-            if (error) throw error;
+            const [items, countRow] = await Promise.all([
+                all(`SELECT id, ticket_name, created_at, creator_id, closed_by, claimed_by
+                    FROM ticket_transcripts
+                    WHERE guild_id = ?
+                    ORDER BY created_at DESC
+                    LIMIT ? OFFSET ?`, [guildId, pageSize, from]),
+                one('SELECT COUNT(*) AS total FROM ticket_transcripts WHERE guild_id = ?', [guildId]),
+            ]);
+            const total = Number(countRow?.total || 0);
             res.json({
-                items: data || [],
+                items,
                 page,
                 pageSize,
-                total: count || 0,
-                totalPages: Math.max(1, Math.ceil((count || 0) / pageSize)),
+                total,
+                totalPages: Math.max(1, Math.ceil(total / pageSize)),
             });
         } catch (err) {
             console.error('[API /transcripts] Error:', err);
@@ -1971,17 +1976,17 @@ export function startDashboard(client) {
 
     app.get('/api/transcript/:id', async (req, res) => {
         try {
-            if (!supabase) return res.status(500).json({ error: 'Supabase not configured' });
+            if (!database) return res.status(500).json({ error: 'Database not configured' });
             const { id } = req.params;
             const authHeader = typeof req.headers.authorization === 'string' ? req.headers.authorization : '';
             const transcriptPassword = authHeader.startsWith('Transcript ') ? authHeader.slice(11) : '';
 
-            const { data, error } = await supabase
-                .from('ticket_transcripts')
-                .select('id, guild_id, ticket_name, password, closed_by, claimed_by, creator_id, messages, created_at, expires_at')
-                .eq('id', id)
-                .maybeSingle();
-            if (error || !data) return res.status(404).json({ error: 'Transcript not found or expired' });
+            const data = await one(`SELECT id, guild_id, ticket_name, password, closed_by, claimed_by,
+                creator_id, messages, created_at, expires_at
+                FROM ticket_transcripts
+                WHERE id = ? AND expires_at >= ?
+                LIMIT 1`, [id, new Date().toISOString()]);
+            if (!data) return res.status(404).json({ error: 'Transcript not found or expired' });
 
             let hasAdminBypass = false;
             try {
@@ -2013,18 +2018,27 @@ export function startDashboard(client) {
     });
 
     const transcriptCleanupJob = createBackgroundJob('Transcript Cleanup', async () => {
-        if (!supabase) return;
-        const { error } = await supabase.from('ticket_transcripts').delete().lt('expires_at', new Date().toISOString());
-        if (error) throw error;
+        if (!database) return;
+        await execute('DELETE FROM ticket_transcripts WHERE expires_at < ?', [new Date().toISOString()]);
     });
     const transcriptCleanupTimer = setInterval(() => { transcriptCleanupJob.run(); }, 24 * 60 * 60 * 1000);
     transcriptCleanupTimer.unref?.();
 
-    app.listen(port, () => {
+    const server = app.listen(port, () => {
         const baseUrl = process.env.DASHBOARD_URL || `http://localhost:${port}`;
         console.log(`🌐 [Dashboard] Web Server running at ${baseUrl}`);
         console.log(`   └─ Status Page: ${baseUrl}/status`);
         console.log(`   └─ Admin Panel: ${baseUrl}/admin`);
         console.log(`   └─ Bot Control Dashboard: ${baseUrl}/`);
     });
+    return {
+        app,
+        server,
+        close() {
+            clearTimeout(growthStartupTimer);
+            clearInterval(growthInterval);
+            clearInterval(transcriptCleanupTimer);
+            return new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+        },
+    };
 }

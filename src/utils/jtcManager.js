@@ -9,7 +9,7 @@ import {
   StringSelectMenuBuilder,
 } from 'discord.js';
 import { EmbedBuilder } from './embed.js';
-import { isSupabaseUnavailable, supabase } from '../database/supabaseClient.js';
+import { all, batch, database, execute, isDatabaseUnavailable, one } from '../database/client.js';
 import { getSection, saveSection } from '../database/guildSettings.js';
 
 export const JTCEmojis = {
@@ -89,11 +89,13 @@ export function selectJtcSuccessor(members, previousOwnerId) {
 }
 
 let jtcConfigCache = null;
-export async function getJtcSettings(guildId, forceRefresh = false) {
-  if (!forceRefresh && jtcConfigCache?.[guildId]) return jtcConfigCache[guildId];
-  const config = normalizeJtcConfig(await getSection(guildId, 'jtc'));
-  jtcConfigCache ||= {};
-  jtcConfigCache[guildId] = config;
+export async function getJtcSettings(guildId, forceRefresh = false, db = database) {
+  if (db === database && !forceRefresh && jtcConfigCache?.[guildId]) return jtcConfigCache[guildId];
+  const config = normalizeJtcConfig(await getSection(guildId, 'jtc', forceRefresh, db));
+  if (db === database) {
+    jtcConfigCache ||= {};
+    jtcConfigCache[guildId] = config;
+  }
   return config;
 }
 
@@ -102,11 +104,11 @@ export function setJtcSettingsCache(guildId, value) {
   jtcConfigCache[guildId] = normalizeJtcConfig(value);
 }
 
-export async function saveJtcSettings(guildId, patch) {
-  const current = await getJtcSettings(guildId, true);
+export async function saveJtcSettings(guildId, patch, db = database) {
+  const current = await getJtcSettings(guildId, true, db);
   const config = normalizeJtcConfig({ ...current, ...patch });
-  await saveSection(guildId, 'jtc', config);
-  setJtcSettingsCache(guildId, config);
+  await saveSection(guildId, 'jtc', config, null, null, db);
+  if (db === database) setJtcSettingsCache(guildId, config);
   return config;
 }
 
@@ -114,11 +116,10 @@ export async function getJtcConfig(forceRefresh = false) {
   if (jtcConfigCache && !forceRefresh) {
     return Object.fromEntries(Object.entries(jtcConfigCache).map(([guildId, config]) => [guildId, config.hubChannelId]));
   }
-  if (!supabase) return {};
-  const { data, error } = await supabase.from('guild_settings').select('guild_id, jtc');
-  if (error) throw error;
   jtcConfigCache = {};
-  for (const row of data || []) jtcConfigCache[row.guild_id] = normalizeJtcConfig(row.jtc);
+  for (const row of await all('SELECT guild_id, jtc FROM guild_settings')) {
+    jtcConfigCache[row.guild_id] = normalizeJtcConfig(row.jtc);
+  }
   return Object.fromEntries(Object.entries(jtcConfigCache).map(([guildId, config]) => [guildId, config.hubChannelId]));
 }
 
@@ -135,12 +136,11 @@ export async function setJtcHub(guildId, hubChannelId) {
 
 let hasLoadedActive = false;
 global.JTC_ACTIVE_MEMORY ||= {};
-export async function getJtcActive() {
-  if (hasLoadedActive || !supabase) return global.JTC_ACTIVE_MEMORY;
-  const { data, error } = await supabase.from('jtc_active').select('*');
-  if (error) throw error;
+export async function getJtcActive(db = database) {
+  if (db === database && (hasLoadedActive || !database)) return global.JTC_ACTIVE_MEMORY;
+  if (!db) return {};
   const active = {};
-  for (const row of data || []) {
+  for (const row of await all('SELECT * FROM jtc_active', [], db)) {
     active[row.guild_id] ||= {};
     active[row.guild_id][row.channel_id] = {
       ownerId: row.owner_id,
@@ -149,42 +149,31 @@ export async function getJtcActive() {
       lastLfmAt: Number(row.last_lfm_at || 0),
     };
   }
-  global.JTC_ACTIVE_MEMORY = active;
-  hasLoadedActive = true;
+  if (db === database) {
+    global.JTC_ACTIVE_MEMORY = active;
+    hasLoadedActive = true;
+  }
   return active;
 }
 
-export async function saveJtcActive(data, guildId = null) {
-  global.JTC_ACTIVE_MEMORY = data;
-  if (!supabase) return;
+export async function saveJtcActive(data, guildId = null, db = database) {
+  if (db === database) global.JTC_ACTIVE_MEMORY = data;
+  if (!db) return;
   const guildIds = guildId ? [guildId] : Object.keys(data);
   for (const currentGuildId of guildIds) {
-    const rows = Object.entries(data[currentGuildId] || {}).map(([channelId, info]) => ({
-      guild_id: currentGuildId,
-      channel_id: channelId,
-      owner_id: info.ownerId,
-      control_message_id: info.controlMessageId || null,
-      status: info.status || null,
-      last_lfm_at: Number(info.lastLfmAt || 0),
+    const rows = Object.entries(data[currentGuildId] || {});
+    const statements = rows.map(([channelId, info]) => ({
+      sql: `INSERT INTO jtc_active (guild_id, channel_id, owner_id, control_message_id, status, last_lfm_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(channel_id) DO UPDATE SET guild_id = excluded.guild_id, owner_id = excluded.owner_id,
+          control_message_id = excluded.control_message_id, status = excluded.status, last_lfm_at = excluded.last_lfm_at`,
+      args: [currentGuildId, channelId, info.ownerId, info.controlMessageId || null, info.status || null, Number(info.lastLfmAt || 0)],
     }));
-    if (!rows.length) {
-      const { error } = await supabase.from('jtc_active').delete().eq('guild_id', currentGuildId);
-      if (error) throw error;
-      continue;
-    }
-
-    const { error: upsertError } = await supabase.from('jtc_active').upsert(rows);
-    if (upsertError) throw upsertError;
-
-    const { data: persisted, error: selectError } = await supabase.from('jtc_active')
-      .select('channel_id').eq('guild_id', currentGuildId);
-    if (selectError) throw selectError;
-    const currentIds = new Set(rows.map(row => row.channel_id));
-    const staleIds = (persisted || []).map(row => row.channel_id).filter(channelId => !currentIds.has(channelId));
-    if (staleIds.length) {
-      const { error: deleteError } = await supabase.from('jtc_active').delete().in('channel_id', staleIds);
-      if (deleteError) throw deleteError;
-    }
+    const ids = rows.map(([channelId]) => channelId);
+    statements.push(ids.length
+      ? { sql: `DELETE FROM jtc_active WHERE guild_id = ? AND channel_id NOT IN (${ids.map(() => '?').join(', ')})`, args: [currentGuildId, ...ids] }
+      : { sql: 'DELETE FROM jtc_active WHERE guild_id = ?', args: [currentGuildId] });
+    await batch(statements, 'write', db);
   }
 }
 
@@ -201,42 +190,30 @@ const profileFromRow = row => normalizeJtcProfile({
   isNsfw: row.is_nsfw,
 });
 
-export async function getJtcProfile(guildId, userId, forceRefresh = false) {
+export async function getJtcProfile(guildId, userId, forceRefresh = false, db = database) {
   const key = profileKey(guildId, userId);
-  if (!forceRefresh && jtcProfileCache.has(key)) return { ...jtcProfileCache.get(key) };
-  if (!supabase) return null;
-
-  let { data, error } = await supabase.from('jtc_profiles')
-    .select('*').eq('guild_id', guildId).eq('user_id', userId).maybeSingle();
-  if (error) throw error;
-  if (!data) {
-    ({ data, error } = await supabase.from('jtc_profiles')
-      .select('*').eq('guild_id', '').eq('user_id', userId).maybeSingle());
-    if (error) throw error;
-  }
+  if (db === database && !forceRefresh && jtcProfileCache.has(key)) return { ...jtcProfileCache.get(key) };
+  if (!db) return null;
+  const data = await one(`SELECT * FROM jtc_profiles WHERE user_id = ? AND guild_id IN (?, '')
+    ORDER BY CASE WHEN guild_id = ? THEN 0 ELSE 1 END LIMIT 1`, [userId, guildId, guildId], db);
   if (!data) return null;
   const profile = profileFromRow(data);
-  jtcProfileCache.set(key, profile);
+  if (db === database) jtcProfileCache.set(key, profile);
   return { ...profile };
 }
 
 export async function saveJtcProfile(guildId, userId, value, maximumBitrate = 96000) {
   const profile = normalizeJtcProfile(value, maximumBitrate);
   if (!profile.name) throw new TypeError('Channel name is required.');
-  if (supabase) {
-    const { error } = await supabase.from('jtc_profiles').upsert({
-      guild_id: guildId,
-      user_id: userId,
-      name: profile.name,
-      limit: profile.limit,
-      bitrate: profile.bitrate,
-      status: profile.status || null,
-      rtc_region: profile.rtcRegion || null,
-      is_locked: profile.isLocked,
-      is_hidden: profile.isHidden,
-      is_nsfw: profile.isNsfw,
-    }, { onConflict: 'guild_id,user_id' });
-    if (error) throw error;
+  if (database) {
+    await execute(`INSERT INTO jtc_profiles (
+      guild_id, user_id, name, "limit", bitrate, status, rtc_region, is_locked, is_hidden, is_nsfw
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(guild_id, user_id) DO UPDATE SET
+      name = excluded.name, "limit" = excluded."limit", bitrate = excluded.bitrate, status = excluded.status,
+      rtc_region = excluded.rtc_region, is_locked = excluded.is_locked, is_hidden = excluded.is_hidden, is_nsfw = excluded.is_nsfw`,
+    [guildId, userId, profile.name, profile.limit, profile.bitrate, profile.status || null,
+      profile.rtcRegion || null, profile.isLocked ? 1 : 0, profile.isHidden ? 1 : 0, profile.isNsfw ? 1 : 0]);
   }
   jtcProfileCache.set(profileKey(guildId, userId), profile);
   return { ...profile };
@@ -328,8 +305,8 @@ export function buildJtcDashboard(channel, member) {
   };
 }
 
-export async function refreshJtcDashboard(channel, owner) {
-  const active = await getJtcActive();
+export async function refreshJtcDashboard(channel, owner, db = database) {
+  const active = await getJtcActive(db);
   const info = active[channel.guild.id]?.[channel.id];
   if (!info) return;
   const payload = buildJtcDashboard(channel, owner);
@@ -339,7 +316,7 @@ export async function refreshJtcDashboard(channel, owner) {
   if (message) await message.edit(payload);
   else message = await channel.send(payload);
   info.controlMessageId = message.id;
-  await saveJtcActive(active, channel.guild.id);
+  await saveJtcActive(active, channel.guild.id, db);
 }
 
 export async function updateJtcOwner(channel, previousOwnerId, nextOwner) {
@@ -450,7 +427,7 @@ export async function handleVoiceStateUpdate(oldState, newState) {
       if (profile.status) await setJtcVoiceStatus(tempChannel, profile.status);
       await refreshJtcDashboard(tempChannel, member);
     } catch (error) {
-      if (!isSupabaseUnavailable(error)) console.error('[JTC] Error creating temp channel:', error);
+      if (!isDatabaseUnavailable(error)) console.error('[JTC] Error creating temp channel:', error);
     }
   }
 

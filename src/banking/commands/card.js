@@ -1,8 +1,7 @@
 import { EmbedBuilder } from 'discord.js';
-import crypto from 'crypto';
-import { supabase } from '../../database/supabaseClient.js';
-import { getCardConfig } from '../cardConfig.js';
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID } from 'node:crypto';
+import { database, execute } from '../../database/client.js';
+import { createCard2KSignature, getCardConfig } from '../cardConfig.js';
 import { wakeCardStatusPoller } from '../cardPoller.js';
 export async function handleCardCommand(message) {
     const args = message.content.trim().split(/\s+/);
@@ -62,42 +61,32 @@ export async function handleCardCommand(message) {
         return message.reply(`❌ Card2K chưa sẵn sàng (${config.status}). Admin hãy dùng \`/setup-card\`.`);
     }
     const { partnerId, partnerKey, domain } = config;
-    const requestId = uuidv4().replace(/-/g, '');
+    const requestId = randomUUID().replaceAll('-', '');
     const command = 'charging';
-    const signString = partnerKey + code + serial;
-    const sign = crypto.createHash('md5').update(signString).digest('hex');
+    const sign = createCard2KSignature(partnerKey, code, serial);
     const url = `https://${domain}/chargingws/v2`;
 
 
-    if (supabase) {
-        const { error: preErr } = await supabase.from('card_transactions').insert([{
-            request_id: requestId,
-            guild_id: message.guild.id,
-            user_id: message.author.id,
-            telco: telco,
-            amount: parseInt(amount),
-            serial: serial,
-            code: code,
-            status: 0,
-            message: 'Đang gửi tới cổng thẻ...'
-        }]);
-        if (preErr) {
-            console.error('[Card] Pre-insert failed:', preErr);
-            return message.reply('❌ Lỗi cơ sở dữ liệu, không thể tạo giao dịch. Vui lòng báo Admin.');
-        }
+    if (!database) return message.reply('❌ Database chưa được cấu hình.');
+    try {
+        await execute(`INSERT INTO card_transactions (
+          request_id, guild_id, user_id, telco, amount, serial, code, status, message
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)`, [
+            requestId, message.guild.id, message.author.id, telco, parseInt(amount), serial, code, 'Đang gửi tới cổng thẻ...',
+        ]);
         wakeCardStatusPoller();
+    } catch (error) {
+        console.error('[Card] Pre-insert failed:', error);
+        return message.reply('❌ Lỗi cơ sở dữ liệu, không thể tạo giao dịch. Vui lòng báo Admin.');
     }
 
-
-    const finalize = async (fields) => {
-        if (!supabase) return;
-
-
-        const { error } = await supabase.from('card_transactions')
-            .update({ ...fields, updated_at: new Date().toISOString() })
-            .eq('request_id', requestId)
-            .eq('status', 0);
-        if (error) console.error('[Card] Finalize failed:', error);
+    const finalize = async ({ status, message: resultMessage }) => {
+        try {
+            await execute(`UPDATE card_transactions SET status = ?, message = ?, updated_at = ?
+              WHERE request_id = ? AND status = 0`, [status, resultMessage, new Date().toISOString(), requestId]);
+        } catch (error) {
+            console.error('[Card] Finalize failed:', error);
+        }
     };
     try {
         const callbackUrl = `${process.env.DASHBOARD_URL || 'http://localhost:' + (process.env.DASHBOARD_PORT || 3000)}/api/webhooks/card2k`;
@@ -117,8 +106,10 @@ export async function handleCardCommand(message) {
                 'Accept': 'application/json',
                 'Content-Type': 'application/x-www-form-urlencoded'
             },
-            body: formData.toString()
+            body: formData.toString(),
+            signal: AbortSignal.timeout(15000),
         });
+        if (!response.ok) throw new Error(`Card2K HTTP ${response.status}`);
         const data = await response.json();
         if (data.status === 99 || data.status === 1 || data.status === 2) {
             const embed = new EmbedBuilder()
@@ -129,11 +120,13 @@ export async function handleCardCommand(message) {
             const replyMsg = await message.reply({ embeds: [embed] });
 
 
-            if (supabase && replyMsg) {
-                const { error: locErr } = await supabase.from('card_transactions')
-                    .update({ channel_id: replyMsg.channelId, message_id: replyMsg.id })
-                    .eq('request_id', requestId);
-                if (locErr) console.error('[Card] Failed to save message location:', locErr);
+            if (replyMsg) {
+                try {
+                    await execute(`UPDATE card_transactions SET channel_id = ?, message_id = ?, updated_at = ?
+                      WHERE request_id = ?`, [replyMsg.channelId, replyMsg.id, new Date().toISOString(), requestId]);
+                } catch (error) {
+                    console.error('[Card] Failed to save message location:', error);
+                }
             }
             await finalize({ status: data.status, message: data.message || '' });
             return;
