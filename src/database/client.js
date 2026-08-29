@@ -1,10 +1,10 @@
-import { createClient } from '@libsql/client';
+import { VanillaDatabase } from '@nullex/vanilladb';
 import { decodeDatabaseRow } from './codecs.js';
 
 const DATABASE_TIMEOUT_MS = 15_000;
 const DATABASE_BACKOFF_MAX_MS = 5 * 60 * 1000;
-const tursoUrl = process.env.TURSO_DATABASE_URL;
-const tursoAuthToken = process.env.TURSO_AUTH_TOKEN;
+const vanillaDbUrl = process.env.VANILLA_DB_URL || process.env.TURSO_DATABASE_URL;
+const vanillaDbToken = process.env.VANILLA_DB_TOKEN || process.env.TURSO_AUTH_TOKEN;
 
 let failureCount = 0;
 let unavailableUntil = 0;
@@ -19,17 +19,20 @@ const databaseHealth = {
   database: { status: 'unknown', latencyMs: null, lastSuccessAt: null, lastErrorAt: null, error: null },
 };
 
-export function createDatabaseClient({ url, authToken } = {}) {
-  if (!url) return null;
-  return createClient({ url, ...(authToken ? { authToken } : {}) });
+export function createDatabaseClient({ url, authToken, token } = {}) {
+  const finalUrl = url;
+  const finalToken = token || authToken;
+  if (!finalUrl) return null;
+  return new VanillaDatabase({ url: finalUrl, token: finalToken || '' });
 }
 
-export const database = createDatabaseClient({ url: tursoUrl, authToken: tursoAuthToken });
+export const database = createDatabaseClient({ url: vanillaDbUrl, token: vanillaDbToken });
 
 function safeHealthError(error) {
   const code = String(error?.code || 'UNAVAILABLE').slice(0, 40);
   const message = String(error?.message || 'Health check failed')
-    .replace(/(?:libsql|https?|wss?):\/\/[^\s]+/gi, '[redacted]')
+    .replace(/(?:libsql|vanilla|https?|wss?):\/\/[^\s]+/gi, '[redacted]')
+    .replace(/vdb_live_[a-zA-Z0-9_-]+/g, '[redacted]')
     .slice(0, 200);
   return { code, message };
 }
@@ -74,17 +77,19 @@ export function isDatabaseUnavailable(error) {
     || text.includes('connection refused')
     || text.includes('network error')
     || text.includes('websocket') && text.includes('closed')
-    || text.includes('operation was aborted due to timeout');
+    || text.includes('operation was aborted due to timeout')
+    || text.includes('vanilladatabase query failed: 5');
 }
 
 export function normalizeDatabaseError(error) {
   if (!error || typeof error !== 'object') return error;
+  const msg = String(error.message || '').toUpperCase();
   const extended = String(error.code || error.rawCode || error.extendedCode || error.cause?.code || '').toUpperCase();
-  if (extended.includes('CONSTRAINT_UNIQUE') || extended.includes('CONSTRAINT_PRIMARYKEY')) {
+  if (extended.includes('CONSTRAINT_UNIQUE') || extended.includes('CONSTRAINT_PRIMARYKEY') || msg.includes('UNIQUE CONSTRAINT FAILED')) {
     error.code = 'UNIQUE_CONSTRAINT';
-  } else if (extended.includes('CONSTRAINT_FOREIGNKEY')) {
+  } else if (extended.includes('CONSTRAINT_FOREIGNKEY') || msg.includes('FOREIGN KEY CONSTRAINT FAILED')) {
     error.code = 'FOREIGN_KEY_CONSTRAINT';
-  } else if (extended.includes('CONSTRAINT_CHECK')) {
+  } else if (extended.includes('CONSTRAINT_CHECK') || msg.includes('CHECK CONSTRAINT FAILED')) {
     error.code = 'CHECK_CONSTRAINT';
   }
   return error;
@@ -171,51 +176,117 @@ async function runOperation(db, operation) {
   }
 }
 
-export function execute(sql, args = {}, db = database) {
-  return runOperation(db, () => db.execute({ sql, args }));
+function formatSqlArgs(args) {
+  if (!args) return [];
+  if (Array.isArray(args)) return args;
+  if (typeof args === 'object' && Object.keys(args).length === 0) return [];
+  return args;
 }
 
-export async function all(sql, args = {}, db = database) {
-  const result = await execute(sql, args, db);
-  return result.rows.map(decodeDatabaseRow);
+export function execute(sql, args = [], db = database) {
+  const querySql = typeof sql === 'object' && sql?.sql ? sql.sql : sql;
+  const queryArgs = formatSqlArgs(typeof sql === 'object' && sql?.args !== undefined ? sql.args : args);
+
+  return runOperation(db, async () => {
+    if (typeof db.execute === 'function') {
+      const res = await db.execute(typeof sql === 'object' ? sql : { sql: querySql, args: queryArgs });
+      return {
+        rows: res.rows || [],
+        columns: res.columns || [],
+        rowsAffected: res.rowsAffected ?? res.changes ?? 0,
+        lastInsertRowid: res.lastInsertRowid ?? null,
+      };
+    }
+    const res = await db.query(querySql, queryArgs);
+    return {
+      rows: res.rows || [],
+      columns: res.columns || [],
+      rowsAffected: res.changes ?? (res.rows ? res.rows.length : 0),
+      lastInsertRowid: res.lastInsertRowid ?? null,
+    };
+  });
 }
 
-export async function one(sql, args = {}, db = database) {
+export async function all(sql, args = [], db = database) {
   const result = await execute(sql, args, db);
-  return decodeDatabaseRow(result.rows[0] || null);
+  return (result.rows || []).map(decodeDatabaseRow);
+}
+
+export async function one(sql, args = [], db = database) {
+  const result = await execute(sql, args, db);
+  return decodeDatabaseRow(result.rows?.[0] || null);
 }
 
 export function batch(statements, mode = 'write', db = database) {
-  return runOperation(db, () => db.batch(statements, mode));
+  return runOperation(db, async () => {
+    if (typeof db.batch === 'function') {
+      const isVanilla = db instanceof VanillaDatabase || !db.execute;
+      if (isVanilla) {
+        const formatted = statements.map(st => {
+          if (typeof st === 'string') return { sql: st, params: [] };
+          return { sql: st.sql, params: formatSqlArgs(st.args || st.params || []) };
+        });
+        const batchRes = await db.batch(formatted, true);
+        return batchRes.results.map(r => ({
+          rows: r.result?.rows || [],
+          columns: r.result?.columns || [],
+          rowsAffected: r.result?.changes ?? (r.result?.rows?.length || 0),
+          lastInsertRowid: r.result?.lastInsertRowid ?? null,
+        }));
+      }
+      return db.batch(statements, mode);
+    }
+    throw new Error('Database does not support batch execution');
+  });
 }
 
 export function executeMultiple(sql, db = database) {
-  return runOperation(db, () => db.executeMultiple(sql));
+  return runOperation(db, async () => {
+    if (typeof db.executeMultiple === 'function') {
+      return db.executeMultiple(sql);
+    }
+    const statements = sql
+      .split(';')
+      .map(s => s.trim())
+      .filter(Boolean)
+      .map(s => ({ sql: s, params: [] }));
+    if (!statements.length) return;
+    return db.batch(statements, true);
+  });
 }
 
 async function runTransaction(callback, db) {
   return runOperation(db, async () => {
-    for (let attempt = 0; attempt < 8; attempt++) {
-      let tx = null;
-      try {
-        tx = await db.transaction('write');
-        const value = await callback(tx);
-        await tx.commit();
-        return value;
-      } catch (rawError) {
-        if (tx && !tx.closed) await tx.rollback().catch(() => {});
-        const error = normalizeDatabaseError(rawError);
-        const code = String(error?.code || error?.extendedCode || '').toUpperCase();
-        if (attempt < 7 && (code.includes('SQLITE_BUSY') || code.includes('SQLITE_LOCKED'))) {
-          await new Promise(resolve => setTimeout(resolve, Math.min(25 * (2 ** attempt), 500)));
-          continue;
+    if (typeof db.transaction === 'function') {
+      for (let attempt = 0; attempt < 8; attempt++) {
+        let tx = null;
+        try {
+          tx = await db.transaction('write');
+          const value = await callback(tx);
+          await tx.commit();
+          return value;
+        } catch (rawError) {
+          if (tx && !tx.closed) await tx.rollback().catch(() => {});
+          const error = normalizeDatabaseError(rawError);
+          const code = String(error?.code || error?.extendedCode || '').toUpperCase();
+          if (attempt < 7 && (code.includes('SQLITE_BUSY') || code.includes('SQLITE_LOCKED'))) {
+            await new Promise(resolve => setTimeout(resolve, Math.min(25 * (2 ** attempt), 500)));
+            continue;
+          }
+          throw error;
+        } finally {
+          tx?.close?.();
         }
-        throw error;
-      } finally {
-        tx?.close();
       }
+      throw Object.assign(new Error('Database transaction retry limit reached'), { code: 'DB_UNAVAILABLE' });
     }
-    throw Object.assign(new Error('Database transaction retry limit reached'), { code: 'DB_UNAVAILABLE' });
+
+    const txContext = {
+      execute: (stmt, args) => execute(stmt, args, db),
+      query: (s, p) => db.query(s, p),
+      executeMultiple: (s) => executeMultiple(s, db),
+    };
+    return callback(txContext);
   });
 }
 
@@ -233,8 +304,9 @@ export async function probeDatabase(db = database) {
   if (!db) return { ok: false, error: Object.assign(new Error('Database is not configured'), { code: 'DB_NOT_CONFIGURED' }) };
   const startedAt = performance.now();
   try {
-    if (db === database) await execute('SELECT 1 AS ok', {}, db);
-    else await db.execute('SELECT 1 AS ok');
+    if (db === database) await execute('SELECT 1 AS ok', [], db);
+    else if (typeof db.execute === 'function') await db.execute('SELECT 1 AS ok');
+    else await db.query('SELECT 1 AS ok');
     recordHealth(true, performance.now() - startedAt);
     return { ok: true, error: null };
   } catch (error) {
@@ -253,22 +325,22 @@ function installAvailabilityLogger() {
   availabilityLoggerInstalled = true;
   subscribeDatabaseAvailability(({ state, previousState, error }) => {
     if (state === 'unavailable') {
-      console.log(`⚠️ [Database] Turso unavailable; bot is running in degraded mode: ${error?.message || 'request failed'}`);
+      console.log(`⚠️ [Database] VanillaDB unavailable; bot is running in degraded mode: ${error?.message || 'request failed'}`);
     } else if (previousState === 'unavailable') {
-      console.log('✅ [Database] Turso recovered.');
+      console.log('✅ [Database] VanillaDB recovered.');
     }
   });
 }
 
 export async function initDatabase(db = database, { schedulePing = db === database } = {}) {
   if (!db) {
-    console.warn('⚠️ [Database] TURSO_DATABASE_URL is missing. Bot cannot persist data.');
+    console.warn('⚠️ [Database] VANILLA_DB_URL is missing. Bot cannot persist data.');
     return false;
   }
   installAvailabilityLogger();
-  console.log('🔄 [Database] Connecting to Turso...');
+  console.log('🔄 [Database] Connecting to VanillaDB...');
   const result = await probeDatabase(db);
-  if (result.ok) console.log('✅ [Database] Connected to Turso successfully!');
+  if (result.ok) console.log('✅ [Database] Connected to VanillaDB successfully!');
   else if (!isDatabaseUnavailable(result.error)) console.error('❌ [Database] Connection check failed:', result.error?.message || result.error);
 
   if (schedulePing && !pingTimer) {

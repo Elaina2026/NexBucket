@@ -12,16 +12,16 @@
   <a href="https://github.com/Elaina2026/NexBucket"><img alt="Repository" src="https://img.shields.io/badge/GitHub-Elaina2026%2FNexBucket-181717?logo=github"></a>
   <a href="https://nodejs.org/"><img alt="Node.js 24+" src="https://img.shields.io/badge/Node.js-24%2B-339933?logo=nodedotjs&logoColor=white"></a>
   <a href="https://discord.js.org/"><img alt="Discord.js 14" src="https://img.shields.io/badge/discord.js-14-5865F2?logo=discord&logoColor=white"></a>
-  <a href="https://turso.tech/"><img alt="Turso" src="https://img.shields.io/badge/Turso-libSQL-4FF8D2"></a>
+  <a href="https://github.com/Elaina2026/VanillaDB"><img alt="VanillaDB" src="https://img.shields.io/badge/VanillaDB-SQLite-orange"></a>
   <a href="https://expressjs.com/"><img alt="Express 5" src="https://img.shields.io/badge/Express-5-000000?logo=express&logoColor=white"></a>
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/License-CC--BY--NC--4.0-ef9421?logo=creativecommons&logoColor=white"></a>
 </p>
 
 ## Overview
 
-NexBucket combines a multi-server Discord bot with an OAuth2-protected management dashboard. Turso/libSQL stores guild-isolated structured data. Persistent local storage holds Learn images and videos. Credentials and data APIs remain server-side.
+NexBucket combines a multi-server Discord bot with an OAuth2-protected management dashboard. VanillaDB (Cloud SQLite) stores guild-isolated structured data. Media storage holds Learn images and videos. Credentials and data APIs remain server-side.
 
-Stack: Node.js ESM, Discord.js 14, Express 5, Turso/libSQL, local filesystem storage, Sharp, and `@napi-rs/canvas`.
+Stack: Node.js ESM, Discord.js 14, Express 5, VanillaDB (`@nullex/vanilladb`), Sharp, and `@napi-rs/canvas`.
 
 ## Features
 
@@ -79,7 +79,7 @@ NexBucket/
 │   ├── events/
 │   ├── network/
 │   ├── dashboard/
-│   ├── database/                libSQL client, schema, migrations, settings
+│   ├── database/                VanillaDB client, schema, migrations, settings
 │   ├── storage/                 Persistent local media adapter
 │   ├── ticket/
 │   ├── moderation/
@@ -89,7 +89,6 @@ NexBucket/
 │   ├── giveaway/
 │   ├── utils/
 │   └── test/
-├── scripts/migrate/             Supabase-to-Turso/local migration tooling
 ├── assets/
 ├── .env.example
 ├── LICENSE
@@ -101,11 +100,9 @@ NexBucket/
 - Node.js 24 or newer
 - npm
 - Discord application and bot token
-- Turso database and private auth token
+- VanillaDB database URL and API token
 - Persistent writable volume for `LOCAL_MEDIA_DIR` in production
 - HTTPS dashboard origin in production
-
-PostgreSQL and Supabase credentials are needed only for one-time migration from an existing deployment.
 
 ## Quick start
 
@@ -144,51 +141,17 @@ http://localhost:3000/api/auth/callback
 
 Dashboard exposes only guilds where signed-in user has Administrator or Manage Server permission and bot is present. Learn management requires Administrator permission.
 
-## Turso and local media
+## VanillaDB and local media
 
 Runtime configuration:
 
 ```env
-TURSO_DATABASE_URL=libsql://your-database-your-org.turso.io
-TURSO_AUTH_TOKEN=your-private-token
+VANILLA_DB_URL=https://vanilladatabase.elaina2026.io.vn/v1/databases/db_your_database_id
+VANILLA_DB_TOKEN=vdb_live_your_api_token_here
 LOCAL_MEDIA_DIR=data/media
 ```
 
-Keep Turso credentials backend-only. Runtime applies ordered SQL under `src/database/libsql/`; `schema_migrations` records applied versions. `LOCAL_MEDIA_DIR` defaults to `data/media`. Production must mount it on persistent writable storage and back up it with Turso data; ephemeral container filesystems lose uploaded media after redeploy.
-
-## Existing Supabase migration
-
-Migration tooling supports `dry-run`, `apply`, and strict `verify` for all active tables plus every object in source `learn-images` bucket.
-
-Migration-only credentials:
-
-```env
-SOURCE_DATABASE_URL=postgresql://...
-SOURCE_SUPABASE_URL=https://your-project.supabase.co
-SOURCE_SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
-SOURCE_SUPABASE_BUCKET=learn-images
-```
-
-Run only during planned migration:
-
-```bash
-npm run migrate:data -- dry-run all
-npm run migrate:data -- apply all
-npm run migrate:data -- verify all
-```
-
-Database import pages by deterministic primary key, upserts resumably, rewrites Learn entries to local `/media/...` URLs, preserves explicit IDs, and checks canonical SHA-256 hashes, row counts, `PRAGMA integrity_check`, foreign keys, and SQLite sequences. Object import writes atomically under `LOCAL_MEDIA_DIR`, preserves every source key, skips exact byte/hash matches, and verifies missing, extra, size, and checksum drift. Reports contain keys, counts, and hashes, not row contents.
-
-Production cutover:
-
-1. Provision empty staging Turso database and persistent `LOCAL_MEDIA_DIR`, then run `dry-run`.
-2. Test new runtime against staging.
-3. Stop every production bot/dashboard instance to freeze writes.
-4. Run final `apply`, then `verify`; do not start new runtime if any check fails.
-5. Switch runtime secrets, start one instance, test Discord events, dashboard, payments, jobs, transcripts, Learn images, and health.
-6. Keep old Supabase resources intact and read-only through retention window. Delete them only after separate confirmation.
-
-Rollback before new runtime accepts writes: restart previous release with untouched Supabase credentials. Rollback after Turso accepts writes needs explicit reconciliation; one-time import does not provide dual writes.
+Keep VanillaDB credentials backend-only. Runtime applies ordered SQL under `src/database/libsql/`; `schema_migrations` records applied versions. `LOCAL_MEDIA_DIR` defaults to `data/media`. Production must mount it on persistent writable storage and back up it; ephemeral container filesystems lose uploaded media after redeploy.
 
 ## Environment variables
 
@@ -198,13 +161,9 @@ Rollback before new runtime accepts writes: restart previous release with untouc
 | `CLIENT_ID` | Yes | Discord application and OAuth client ID |
 | `CLIENT_SECRET` | Yes | Discord OAuth2 client secret |
 | `BOT_OWNER_ID` | Recommended | Owner-only bot and dashboard access |
-| `TURSO_DATABASE_URL` | Yes | Runtime libSQL database URL |
-| `TURSO_AUTH_TOKEN` | Cloud Turso | Private runtime database token |
+| `VANILLA_DB_URL` | Yes | Runtime VanillaDB database URL |
+| `VANILLA_DB_TOKEN` | Yes | Private runtime database API token |
 | `LOCAL_MEDIA_DIR` | Production media | Persistent writable directory; defaults to `data/media` |
-| `SOURCE_SUPABASE_BUCKET` | Migration only | Source media bucket; defaults to `learn-images` |
-| `SOURCE_DATABASE_URL` | Migration only | Source PostgreSQL connection |
-| `SOURCE_SUPABASE_URL` | Migration only | Source Storage API URL |
-| `SOURCE_SUPABASE_SERVICE_ROLE_KEY` | Migration only | Source Storage service-role key |
 | `ENCRYPTION_SECRET` | Yes | AES-256-GCM key source for OAuth/payment secrets |
 | `DASHBOARD_PORT` | No | Express port; defaults to `3000` |
 | `DASHBOARD_URL` | Production | Exact public dashboard origin; use HTTPS |
@@ -248,7 +207,7 @@ Image proxy accepts allowlisted HTTPS domains, blocks redirects, and limits type
 npm test
 ```
 
-Tests cover database transactions, migration transforms, local media behavior, dashboard helpers, payments, moderation, Learn text/images/videos, network boundaries, Minecraft rendering, welcome cards, tickets, and shared utilities.
+Tests cover database transactions, local media behavior, dashboard helpers, payments, moderation, Learn text/images/videos, network boundaries, Minecraft rendering, welcome cards, tickets, and shared utilities.
 
 ## Troubleshooting
 
@@ -260,7 +219,7 @@ Tests cover database transactions, migration transforms, local media behavior, d
 
 ### Database is unavailable or slow
 
-- Check `TURSO_DATABASE_URL`, token, and Turso service status.
+- Check `VANILLA_DB_URL`, `VANILLA_DB_TOKEN`, and VanillaDB service status.
 - Use dashboard data-service health view.
 - Confirm schema migrations succeeded at startup.
 

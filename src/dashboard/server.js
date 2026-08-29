@@ -100,22 +100,7 @@ async function getGuildMember(guild, userId) {
 
 export function createLocalMediaHandler(root = getLocalMediaRoot()) {
     return (req, res) => {
-        try {
-            const key = validateMediaKey(`${req.params.guildId}/${req.params.filename}`);
-            const contentType = mediaMimeType(key);
-            if (!contentType) return res.status(404).end();
-            res.setHeader('Content-Type', contentType);
-            res.setHeader('X-Content-Type-Options', 'nosniff');
-            res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
-            return res.sendFile(key, { root, dotfiles: 'deny', acceptRanges: true }, error => {
-                if (!error || res.headersSent) return;
-                if (error.statusCode === 404 || error.code === 'ENOENT') return res.status(404).end();
-                res.status(500).end();
-            });
-        } catch (error) {
-            if (error instanceof TypeError) return res.status(404).end();
-            return res.status(500).end();
-        }
+        return res.status(404).end();
     };
 }
 
@@ -983,14 +968,13 @@ export function startDashboard(client) {
         const mediaPath = incomingPath === undefined ? String(existingPath) : String(incomingPath || '').trim();
         if (mediaPath) {
             validateMediaKey(mediaPath);
-            if (!mediaPath.startsWith(`${guildId}/`)) throw new TypeError('Invalid Learn media path');
         }
         const mediaType = mediaPath
             ? String(body.mediaType || current?.mediaType || mediaMimeType(mediaPath) || '')
             : '';
         return {
             response: typeof body.response === 'string' ? body.response : '',
-            mediaUrl: learnMediaUrl(mediaPath),
+            mediaUrl: body.mediaUrl || learnMediaUrl(mediaPath),
             mediaPath,
             mediaType,
             enabled: body.enabled !== false,
@@ -1012,7 +996,6 @@ export function startDashboard(client) {
         if (!mediaPath) return;
         try {
             validateMediaKey(mediaPath);
-            if (!mediaPath.startsWith(`${guildId}/`)) return;
             await deleteLocalMedia(mediaPath);
         } catch (error) {
             console.error('[Learn] Failed to remove media:', error.message || error);
@@ -1039,9 +1022,10 @@ export function startDashboard(client) {
             const access = await requireGuildAdministrator(req, res);
             if (!access) return;
             const media = await validateLearnMedia(req.body, req.headers['content-type']);
-            const mediaPath = `${req.params.guildId}/${crypto.randomUUID()}.${media.extension}`;
-            await putLocalMedia(mediaPath, req.body);
-            res.status(201).json({ mediaPath, mediaUrl: learnMediaUrl(mediaPath), mediaType: media.mimeType });
+            const filename = `${req.params.guildId}-${crypto.randomUUID()}.${media.extension}`;
+            const uploaded = await putLocalMedia(req.body, filename, media.mimeType);
+            const mediaPath = uploaded.fileId || uploaded.id;
+            res.status(201).json({ mediaPath, mediaUrl: uploaded.url, mediaType: media.mimeType });
         } catch (error) {
             if (error instanceof TypeError || error instanceof RangeError) {
                 return res.status(422).json({ error: error.message });

@@ -1,9 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createLearnReply, normalizeArEntry, normalizeArTriggers } from '../utils/chatFeatures.js';
-import { mediaPathForKey } from '../storage/localMedia.js';
 
-const LOCAL_KEY = '12345678901234567/123e4567-e89b-42d3-a456-426614174000.mp4';
+const FILE_ID = 'file_123e4567-e89b-42d3-a456-426614174000';
 
 test('Auto Responder config upgrades legacy text and normalizes triggers', () => {
   const normalized = normalizeArTriggers({ ' Hello ': ' Hi there ' });
@@ -14,7 +13,7 @@ test('Auto Responder config upgrades legacy text and normalizes triggers', () =>
   });
 });
 
-test('Auto Responder entries support legacy images and local videos', () => {
+test('Auto Responder entries support legacy images and VanillaDB files', () => {
   const image = normalizeArEntry({ imageUrl: 'https://images.example.com/guild/image.png', enabled: false });
   assert.equal(image.mediaUrl, 'https://images.example.com/guild/image.png');
   assert.equal(image.enabled, false);
@@ -27,12 +26,12 @@ test('Auto Responder entries support legacy images and local videos', () => {
     name: 'learn-media.webp',
   }]);
 
-  const video = createLearnReply({
-    response: 'Hello', mediaUrl: `/media/${LOCAL_KEY}`, mediaPath: LOCAL_KEY, mediaType: 'video/mp4',
+  const fileEntry = createLearnReply({
+    response: 'Hello', mediaUrl: `https://vanilladatabase.elaina2026.io.vn/v1/files/${FILE_ID}/view?token=tok`, mediaPath: FILE_ID, mediaType: 'video/mp4',
   });
-  assert.equal(video.content, 'Hello');
-  assert.deepEqual(video.files, [{ attachment: mediaPathForKey(LOCAL_KEY), name: 'learn-media.mp4' }]);
-  assert.equal(video.embeds, undefined);
+  assert.equal(fileEntry.content, 'Hello');
+  assert.deepEqual(fileEntry.files, [{ attachment: `https://vanilladatabase.elaina2026.io.vn/v1/files/${FILE_ID}/view?token=tok`, name: 'learn-media.mp4' }]);
+  assert.equal(fileEntry.embeds, undefined);
 });
 
 test('Auto Responder config rejects oversized or invalid entries', () => {
@@ -42,8 +41,8 @@ test('Auto Responder config rejects oversized or invalid entries', () => {
   assert.throws(() => normalizeArTriggers({ trigger: {} }), /require text or media/);
   assert.throws(() => normalizeArTriggers({ trigger: { mediaUrl: 'http://example.com/image.png' } }), /HTTPS/);
   assert.throws(() => normalizeArTriggers({ trigger: { mediaUrl: '/media/../secret.png' } }), /valid media path/);
-  assert.equal(normalizeArEntry({ mediaPath: LOCAL_KEY }).mediaUrl, `/media/${LOCAL_KEY}`);
-  assert.throws(() => normalizeArTriggers({ trigger: { mediaUrl: '/media/x.mp4', mediaPath: LOCAL_KEY, mediaType: 'video/quicktime' } }), /media type/);
+  assert.match(normalizeArEntry({ mediaPath: FILE_ID }).mediaUrl, /https:\/\/.*\/v1\/files\/file_/);
+  assert.throws(() => normalizeArTriggers({ trigger: { mediaUrl: 'https://example.com/x.mp4', mediaPath: FILE_ID, mediaType: 'video/quicktime' } }), /media type/);
   assert.throws(() => normalizeArTriggers(Object.fromEntries(
     Array.from({ length: 101 }, (_, index) => [`trigger-${index}`, 'response'])
   )), /Too many/);

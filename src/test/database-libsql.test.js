@@ -1,10 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createClient } from '@libsql/client';
-import os from 'node:os';
-import path from 'node:path';
-import { randomUUID } from 'node:crypto';
-import { runAutoMigrations } from '../database/dbMigrate.js';
+import { createTestDatabase } from './databaseTestUtils.js';
 import {
   getAllSections,
   getConfigHistoryVersion,
@@ -15,36 +11,24 @@ import {
   saveSections,
 } from '../database/guildSettings.js';
 
-async function testDatabase() {
-  const file = path.join(os.tmpdir(), `nexbucket-${randomUUID()}.db`);
-  const db = createClient({ url: `file:${file}` });
-  await runAutoMigrations(db);
-  return {
-    db,
-    close() {
-      db.close();
-    },
-  };
-}
-
-test('libSQL schema creates every active table and passes integrity checks', async () => {
-  const fixture = await testDatabase();
+test('database schema creates every active table and passes integrity checks', async () => {
+  const fixture = await createTestDatabase();
   const { db } = fixture;
   try {
-    const tables = await db.execute("SELECT name FROM sqlite_master WHERE type = 'table'");
+    const tables = await db.execute({ sql: "SELECT name FROM sqlite_master WHERE type = 'table'" });
     const names = new Set(tables.rows.map(row => row.name));
     for (const name of ['guild_settings', 'reminders', 'ticket_transcripts', 'moderation_cases', 'privacy_requests']) {
       assert.equal(names.has(name), true);
     }
-    const integrity = await db.execute('PRAGMA integrity_check');
+    const integrity = await db.execute({ sql: 'PRAGMA integrity_check' });
     assert.equal(integrity.rows[0].integrity_check, 'ok');
   } finally {
-    await fixture.close();
+    fixture.close();
   }
 });
 
-test('guild settings writes and rollback stay atomic on libSQL', async () => {
-  const fixture = await testDatabase();
+test('guild settings writes and rollback stay atomic', async () => {
+  const fixture = await createTestDatabase();
   const { db } = fixture;
   try {
     invalidateGuildSettingsCache('guild');
@@ -64,13 +48,13 @@ test('guild settings writes and rollback stay atomic on libSQL', async () => {
     assert.deepEqual(row.ticket, { enabled: true, partnerKey: 'ignored' });
     assert.deepEqual(row.welcome, {});
   } finally {
-    await fixture.close();
+    fixture.close();
     invalidateGuildSettingsCache('guild');
   }
 });
 
 test('competing guild config versions allow one writer', async () => {
-  const fixture = await testDatabase();
+  const fixture = await createTestDatabase();
   const { db } = fixture;
   try {
     await saveSection('race', 'ticket', { value: 1 }, null, null, db);
@@ -82,7 +66,7 @@ test('competing guild config versions allow one writer', async () => {
     assert.equal(results.filter(result => result.status === 'rejected').length, 1);
     assert.match(results.find(result => result.status === 'rejected').reason.message, /CONFIG_VERSION_CONFLICT/);
   } finally {
-    await fixture.close();
+    fixture.close();
     invalidateGuildSettingsCache('race');
   }
 });

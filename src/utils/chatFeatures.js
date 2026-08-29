@@ -59,7 +59,7 @@ export function normalizeArEntry(value) {
   if (!response && !mediaUrl && !mediaPath) throw new RangeError('Auto Responder entries require text or media');
   if (mediaPath) {
     mediaPathForKey(mediaPath);
-    mediaUrl = localMediaUrl(mediaPath);
+    if (!mediaUrl) mediaUrl = localMediaUrl(mediaPath);
   } else if (mediaUrl) {
     if (mediaUrl.startsWith('/media/')) throw new TypeError('Auto Responder local media requires a valid media path');
     let parsed;
@@ -106,10 +106,11 @@ export function createLearnReply(entry) {
   if (normalized.response) reply.content = normalized.response;
   if (normalized.mediaUrl) {
     const pathname = normalized.mediaUrl.startsWith('/') ? normalized.mediaUrl : new URL(normalized.mediaUrl).pathname;
-    const extension = pathname.match(/\.(png|jpe?g|webp|gif|mp4|webm)$/i)?.[1]?.toLowerCase();
-    const attachment = normalized.mediaUrl.startsWith('/media/')
-      ? mediaPathForKey(normalized.mediaPath)
-      : normalized.mediaUrl;
+    let extension = pathname.match(/\.(png|jpe?g|webp|gif|mp4|webm)$/i)?.[1]?.toLowerCase();
+    if (!extension && normalized.mediaType) {
+      extension = normalized.mediaType.split('/')[1]?.replace('jpeg', 'jpg');
+    }
+    const attachment = normalized.mediaUrl;
     reply.files = [{ attachment, name: `learn-media${extension ? `.${extension}` : ''}` }];
   }
   return reply;
