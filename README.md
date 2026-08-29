@@ -66,8 +66,7 @@ index.js                         Composition root
    |
    +-- src/dashboard/server.js   Express, OAuth2, sessions, APIs, callbacks
           |
-          +-- Turso/libSQL       Structured data and transcripts
-          +-- Local media        Learn images and videos
+          +-- VanillaDB          Structured data, transcripts, and media storage
           +-- Discord API and guild cache
 ```
 
@@ -191,7 +190,7 @@ Options live in `.env.example`. Put optional PNG/JPEG/WebP backgrounds in `asset
 ## Security notes
 
 - Serve dashboard through HTTPS; set exact `DASHBOARD_URL`.
-- Keep Discord, Turso, migration-source, PayOS, Card2K, and encryption secrets server-side.
+- Keep Discord, VanillaDB, PayOS, Card2K, and encryption secrets server-side.
 - Preserve OAuth state validation, HttpOnly/SameSite cookies, origin checks, CSP, HSTS, frame denial, and MIME sniffing protection.
 - Verify payment signatures before transaction changes.
 - Never log card codes, serials, signatures, OAuth tokens, provider secrets, transcripts, or config payloads.

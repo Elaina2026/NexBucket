@@ -1376,7 +1376,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
   btnSave?.addEventListener('click', async () => {
     if (!currentGuildId) return;
-    showStatus('Saving to Turso...', 'info');
+    showStatus('Saving to VanillaDB...', 'info');
     btnSave.disabled = true;
     const payload = {
       configVersion,

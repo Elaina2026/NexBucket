@@ -78,7 +78,7 @@ test('initDatabase reports failure instead of false success', async () => {
     console.log = originalLog;
     allowDatabaseRetry();
   }
-  assert.equal(logs.some(line => line.includes('Connected to Turso successfully')), false);
+  assert.equal(logs.some(line => line.includes('Connected to VanillaDB successfully')), false);
 });
 
 test('incident persistence opens a circuit after one database timeout', async () => {

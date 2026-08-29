@@ -310,7 +310,7 @@ export function startDashboard(client) {
                     free: diskFree
                 },
                 db: {
-                    status: database ? 'Connected (Turso)' : 'Disconnected',
+                    status: database ? 'Connected (VanillaDB)' : 'Disconnected',
                     size: 'Cloud'
                 }
             });

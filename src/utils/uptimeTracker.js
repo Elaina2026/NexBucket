@@ -8,7 +8,7 @@ const CLEANUP_INTERVAL = 24 * 60 * 60 * 1000;
 const HISTORY_CACHE_MS = 25 * 1000;
 const SERVICES = {
     'bot-core': { name: 'Discord Bot Core', description: 'WebSocket connection, command handling, and event processing.' },
-    'database': { name: 'Database (Turso)', description: 'Turso/libSQL database for configurations and user data.' },
+    'database': { name: 'Database (VanillaDB)', description: 'VanillaDB database for configurations and user data.' },
     'tickets': { name: 'Ticket System', description: 'Support ticket creation, claiming, closing, and transcript generation.' },
     'welcome': { name: 'Welcome & Goodbye', description: 'Automated welcome/goodbye banners and auto-role assignment.' },
     'moderation': { name: 'Moderation & Anti-Raid', description: 'Ban, kick, mute, anti-spam, and anti-raid protection systems.' },
@@ -128,7 +128,7 @@ async function runHealthChecks(client, db = database) {
 
 export function startUptimeTracker(client) {
     if (!database) {
-        console.warn('⚠️ [UptimeTracker] Turso is not configured. Dashboard will not show incidents.');
+        console.warn('⚠️ [UptimeTracker] VanillaDB is not configured. Dashboard will not show incidents.');
         return;
     }
     runHealthChecks(client).catch(console.error);
