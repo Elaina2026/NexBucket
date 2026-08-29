@@ -78,6 +78,9 @@ export function isDatabaseUnavailable(error) {
     || text.includes('network error')
     || text.includes('websocket') && text.includes('closed')
     || text.includes('operation was aborted due to timeout')
+    || text.includes('<!doctype')
+    || text.includes('is not valid json')
+    || text.includes('vanilladatabase query failed') && (text.includes('502') || text.includes('503') || text.includes('504') || text.includes('520') || text.includes('521') || text.includes('522') || text.includes('523') || text.includes('524') || text.includes('525'))
     || text.includes('vanilladatabase query failed: 5');
 }
 
