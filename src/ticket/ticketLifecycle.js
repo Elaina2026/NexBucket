@@ -33,42 +33,48 @@ export async function createTicketRecord({ channelId, guildId, creatorId, catego
   requireDatabase(db);
   const id = String(channelId);
   const sla = normalizeTicketSlaConfig(config);
-  const inserted = await one(`INSERT INTO tickets (
+  await execute(`INSERT INTO tickets (
     channel_id, guild_id, creator_id, category, priority, claim_due_at, first_response_due_at, sla_state
   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  ON CONFLICT(channel_id) DO NOTHING RETURNING ${TICKET_COLUMNS}`, [
+  ON CONFLICT(channel_id) DO NOTHING`, [
     id, String(guildId), String(creatorId), String(category || '').slice(0, 100),
     TICKET_PRIORITIES.has(priority) ? priority : 'normal',
     sla.enabled ? isoAfter(sla.claimTargetMinutes, now) : null,
     sla.enabled ? isoAfter(sla.firstResponseTargetMinutes, now) : null,
     sla.enabled ? 'pending' : 'disabled',
   ], db);
-  return inserted || one(`SELECT ${TICKET_COLUMNS} FROM tickets WHERE channel_id = ? LIMIT 1`, [id], db);
+  return one(`SELECT ${TICKET_COLUMNS} FROM tickets WHERE channel_id = ? LIMIT 1`, [id], db);
 }
 
 export async function claimTicket(channelId, staffId, db = database) {
   requireDatabase(db);
   const now = new Date().toISOString();
-  return one(`UPDATE tickets SET claimed_at = ?, claimed_by = ?,
+  const res = await execute(`UPDATE tickets SET claimed_at = ?, claimed_by = ?,
     sla_state = CASE WHEN claim_due_at IS NOT NULL AND ? > claim_due_at THEN 'breached' ELSE sla_state END
-    WHERE channel_id = ? AND status = 'open' AND claimed_at IS NULL RETURNING ${TICKET_COLUMNS}`,
+    WHERE channel_id = ? AND status = 'open' AND claimed_at IS NULL`,
   [now, String(staffId), now, String(channelId)], db);
+  if (!res?.rowsAffected) return null;
+  return one(`SELECT ${TICKET_COLUMNS} FROM tickets WHERE channel_id = ? LIMIT 1`, [String(channelId)], db);
 }
 
 export async function recordFirstStaffResponse(channelId, staffId, db = database) {
   requireDatabase(db);
   const now = new Date().toISOString();
-  return one(`UPDATE tickets SET first_response_at = ?, first_response_by = ?
-    WHERE channel_id = ? AND status = 'open' AND first_response_at IS NULL RETURNING ${TICKET_COLUMNS}`,
+  const res = await execute(`UPDATE tickets SET first_response_at = ?, first_response_by = ?
+    WHERE channel_id = ? AND status = 'open' AND first_response_at IS NULL`,
   [now, String(staffId), String(channelId)], db);
+  if (!res?.rowsAffected) return null;
+  return one(`SELECT ${TICKET_COLUMNS} FROM tickets WHERE channel_id = ? LIMIT 1`, [String(channelId)], db);
 }
 
 export async function closeTicketRecord(channelId, closedBy, db = database) {
   requireDatabase(db);
   const now = new Date().toISOString();
-  return one(`UPDATE tickets SET status = 'closed', closed_at = ?, closed_by = ?, escalation_claimed_at = NULL
-    WHERE channel_id = ? AND status = 'open' RETURNING ${TICKET_COLUMNS}`,
+  const res = await execute(`UPDATE tickets SET status = 'closed', closed_at = ?, closed_by = ?, escalation_claimed_at = NULL
+    WHERE channel_id = ? AND status = 'open'`,
   [now, String(closedBy), String(channelId)], db);
+  if (!res?.rowsAffected) return null;
+  return one(`SELECT ${TICKET_COLUMNS} FROM tickets WHERE channel_id = ? LIMIT 1`, [String(channelId)], db);
 }
 
 export async function listTicketReport(guildId, days = 30, db = database) {
@@ -113,9 +119,11 @@ export async function checkTicketSla(client, db = database, now = Date.now()) {
     if (!sla.enabled || !sla.escalationChannelId) continue;
     const cadenceCutoff = new Date(now - sla.reminderCadenceMinutes * 60_000).toISOString();
     if (ticket.last_escalated_at && ticket.last_escalated_at > cadenceCutoff) continue;
-    const claimed = await one(`UPDATE tickets SET escalation_claimed_at = ?, sla_state = 'breached'
-      WHERE channel_id = ? AND status = 'open' AND (escalation_claimed_at IS NULL OR escalation_claimed_at < ?)
-      RETURNING ${TICKET_COLUMNS}`, [currentIso, ticket.channel_id, leaseCutoff], db);
+    const res = await execute(`UPDATE tickets SET escalation_claimed_at = ?, sla_state = 'breached'
+      WHERE channel_id = ? AND status = 'open' AND (escalation_claimed_at IS NULL OR escalation_claimed_at < ?)`,
+    [currentIso, ticket.channel_id, leaseCutoff], db);
+    if (!res?.rowsAffected) continue;
+    const claimed = await one(`SELECT ${TICKET_COLUMNS} FROM tickets WHERE channel_id = ? LIMIT 1`, [ticket.channel_id], db);
     if (!claimed) continue;
     const guild = client.guilds.cache.get(ticket.guild_id);
     const channel = guild?.channels.cache.get(sla.escalationChannelId);

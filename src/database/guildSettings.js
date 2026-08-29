@@ -1,4 +1,4 @@
-import { database, isDatabaseUnavailable, one, all, transaction } from './client.js';
+import { database, isDatabaseUnavailable, one, all, transaction, execute } from './client.js';
 import { encodeJson } from './codecs.js';
 
 const VALID_SECTIONS = [
@@ -193,20 +193,22 @@ export async function saveSection(guildId, section, value, expectedVersion = nul
       throw configConflict(expectedVersion, Number(current.version));
     }
     const before = redactConfig(current);
-    const updated = await one(
-      `UPDATE guild_settings SET ${section} = ?, version = version + 1, updated_at = ? WHERE guild_id = ? RETURNING *`,
-      [encodeJson(value), now, guildId], tx,
+    const nextVersion = Number(current.version) + 1;
+    await execute(
+      `UPDATE guild_settings SET ${section} = ?, version = ?, updated_at = ? WHERE guild_id = ?`,
+      [encodeJson(value), nextVersion, now, guildId], tx,
     );
+    const updated = await one('SELECT * FROM guild_settings WHERE guild_id = ? LIMIT 1', [guildId], tx);
     await insertHistory(tx, {
       guildId,
-      version: Number(updated.version),
+      version: nextVersion,
       previousVersion: Number(current.version),
       changedSections: [section],
       beforeConfig: before,
       afterConfig: redactConfig(updated),
       ...history,
     });
-    return Number(updated.version);
+    return nextVersion;
   }, db);
   invalidateGuildSettingsCache(guildId);
   return version;
@@ -226,22 +228,24 @@ export async function saveSections(guildId, sections, expectedVersion, metadata 
   const version = await transaction(async tx => {
     const current = await ensureGuildRow(tx, guildId);
     if (Number(current.version) !== expectedVersion) throw configConflict(expectedVersion, Number(current.version));
+    const nextVersion = Number(current.version) + 1;
     const assignments = entries.map(([section]) => `${section} = ?`);
-    const args = [...entries.map(([, value]) => encodeJson(value)), now, guildId];
-    const updated = await one(
-      `UPDATE guild_settings SET ${assignments.join(', ')}, version = version + 1, updated_at = ? WHERE guild_id = ? RETURNING *`,
+    const args = [...entries.map(([, value]) => encodeJson(value)), nextVersion, now, guildId];
+    await execute(
+      `UPDATE guild_settings SET ${assignments.join(', ')}, version = ?, updated_at = ? WHERE guild_id = ?`,
       args, tx,
     );
+    const updated = await one('SELECT * FROM guild_settings WHERE guild_id = ? LIMIT 1', [guildId], tx);
     await insertHistory(tx, {
       guildId,
-      version: Number(updated.version),
+      version: nextVersion,
       previousVersion: Number(current.version),
       changedSections: entries.map(([section]) => section).sort(),
       beforeConfig: redactConfig(current),
       afterConfig: redactConfig(updated),
       ...history,
     });
-    return Number(updated.version);
+    return nextVersion;
   }, db);
   invalidateGuildSettingsCache(guildId);
   return version;
@@ -292,13 +296,15 @@ export async function rollbackConfig(guildId, historyId, expectedVersion, metada
     const next = { ...snapshot, bank, card };
     const before = redactConfig(current);
     const changed = VALID_SECTIONS.filter(section => JSON.stringify(before[section]) !== JSON.stringify(redactConfig(next)[section]));
-    const updated = await one(`UPDATE guild_settings SET
+    const nextVersion = Number(current.version) + 1;
+    await execute(`UPDATE guild_settings SET
       ticket = ?, welcome = ?, jtc = ?, moderation = ?, bank = ?, card = ?, server_stats = ?, minecraft = ?, utility = ?,
-      version = version + 1, updated_at = ? WHERE guild_id = ? RETURNING *`,
-    [...VALID_SECTIONS.map(section => encodeJson(next[section])), now, guildId], tx);
+      version = ?, updated_at = ? WHERE guild_id = ?`,
+    [...VALID_SECTIONS.map(section => encodeJson(next[section])), nextVersion, now, guildId], tx);
+    const updated = await one('SELECT * FROM guild_settings WHERE guild_id = ? LIMIT 1', [guildId], tx);
     await insertHistory(tx, {
       guildId,
-      version: Number(updated.version),
+      version: nextVersion,
       previousVersion: Number(current.version),
       changedSections: changed,
       beforeConfig: before,
@@ -306,7 +312,7 @@ export async function rollbackConfig(guildId, historyId, expectedVersion, metada
       rollbackFromId: id,
       ...history,
     });
-    return Number(updated.version);
+    return nextVersion;
   }, db);
   invalidateGuildSettingsCache(guildId);
   return version;

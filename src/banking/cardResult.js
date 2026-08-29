@@ -1,4 +1,4 @@
-import { database, one } from '../database/client.js';
+import { database, execute, one } from '../database/client.js';
 import { EmbedBuilder } from '../utils/embed.js';
 import { getBankConfig } from './bankManager.js';
 
@@ -40,13 +40,17 @@ export async function applyCardResult(client, result, source = 'Webhook', db = d
     if (!Number.isFinite(statusCode)) return { applied: false, reason: 'invalid-status' };
     if (!isFinalStatus(statusCode)) return { applied: false, reason: 'still-pending' };
     const actualValue = Number(value || declared_value || 0);
-    const txn = await one(`UPDATE card_transactions SET
+    const existing = await one(`SELECT guild_id, channel_id, message_id, telco, amount FROM card_transactions
+      WHERE request_id = ? AND status IN (${PENDING_STATUSES.map(() => '?').join(', ')}) LIMIT 1`,
+    [request_id, ...PENDING_STATUSES], db);
+    if (!existing) return { applied: false, reason: 'already-finalized' };
+    const res = await execute(`UPDATE card_transactions SET
       status = ?, message = ?, card_actual_value = ?, updated_at = ?, trans_id = COALESCE(?, trans_id)
-      WHERE request_id = ? AND status IN (${PENDING_STATUSES.map(() => '?').join(', ')})
-      RETURNING guild_id, channel_id, message_id, telco, amount`,
+      WHERE request_id = ? AND status IN (${PENDING_STATUSES.map(() => '?').join(', ')})`,
     [statusCode, message || null, actualValue, new Date().toISOString(), trans_id ? String(trans_id) : null,
       request_id, ...PENDING_STATUSES], db);
-    if (!txn) return { applied: false, reason: 'already-finalized' };
+    if (!res?.rowsAffected) return { applied: false, reason: 'already-finalized' };
+    const txn = existing;
     const view = describeStatus(statusCode, message);
     try {
         const bankConfig = await getBankConfig(txn.guild_id, db);

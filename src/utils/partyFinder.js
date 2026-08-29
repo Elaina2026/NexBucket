@@ -88,9 +88,11 @@ async function updateQueueRoster(queue, db, fields = {}) {
   const confirmationExpiresAt = fields.confirmationExpiresAt === undefined
     ? queue.confirmation_expires_at
     : fields.confirmationExpiresAt;
-  return one(db, `UPDATE jtc_party_queue SET members = ?, status = ?, confirmation_expires_at = ?, updated_at = ?
-    WHERE id = ? RETURNING ${QUEUE_COLUMNS}`,
+  const res = await execute(db, `UPDATE jtc_party_queue SET members = ?, status = ?, confirmation_expires_at = ?, updated_at = ?
+    WHERE id = ?`,
   [encodeJson(members), status, confirmationExpiresAt, new Date().toISOString(), queue.id]);
+  if (!res?.rowsAffected) return null;
+  return one(db, `SELECT ${QUEUE_COLUMNS} FROM jtc_party_queue WHERE id = ? LIMIT 1`, [queue.id]);
 }
 
 export async function createPartyQueue(input, client, db = database, now = Date.now()) {
@@ -111,11 +113,12 @@ export async function createPartyQueue(input, client, db = database, now = Date.
       if (conflict) throw new TypeError('You are already in an active party queue');
       const id = randomUUID();
       const timestamp = new Date(now).toISOString();
-      const queue = await one(tx, `INSERT INTO jtc_party_queue (
+      await execute(tx, `INSERT INTO jtc_party_queue (
         id, guild_id, owner_id, game, rank, party_size, members, status, expires_at, lfm_channel_id, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?) RETURNING ${QUEUE_COLUMNS}`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?)`,
       [id, guildId, ownerId, clean.game, clean.rank || null, clean.partySize, encodeJson([ownerId]),
         new Date(now + 30 * 60_000).toISOString(), lfmChannel.id, timestamp, timestamp]);
+      const queue = await one(tx, `SELECT ${QUEUE_COLUMNS} FROM jtc_party_queue WHERE id = ? LIMIT 1`, [id]);
       await execute(tx, 'INSERT INTO jtc_party_members (queue_id, guild_id, user_id) VALUES (?, ?, ?)', [id, guildId, ownerId]);
       return queue;
     });
@@ -128,8 +131,9 @@ export async function createPartyQueue(input, client, db = database, now = Date.
   let message;
   try {
     message = await lfmChannel.send(buildPartyCard(queue));
-    const updated = await one(db, `UPDATE jtc_party_queue SET message_id = ?, updated_at = ?
-      WHERE id = ? RETURNING ${QUEUE_COLUMNS}`, [message.id, new Date().toISOString(), queue.id]);
+    await execute(db, `UPDATE jtc_party_queue SET message_id = ?, updated_at = ?
+      WHERE id = ?`, [message.id, new Date().toISOString(), queue.id]);
+    const updated = await one(db, `SELECT ${QUEUE_COLUMNS} FROM jtc_party_queue WHERE id = ? LIMIT 1`, [queue.id]);
     queue = rowToQueue(updated);
   } catch (error) {
     await execute(db, 'DELETE FROM jtc_party_queue WHERE id = ?', [queue.id]).catch(() => {});
@@ -172,10 +176,12 @@ export async function joinPartyQueue(id, userId, client, db = database, guildId 
       [idValue, queue.guild_id, userIdValue, new Date().toISOString()]);
       const members = await activeMembers(queue, tx);
       const full = members.length >= Number(queue.party_size);
-      return one(tx, `UPDATE jtc_party_queue SET members = ?, status = ?, confirmation_expires_at = ?, updated_at = ?
-        WHERE id = ? AND status = 'open' RETURNING ${QUEUE_COLUMNS}`,
+      const res = await execute(tx, `UPDATE jtc_party_queue SET members = ?, status = ?, confirmation_expires_at = ?, updated_at = ?
+        WHERE id = ? AND status = 'open'`,
       [encodeJson(members), full ? 'awaiting_confirmation' : 'open',
         full ? new Date(Date.now() + 5 * 60_000).toISOString() : null, new Date().toISOString(), idValue]);
+      if (!res?.rowsAffected) return null;
+      return one(tx, `SELECT ${QUEUE_COLUMNS} FROM jtc_party_queue WHERE id = ? LIMIT 1`, [idValue]);
     });
   } catch (error) {
     if (error?.code === 'UNIQUE_CONSTRAINT') throw new TypeError('You are already in an active party queue');
@@ -230,9 +236,11 @@ export async function cancelPartyQueue(id, actorId, client, db = database, guild
   if (guildId && current.guildId !== String(guildId)) throw new TypeError('This party queue belongs to another server');
   if (current.ownerId !== String(actorId)) throw new TypeError('Only the party owner can cancel the queue');
   const raw = await transaction(db, async tx => {
-    const queue = await one(tx, `UPDATE jtc_party_queue SET status = 'cancelled', confirmation_expires_at = NULL, updated_at = ?
-      WHERE id = ? AND owner_id = ? AND status IN ('open', 'awaiting_confirmation') RETURNING ${QUEUE_COLUMNS}`,
+    const res = await execute(tx, `UPDATE jtc_party_queue SET status = 'cancelled', confirmation_expires_at = NULL, updated_at = ?
+      WHERE id = ? AND owner_id = ? AND status IN ('open', 'awaiting_confirmation')`,
     [new Date().toISOString(), queueId(id), String(actorId)]);
+    if (!res?.rowsAffected) return null;
+    const queue = await one(tx, `SELECT ${QUEUE_COLUMNS} FROM jtc_party_queue WHERE id = ? LIMIT 1`, [queueId(id)]);
     if (!queue) return null;
     await execute(tx, 'UPDATE jtc_party_members SET active = 0 WHERE queue_id = ? AND active = 1', [queue.id]);
     return queue;
@@ -247,9 +255,10 @@ export async function reopenPartyQueue(id, ownerId, client, db = database, guild
   const current = await getPartyQueue(id, db);
   if (guildId && current?.guildId !== String(guildId)) throw new TypeError('This party queue belongs to another server');
   if (!current || current.ownerId !== String(ownerId)) throw new TypeError('Only the party owner can reopen the queue');
-  const raw = await one(db, `UPDATE jtc_party_queue SET status = 'open', confirmation_expires_at = NULL, updated_at = ?
-    WHERE id = ? AND owner_id = ? AND status = 'awaiting_confirmation' RETURNING ${QUEUE_COLUMNS}`,
+  const res = await execute(db, `UPDATE jtc_party_queue SET status = 'open', confirmation_expires_at = NULL, updated_at = ?
+    WHERE id = ? AND owner_id = ? AND status = 'awaiting_confirmation'`,
   [new Date().toISOString(), queueId(id), String(ownerId)]);
+  const raw = res?.rowsAffected ? await one(db, `SELECT ${QUEUE_COLUMNS} FROM jtc_party_queue WHERE id = ? LIMIT 1`, [queueId(id)]) : null;
   const queue = raw ? rowToQueue(raw) : null;
   if (queue) await refreshQueueMessage(queue, client);
   return queue;
@@ -263,11 +272,11 @@ export async function confirmPartyQueue(id, ownerId, client, db = database, guil
   if (guildId && current?.guildId !== String(guildId)) throw new TypeError('This party queue belongs to another server');
   if (!current || current.ownerId !== ownerIdValue) throw new TypeError('Only the party owner can confirm the queue');
   if (current.status !== 'awaiting_confirmation' || current.confirmationExpiresAt <= Date.now()) throw new TypeError('Party confirmation has expired');
-  const claimed = await one(db, `UPDATE jtc_party_queue SET status = 'confirming', updated_at = ?
-    WHERE id = ? AND owner_id = ? AND status = 'awaiting_confirmation' AND confirmation_expires_at > ?
-    RETURNING ${QUEUE_COLUMNS}`,
+  const res = await execute(db, `UPDATE jtc_party_queue SET status = 'confirming', updated_at = ?
+    WHERE id = ? AND owner_id = ? AND status = 'awaiting_confirmation' AND confirmation_expires_at > ?`,
   [new Date().toISOString(), idValue, ownerIdValue, new Date().toISOString()]);
-  if (!claimed) throw new TypeError('Party confirmation is already being processed');
+  if (!res?.rowsAffected) throw new TypeError('Party confirmation is already being processed');
+  const claimed = await one(db, `SELECT ${QUEUE_COLUMNS} FROM jtc_party_queue WHERE id = ? LIMIT 1`, [idValue]);
 
   let queue = rowToQueue(claimed);
   const guild = client.guilds.cache.get(queue.guildId);
@@ -303,10 +312,11 @@ export async function confirmPartyQueue(id, ownerId, client, db = database, guil
     await refreshJtcDashboard(voice, owner, db);
     const invite = await voice.createInvite({ maxAge: 3600, maxUses: queue.members.length, unique: true, reason: 'Party Finder confirmed' });
     const raw = await transaction(db, async tx => {
-      const updated = await one(tx, `UPDATE jtc_party_queue SET status = 'confirmed', voice_channel_id = ?,
-        confirmation_expires_at = NULL, updated_at = ? WHERE id = ? AND status = 'confirming' RETURNING ${QUEUE_COLUMNS}`,
+      const updateRes = await execute(tx, `UPDATE jtc_party_queue SET status = 'confirmed', voice_channel_id = ?,
+        confirmation_expires_at = NULL, updated_at = ? WHERE id = ? AND status = 'confirming'`,
       [voice.id, new Date().toISOString(), queue.id]);
-      if (!updated) throw new Error('Party queue changed before confirmation');
+      if (!updateRes?.rowsAffected) throw new Error('Party queue changed before confirmation');
+      const updated = await one(tx, `SELECT ${QUEUE_COLUMNS} FROM jtc_party_queue WHERE id = ? LIMIT 1`, [queue.id]);
       await execute(tx, 'UPDATE jtc_party_members SET active = 0 WHERE queue_id = ? AND active = 1', [queue.id]);
       return updated;
     });
@@ -341,9 +351,11 @@ export async function expirePartyQueues(client, db = database, now = Date.now())
     const queue = rowToQueue(raw);
     const status = queue.status === 'awaiting_confirmation' && queue.expiresAt > now ? 'open' : 'expired';
     const updated = await transaction(db, async tx => {
-      const next = await one(tx, `UPDATE jtc_party_queue SET status = ?, confirmation_expires_at = NULL, updated_at = ?
-        WHERE id = ? AND status = ? RETURNING ${QUEUE_COLUMNS}`,
+      const res = await execute(tx, `UPDATE jtc_party_queue SET status = ?, confirmation_expires_at = NULL, updated_at = ?
+        WHERE id = ? AND status = ?`,
       [status, timestamp, queue.id, queue.status]);
+      if (!res?.rowsAffected) return null;
+      const next = await one(tx, `SELECT ${QUEUE_COLUMNS} FROM jtc_party_queue WHERE id = ? LIMIT 1`, [queue.id]);
       if (!next) return null;
       if (status === 'expired') {
         await execute(tx, 'UPDATE jtc_party_members SET active = 0 WHERE queue_id = ? AND active = 1', [queue.id]);

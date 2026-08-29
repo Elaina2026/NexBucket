@@ -1,4 +1,4 @@
-import { all, database, one, transaction } from '../database/client.js';
+import { all, database, execute, one, transaction } from '../database/client.js';
 import { encodeJson } from '../database/codecs.js';
 
 export const PRIVACY_CATEGORIES = Object.freeze(['reminders', 'jtc', 'afk', 'parties', 'tickets', 'moderation', 'payments']);
@@ -71,9 +71,11 @@ export async function createPrivacyRequest(owner, input, db = database) {
   requireDatabase(db);
   const requestType = input?.requestType === 'export' ? 'export' : 'delete';
   const selected = categories(input?.categories);
-  return one(`INSERT INTO privacy_requests (user_id, request_type, categories, note)
-    VALUES (?, ?, ?, ?) RETURNING id, request_type, categories, note, status, requested_at`,
-  [userId(owner), requestType, encodeJson(selected), String(input?.note || '').trim().slice(0, 1000) || null], db);
+  const requestedAt = new Date().toISOString();
+  const id = (await execute(`INSERT INTO privacy_requests (user_id, request_type, categories, note, requested_at)
+    VALUES (?, ?, ?, ?, ?)`,
+  [userId(owner), requestType, encodeJson(selected), String(input?.note || '').trim().slice(0, 1000) || null, requestedAt], db)).lastInsertRowid;
+  return one('SELECT id, request_type, categories, note, status, requested_at FROM privacy_requests WHERE id = ? LIMIT 1', [id], db);
 }
 
 export async function listPrivacyRequests({ status = 'pending', limit = 100 } = {}, db = database) {
@@ -118,12 +120,13 @@ export async function decidePrivacyRequest(requestId, decision, reviewerId, owne
         result.deleted[category] = (await deleteSafeCategory(tx, category, preview.request.user_id)).rowsAffected;
       }
     }
-    const request = await one(`UPDATE privacy_requests SET status = ?, reviewed_at = ?, reviewed_by = ?, owner_note = ?, result = ?
-      WHERE id = ? AND status = 'pending' AND user_id = ? AND categories = ? RETURNING *`, [
+    const res = await execute(`UPDATE privacy_requests SET status = ?, reviewed_at = ?, reviewed_by = ?, owner_note = ?, result = ?
+      WHERE id = ? AND status = 'pending' AND user_id = ? AND categories = ?`, [
       decision === 'approve' ? 'approved' : 'rejected', new Date().toISOString(), userId(reviewerId),
       String(ownerNote || '').trim().slice(0, 1000) || null, encodeJson(result), Number(requestId),
       preview.request.user_id, encodeJson(preview.request.categories),
     ], tx);
+    const request = res?.rowsAffected ? await one('SELECT * FROM privacy_requests WHERE id = ? LIMIT 1', [Number(requestId)], tx) : null;
     return request ? { idempotent: false, request } : { idempotent: true, request: preview.request };
   }, db);
 }

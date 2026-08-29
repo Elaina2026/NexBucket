@@ -204,22 +204,26 @@ export async function addReminder(input, db = defaultDatabase, now = Date.now())
   requireDatabase(db);
   const clean = normalizeReminderInput(input, now);
   const createdAt = Number.isSafeInteger(input.createdAt) ? input.createdAt : now;
-  return toReminder(await one(db, `INSERT INTO reminders (
+  const res = await execute(db, `INSERT INTO reminders (
     user_id, message, end_time, created_at, done, processing_at, target_type
-  ) VALUES (?, ?, ?, ?, 0, NULL, 'dm') RETURNING ${REMINDER_COLUMNS}`,
-  [userId(input.userId), clean.message, clean.endTime, createdAt]));
+  ) VALUES (?, ?, ?, ?, 0, NULL, 'dm')`,
+  [userId(input.userId), clean.message, clean.endTime, createdAt]);
+  const row = await one(db, `SELECT ${REMINDER_COLUMNS} FROM reminders WHERE id = ? LIMIT 1`, [res.lastInsertRowid]);
+  return toReminder(row);
 }
 
 export async function addChannelSchedule(input, db = defaultDatabase, now = Date.now()) {
   requireDatabase(db);
   const clean = normalizeChannelScheduleInput(input, now);
-  return toReminder(await one(db, `INSERT INTO reminders (
+  const res = await execute(db, `INSERT INTO reminders (
     user_id, message, end_time, created_at, done, processing_at, target_type,
     guild_id, channel_id, recurrence, time_zone, local_time, weekdays, day_of_month, embed, paused, retry_count
-  ) VALUES (?, ?, ?, ?, 0, NULL, 'channel', ?, ?, ?, ?, ?, ?, ?, ?, 0, 0) RETURNING ${REMINDER_COLUMNS}`,
+  ) VALUES (?, ?, ?, ?, 0, NULL, 'channel', ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`,
   [userId(input.userId), clean.message, clean.endTime, now, clean.guildId, clean.channelId,
     clean.recurrence, clean.timeZone, clean.localTime, clean.weekdays === null ? null : encodeJson(clean.weekdays),
-    clean.dayOfMonth, clean.embed === null ? null : encodeJson(clean.embed)]));
+    clean.dayOfMonth, clean.embed === null ? null : encodeJson(clean.embed)]);
+  const row = await one(db, `SELECT ${REMINDER_COLUMNS} FROM reminders WHERE id = ? LIMIT 1`, [res.lastInsertRowid]);
+  return toReminder(row);
 }
 
 export async function listPendingReminders(owner, db = defaultDatabase) {
@@ -232,32 +236,36 @@ export async function listPendingReminders(owner, db = defaultDatabase) {
 export async function updatePendingReminder(idValue, owner, input, db = defaultDatabase, now = Date.now()) {
   requireDatabase(db);
   const clean = normalizeReminderInput(input, now);
-  const row = await one(db, `UPDATE reminders SET message = ?, end_time = ?
-    WHERE id = ? AND user_id = ? AND target_type = 'dm' AND done = 0 AND processing_at IS NULL
-    RETURNING ${REMINDER_COLUMNS}`,
+  const res = await execute(db, `UPDATE reminders SET message = ?, end_time = ?
+    WHERE id = ? AND user_id = ? AND target_type = 'dm' AND done = 0 AND processing_at IS NULL`,
   [clean.message, clean.endTime, reminderId(idValue), userId(owner)]);
+  if (!res?.rowsAffected) return null;
+  const row = await one(db, `SELECT ${REMINDER_COLUMNS} FROM reminders WHERE id = ? LIMIT 1`, [reminderId(idValue)]);
   return row ? toReminder(row) : null;
 }
 
 export async function updateChannelSchedule(idValue, owner, input, db = defaultDatabase, now = Date.now()) {
   requireDatabase(db);
   const clean = normalizeChannelScheduleInput(input, now);
-  const row = await one(db, `UPDATE reminders SET
+  const res = await execute(db, `UPDATE reminders SET
     message = ?, end_time = ?, guild_id = ?, channel_id = ?, recurrence = ?, time_zone = ?, local_time = ?,
     weekdays = ?, day_of_month = ?, embed = ?, retry_count = 0
-    WHERE id = ? AND user_id = ? AND target_type = 'channel' AND done = 0 AND processing_at IS NULL
-    RETURNING ${REMINDER_COLUMNS}`,
+    WHERE id = ? AND user_id = ? AND target_type = 'channel' AND done = 0 AND processing_at IS NULL`,
   [clean.message, clean.endTime, clean.guildId, clean.channelId, clean.recurrence, clean.timeZone, clean.localTime,
     clean.weekdays === null ? null : encodeJson(clean.weekdays), clean.dayOfMonth,
     clean.embed === null ? null : encodeJson(clean.embed), reminderId(idValue), userId(owner)]);
+  if (!res?.rowsAffected) return null;
+  const row = await one(db, `SELECT ${REMINDER_COLUMNS} FROM reminders WHERE id = ? LIMIT 1`, [reminderId(idValue)]);
   return row ? toReminder(row) : null;
 }
 
 export async function setSchedulePaused(idValue, owner, paused, db = defaultDatabase) {
   requireDatabase(db);
-  const row = await one(db, `UPDATE reminders SET paused = ?, processing_at = NULL
-    WHERE id = ? AND user_id = ? AND target_type = 'channel' AND done = 0 RETURNING ${REMINDER_COLUMNS}`,
+  const res = await execute(db, `UPDATE reminders SET paused = ?, processing_at = NULL
+    WHERE id = ? AND user_id = ? AND target_type = 'channel' AND done = 0`,
   [paused ? 1 : 0, reminderId(idValue), userId(owner)]);
+  if (!res?.rowsAffected) return null;
+  const row = await one(db, `SELECT ${REMINDER_COLUMNS} FROM reminders WHERE id = ? LIMIT 1`, [reminderId(idValue)]);
   return row ? toReminder(row) : null;
 }
 
@@ -277,9 +285,10 @@ export async function cloneChannelSchedule(idValue, owner, db = defaultDatabase,
 
 export async function cancelPendingReminder(idValue, owner, db = defaultDatabase) {
   requireDatabase(db);
-  return Boolean(await one(db, `DELETE FROM reminders
-    WHERE id = ? AND user_id = ? AND done = 0 AND processing_at IS NULL RETURNING id`,
-  [reminderId(idValue), userId(owner)]));
+  const res = await execute(db, `DELETE FROM reminders
+    WHERE id = ? AND user_id = ? AND done = 0 AND processing_at IS NULL`,
+  [reminderId(idValue), userId(owner)]);
+  return Boolean(res?.rowsAffected);
 }
 
 async function dueReminders(now, db) {
@@ -295,8 +304,10 @@ export async function claimReminder(reminder, now, db = defaultDatabase) {
   const args = reminder.processingAt === null
     ? [now, reminderId(reminder.id)]
     : [now, reminderId(reminder.id), reminder.processingAt];
-  const row = await one(db, `UPDATE reminders SET processing_at = ?
-    WHERE id = ? AND done = 0 AND ${leasePredicate} RETURNING ${REMINDER_COLUMNS}`, args);
+  const res = await execute(db, `UPDATE reminders SET processing_at = ?
+    WHERE id = ? AND done = 0 AND ${leasePredicate}`, args);
+  if (!res?.rowsAffected) return null;
+  const row = await one(db, `SELECT ${REMINDER_COLUMNS} FROM reminders WHERE id = ? LIMIT 1`, [reminderId(reminder.id)]);
   return row ? toReminder(row) : null;
 }
 
@@ -341,8 +352,9 @@ function scheduleMessagePayload(reminder) {
 async function createScheduleRun(reminder, now, db) {
   if (reminder.targetType !== 'channel') return null;
   try {
-    return (await one(db, `INSERT INTO schedule_runs (reminder_id, scheduled_for, status)
-      VALUES (?, ?, 'running') RETURNING id`, [reminder.id, reminder.endTime]))?.id || null;
+    const res = await execute(db, `INSERT INTO schedule_runs (reminder_id, scheduled_for, status)
+      VALUES (?, ?, 'running')`, [reminder.id, reminder.endTime]);
+    return res.lastInsertRowid || null;
   } catch (error) {
     if (error?.code === 'UNIQUE_CONSTRAINT') return false;
     throw error;

@@ -1632,10 +1632,10 @@ export function startDashboard(client) {
             if (String(txn.status).toLowerCase() === 'paid') return res.json({ success: true });
 
             const paidAt = new Date().toISOString();
-            const updated = await one(`UPDATE bank_transactions SET status = 'paid', paid_at = ?, updated_at = ?
-                WHERE order_code = ? AND lower(status) != 'paid' RETURNING order_code`,
+            const updated = await execute(`UPDATE bank_transactions SET status = 'paid', paid_at = ?, updated_at = ?
+                WHERE order_code = ? AND lower(status) != 'paid'`,
             [paidAt, paidAt, normalizedOrderCode]);
-            if (!updated) return res.json({ success: true });
+            if (!updated?.rowsAffected) return res.json({ success: true });
 
             const notifChannelId = bankConfig?.notificationChannelId;
             if (notifChannelId) {

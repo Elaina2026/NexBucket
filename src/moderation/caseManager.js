@@ -38,20 +38,22 @@ export async function createModerationCase(input, db = database) {
   const evidence = normalizeCaseEvidence(input);
   const guildId = normalizeText(input.guildId, 32, 'Guild ID', true);
   return transaction(async tx => {
-    const counter = await one(`INSERT INTO moderation_case_counters (guild_id, next_number) VALUES (?, 2)
-      ON CONFLICT(guild_id) DO UPDATE SET next_number = next_number + 1
-      RETURNING next_number - 1 AS case_number`, [guildId], tx);
-    return one(`INSERT INTO moderation_cases (
+    await execute(`INSERT INTO moderation_case_counters (guild_id, next_number) VALUES (?, 2)
+      ON CONFLICT(guild_id) DO UPDATE SET next_number = next_number + 1`, [guildId], tx);
+    const counter = await one('SELECT next_number - 1 AS case_number FROM moderation_case_counters WHERE guild_id = ? LIMIT 1', [guildId], tx);
+    const caseNumber = Number(counter.case_number);
+    await execute(`INSERT INTO moderation_cases (
       guild_id, case_number, action, target_id, moderator_id, reason, duration_ms,
       expires_at, evidence_url, evidence_text, status, source
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING ${CASE_COLUMNS}`,
-    [guildId, Number(counter.case_number), action,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [guildId, caseNumber, action,
       normalizeText(input.targetId, 32, 'Target ID', true),
       normalizeText(input.moderatorId, 32, 'Moderator ID') || null,
       normalizeText(input.reason, 1000, 'Reason') || 'No reason provided',
       durationMs,
       durationMs ? new Date((input.now ?? Date.now()) + durationMs).toISOString() : null,
       evidence.evidenceUrl, evidence.evidenceText, status, source], tx);
+    return getModerationCase(guildId, caseNumber, tx);
   }, db);
 }
 
@@ -89,24 +91,27 @@ export async function updateModerationCase(guildId, caseNumber, patch, actorId, 
   const current = await getModerationCase(guildId, caseNumber, db);
   if (!current) return null;
   const evidence = normalizeCaseEvidence({ evidenceUrl: patch.evidenceUrl ?? current.evidence_url, evidenceText: patch.evidenceText ?? current.evidence_text });
-  return one(`UPDATE moderation_cases SET reason = ?, evidence_url = ?, evidence_text = ?, moderator_id = ?, updated_at = ?
-    WHERE guild_id = ? AND case_number = ? RETURNING ${CASE_COLUMNS}`,
+  await execute(`UPDATE moderation_cases SET reason = ?, evidence_url = ?, evidence_text = ?, moderator_id = ?, updated_at = ?
+    WHERE guild_id = ? AND case_number = ?`,
   [normalizeText(patch.reason ?? current.reason, 1000, 'Reason') || 'No reason provided', evidence.evidenceUrl,
     evidence.evidenceText, current.moderator_id || String(actorId || ''), new Date().toISOString(),
     String(guildId), Number(caseNumber)], db);
+  return getModerationCase(guildId, caseNumber, db);
 }
 
 export async function markModerationCaseStatus(guildId, caseNumber, status, actorId = null, db = database) {
   requireDatabase(db);
   if (!['expired', 'revoked'].includes(status)) throw new TypeError('Invalid case status');
   const now = new Date().toISOString();
-  return status === 'revoked'
-    ? one(`UPDATE moderation_cases SET status = ?, revoked_by = ?, revoked_at = ?, updated_at = ?
-      WHERE guild_id = ? AND case_number = ? AND status = 'active' RETURNING ${CASE_COLUMNS}`,
+  const res = status === 'revoked'
+    ? await execute(`UPDATE moderation_cases SET status = ?, revoked_by = ?, revoked_at = ?, updated_at = ?
+      WHERE guild_id = ? AND case_number = ? AND status = 'active'`,
     [status, String(actorId || ''), now, now, String(guildId), Number(caseNumber)], db)
-    : one(`UPDATE moderation_cases SET status = ?, updated_at = ?
-      WHERE guild_id = ? AND case_number = ? AND status = 'active' RETURNING ${CASE_COLUMNS}`,
+    : await execute(`UPDATE moderation_cases SET status = ?, updated_at = ?
+      WHERE guild_id = ? AND case_number = ? AND status = 'active'`,
     [status, now, String(guildId), Number(caseNumber)], db);
+  if (!res?.rowsAffected) return null;
+  return getModerationCase(guildId, caseNumber, db);
 }
 
 export async function expireModerationCases(db = database, now = Date.now()) {
