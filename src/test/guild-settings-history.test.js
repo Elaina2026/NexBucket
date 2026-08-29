@@ -40,7 +40,7 @@ test('config history stores actor metadata and redacts provider secrets', async 
   await assert.rejects(() => saveSections(guildId, {}, 3, null, db), /Invalid settings payload/);
 });
 
-test('expired guild settings use bounded stale cache during Turso outage', async t => {
+test('expired guild settings use bounded stale cache during VanillaDB outage', async t => {
   const { db, close } = await createTestDatabase();
   t.after(close);
   const guildId = 'stale-guild';

@@ -33,7 +33,7 @@ test('cleanup keeps 30 hours of uptime checks and 7 days of incidents', async ()
   assert.equal(db.calls[1].args[0], new Date(now - 7 * 24 * 3600000).toISOString());
 });
 
-test('cleanup stops after Turso outage without duplicate error logs', async () => {
+test('cleanup stops after VanillaDB outage without duplicate error logs', async () => {
   const unavailable = Object.assign(new Error('fetch failed'), { code: 'DB_UNAVAILABLE' });
   const db = cleanupDatabase({ uptime_checks: unavailable });
   const logs = await captureCleanupErrors(async () => {

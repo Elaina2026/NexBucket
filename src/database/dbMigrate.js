@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { database, execute, executeMultiple } from './client.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const MIGRATIONS_PATH = path.join(__dirname, 'libsql');
+const MIGRATIONS_PATH = path.join(__dirname, 'migrations');
 
 export async function runAutoMigrations(db = database) {
   if (!db) {

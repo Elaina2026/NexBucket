@@ -14,14 +14,14 @@ import { createBackgroundJob } from '../runtime/backgroundJob.js';
 import { addIncident, resetIncidentCircuit } from '../utils/errorHandler.js';
 import { getDatabaseFailureDelay } from '../banking/cardPoller.js';
 
-test('libSQL constraint errors normalize for idempotent workflows', () => {
+test('VanillaDB constraint errors normalize for idempotent workflows', () => {
   const unique = Object.assign(new Error('unique'), { code: 'SQLITE_CONSTRAINT_UNIQUE' });
   assert.equal(normalizeDatabaseError(unique).code, 'UNIQUE_CONSTRAINT');
   const foreignKey = Object.assign(new Error('foreign key'), { code: 'SQLITE_CONSTRAINT_FOREIGNKEY' });
   assert.equal(normalizeDatabaseError(foreignKey).code, 'FOREIGN_KEY_CONSTRAINT');
 });
 
-test('libSQL outage classification is narrow', () => {
+test('VanillaDB outage classification is narrow', () => {
   for (const code of ['DB_TIMEOUT', 'DB_UNAVAILABLE', 'CLIENT_CLOSED', 'SERVER_ERROR', 'HTTP_ERROR', 'WS_ERROR', 'SQLITE_BUSY', 'SQLITE_LOCKED']) {
     assert.equal(isDatabaseUnavailable({ code }), true);
   }

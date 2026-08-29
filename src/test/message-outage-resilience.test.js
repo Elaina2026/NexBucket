@@ -4,7 +4,7 @@ import { handleMessageCreate } from '../events/messageCreate.js';
 
 test('message pipeline fails closed for moderation and continues independent features during an outage', async () => {
   const calls = [];
-  const unavailable = { code: 'DB_UNAVAILABLE', status: 503, message: 'Turso is temporarily unavailable' };
+  const unavailable = { code: 'DB_UNAVAILABLE', status: 503, message: 'VanillaDB is temporarily unavailable' };
   const message = {
     author: { id: 'user', bot: false },
     content: 'hello',

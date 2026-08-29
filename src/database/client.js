@@ -3,8 +3,8 @@ import { decodeDatabaseRow } from './codecs.js';
 
 const DATABASE_TIMEOUT_MS = 15_000;
 const DATABASE_BACKOFF_MAX_MS = 5 * 60 * 1000;
-const vanillaDbUrl = process.env.VANILLA_DB_URL || process.env.TURSO_DATABASE_URL;
-const vanillaDbToken = process.env.VANILLA_DB_TOKEN || process.env.TURSO_AUTH_TOKEN;
+const vanillaDbUrl = process.env.VANILLA_DB_URL;
+const vanillaDbToken = process.env.VANILLA_DB_TOKEN;
 
 let failureCount = 0;
 let unavailableUntil = 0;
@@ -31,7 +31,7 @@ export const database = createDatabaseClient({ url: vanillaDbUrl, token: vanilla
 function safeHealthError(error) {
   const code = String(error?.code || 'UNAVAILABLE').slice(0, 40);
   const message = String(error?.message || 'Health check failed')
-    .replace(/(?:libsql|vanilla|https?|wss?):\/\/[^\s]+/gi, '[redacted]')
+    .replace(/(?:vanilla|https?|wss?):\/\/[^\s]+/gi, '[redacted]')
     .replace(/vdb_live_[a-zA-Z0-9_-]+/g, '[redacted]')
     .slice(0, 200);
   return { code, message };
@@ -80,6 +80,7 @@ export function isDatabaseUnavailable(error) {
     || text.includes('operation was aborted due to timeout')
     || text.includes('<!doctype')
     || text.includes('is not valid json')
+    || text.includes('unexpected token')
     || text.includes('vanilladatabase query failed') && (text.includes('502') || text.includes('503') || text.includes('504') || text.includes('520') || text.includes('521') || text.includes('522') || text.includes('523') || text.includes('524') || text.includes('525'))
     || text.includes('vanilladatabase query failed: 5');
 }

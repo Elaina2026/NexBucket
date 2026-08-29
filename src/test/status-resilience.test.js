@@ -27,11 +27,11 @@ function minecraftDatabase(results) {
   };
 }
 
-test('Minecraft status keeps stale server config during a Turso outage', async () => {
+test('Minecraft status keeps stale server config during a VanillaDB outage', async () => {
   invalidateMinecraftServersCache();
   const unavailable = {
     code: 'DB_UNAVAILABLE',
-    message: 'Turso is temporarily unavailable.',
+    message: 'VanillaDB is temporarily unavailable.',
   };
   const db = minecraftDatabase([
     { rows: [{ guild_id: '1', minecraft: JSON.stringify({ servers: [{ channelId: '2', ip: 'mc.example.com', port: 25565 }] }) }], error: null },

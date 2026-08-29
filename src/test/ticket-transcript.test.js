@@ -3,7 +3,7 @@ import test from 'node:test';
 import { createWebTranscript } from '../ticket/utils/transcriptManager.js';
 import { createTestDatabase } from './databaseTestUtils.js';
 
-test('web transcript persists serialized messages in libSQL', async t => {
+test('web transcript persists serialized messages in VanillaDB', async t => {
   const { db, close } = await createTestDatabase();
   t.after(close);
   const author = {

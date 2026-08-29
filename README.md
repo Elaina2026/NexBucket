@@ -150,7 +150,7 @@ VANILLA_DB_TOKEN=vdb_live_your_api_token_here
 LOCAL_MEDIA_DIR=data/media
 ```
 
-Keep VanillaDB credentials backend-only. Runtime applies ordered SQL under `src/database/libsql/`; `schema_migrations` records applied versions. `LOCAL_MEDIA_DIR` defaults to `data/media`. Production must mount it on persistent writable storage and back up it; ephemeral container filesystems lose uploaded media after redeploy.
+Keep VanillaDB credentials backend-only. Runtime applies ordered SQL under `src/database/migrations/`; `schema_migrations` records applied versions. Media files are stored directly in VanillaDB.
 
 ## Environment variables
 

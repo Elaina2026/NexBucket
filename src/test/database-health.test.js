@@ -11,7 +11,7 @@ test('database health reports VanillaDB without exposing connection details', as
   const detailed = getDatabaseHealthSnapshot({ detailed: true });
   assert.equal(detailed.layers.database.status, 'operational');
   assert.equal(detailed.layers.database.error, null);
-  assert.doesNotMatch(JSON.stringify(detailed), /vanilla|vdb_live_|libsql:\/\/|TURSO_AUTH_TOKEN|postgres:\/\//);
+  assert.doesNotMatch(JSON.stringify(detailed), /vanilla|vdb_live_|VANILLA_DB_TOKEN/);
   const publicHealth = getDatabaseHealthSnapshot();
   assert.equal('error' in publicHealth.layers.database, false);
 });
