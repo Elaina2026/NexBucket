@@ -8,7 +8,7 @@ const MIGRATIONS_PATH = path.join(__dirname, 'migrations');
 
 export async function runAutoMigrations(db = database) {
   if (!db) {
-    console.log('⚠️ [DB Migration] Skipped: VANILLA_DB_URL is missing.');
+    console.log('⚠️ [DB Migration] Skipped: Database is not configured.');
     return false;
   }
 

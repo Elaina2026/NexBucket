@@ -140,28 +140,35 @@ http://localhost:3000/api/auth/callback
 
 Dashboard exposes only guilds where signed-in user has Administrator or Manage Server permission and bot is present. Learn management requires Administrator permission.
 
-## VanillaDB and local media
+## Database configuration (VanillaDB Cloud or SQLite Self-Hosted)
 
 Runtime configuration:
 
 ```env
+# Mode 1: VanillaDB Cloud (Default)
+DATABASE_TYPE=vanilladb
 VANILLA_DB_URL=https://vanilladatabase.elaina2026.io.vn/v1/databases/db_your_database_id
 VANILLA_DB_TOKEN=vdb_live_your_api_token_here
-LOCAL_MEDIA_DIR=data/media
+
+# Mode 2: SQLite Self-hosted local file
+DATABASE_TYPE=sqlite
+SQLITE_PATH=data/nexbucket.db
 ```
 
-Keep VanillaDB credentials backend-only. Runtime applies ordered SQL under `src/database/migrations/`; `schema_migrations` records applied versions. Media files are stored directly in VanillaDB.
+Runtime applies ordered SQL under `src/database/migrations/`; `schema_migrations` records applied versions. Media files are stored in VanillaDB or local storage.
 
 ## Environment variables
 
 | Variable | Required | Purpose |
 | --- | --- | --- |
+| `DATABASE_TYPE` | No | `vanilladb` (default) or `sqlite` (self-hosted) |
 | `DISCORD_TOKEN` | Yes | Discord bot token |
 | `CLIENT_ID` | Yes | Discord application and OAuth client ID |
 | `CLIENT_SECRET` | Yes | Discord OAuth2 client secret |
 | `BOT_OWNER_ID` | Recommended | Owner-only bot and dashboard access |
-| `VANILLA_DB_URL` | Yes | Runtime VanillaDB database URL |
-| `VANILLA_DB_TOKEN` | Yes | Private runtime database API token |
+| `VANILLA_DB_URL` | For VanillaDB | Runtime VanillaDB database URL |
+| `VANILLA_DB_TOKEN` | For VanillaDB | Private runtime database API token |
+| `SQLITE_PATH` | For SQLite | Path to local SQLite file (default `data/nexbucket.db`) |
 | `LOCAL_MEDIA_DIR` | Production media | Persistent writable directory; defaults to `data/media` |
 | `ENCRYPTION_SECRET` | Yes | AES-256-GCM key source for OAuth/payment secrets |
 | `DASHBOARD_PORT` | No | Express port; defaults to `3000` |

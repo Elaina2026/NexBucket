@@ -1,10 +1,13 @@
 import { VanillaDatabase } from '@nullex/vanilladb';
+import { SQLiteLocalClient } from './sqliteLocal.js';
 import { decodeDatabaseRow } from './codecs.js';
 
 const DATABASE_TIMEOUT_MS = 15_000;
 const DATABASE_BACKOFF_MAX_MS = 5 * 60 * 1000;
+const databaseType = (process.env.DATABASE_TYPE || (process.env.VANILLA_DB_URL ? 'vanilladb' : (process.env.SQLITE_PATH ? 'sqlite' : 'vanilladb'))).toLowerCase();
 const vanillaDbUrl = process.env.VANILLA_DB_URL;
 const vanillaDbToken = process.env.VANILLA_DB_TOKEN;
+const sqlitePath = process.env.SQLITE_PATH || 'data/nexbucket.db';
 
 let failureCount = 0;
 let unavailableUntil = 0;
@@ -19,14 +22,18 @@ const databaseHealth = {
   database: { status: 'unknown', latencyMs: null, lastSuccessAt: null, lastErrorAt: null, error: null },
 };
 
-export function createDatabaseClient({ url, authToken, token } = {}) {
+export function createDatabaseClient({ type = databaseType, url = vanillaDbUrl, authToken, token = vanillaDbToken, path = sqlitePath } = {}) {
+  const finalType = (type || (url ? 'vanilladb' : 'sqlite')).toLowerCase();
+  if (finalType === 'sqlite' || finalType === 'selfhost' || finalType === 'local') {
+    return new SQLiteLocalClient(path);
+  }
   const finalUrl = url;
   const finalToken = token || authToken;
   if (!finalUrl) return null;
   return new VanillaDatabase({ url: finalUrl, token: finalToken || '' });
 }
 
-export const database = createDatabaseClient({ url: vanillaDbUrl, token: vanillaDbToken });
+export const database = createDatabaseClient({ type: databaseType, url: vanillaDbUrl, token: vanillaDbToken, path: sqlitePath });
 
 function safeHealthError(error) {
   const code = String(error?.code || 'UNAVAILABLE').slice(0, 40);
@@ -338,16 +345,18 @@ function installAvailabilityLogger() {
 
 export async function initDatabase(db = database, { schedulePing = db === database } = {}) {
   if (!db) {
-    console.warn('⚠️ [Database] VANILLA_DB_URL is missing. Bot cannot persist data.');
+    console.warn('⚠️ [Database] Database is not configured (VANILLA_DB_URL or SQLITE_PATH missing). Bot cannot persist data.');
     return false;
   }
+  const isSqlite = db instanceof SQLiteLocalClient;
+  const dbLabel = isSqlite ? 'SQLite (Self-hosted)' : 'VanillaDB';
   installAvailabilityLogger();
-  console.log('🔄 [Database] Connecting to VanillaDB...');
+  console.log(`🔄 [Database] Connecting to ${dbLabel}...`);
   const result = await probeDatabase(db);
-  if (result.ok) console.log('✅ [Database] Connected to VanillaDB successfully!');
-  else if (!isDatabaseUnavailable(result.error)) console.error('❌ [Database] Connection check failed:', result.error?.message || result.error);
+  if (result.ok) console.log(`✅ [Database] Connected to ${dbLabel} successfully!`);
+  else if (!isDatabaseUnavailable(result.error)) console.error(`❌ [Database] Connection check failed:`, result.error?.message || result.error);
 
-  if (schedulePing && !pingTimer) {
+  if (schedulePing && !pingTimer && !isSqlite) {
     pingTimer = setInterval(async () => {
       if (!canAttemptDatabase()) return;
       await probeDatabase(db);

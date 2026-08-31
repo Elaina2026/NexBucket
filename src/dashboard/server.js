@@ -310,8 +310,8 @@ export function startDashboard(client) {
                     free: diskFree
                 },
                 db: {
-                    status: database ? 'Connected (VanillaDB)' : 'Disconnected',
-                    size: 'Cloud'
+                    status: database ? (database.constructor?.name === 'SQLiteLocalClient' ? 'Connected (SQLite Local)' : 'Connected (VanillaDB)') : 'Disconnected',
+                    size: database?.constructor?.name === 'SQLiteLocalClient' ? 'Local File' : 'Cloud'
                 }
             });
         } catch (err) {
