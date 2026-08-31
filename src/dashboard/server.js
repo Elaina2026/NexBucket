@@ -100,7 +100,23 @@ async function getGuildMember(guild, userId) {
 
 export function createLocalMediaHandler(root = getLocalMediaRoot()) {
     return (req, res) => {
-        return res.status(404).end();
+        try {
+            const filename = String(req.params.filename || '');
+            validateMediaKey(filename);
+            const target = mediaPathForKey(filename, root);
+            const contentType = mediaMimeType(filename) || 'application/octet-stream';
+            res.setHeader('Content-Type', contentType);
+            res.setHeader('X-Content-Type-Options', 'nosniff');
+            res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+            return res.sendFile(target, { dotfiles: 'deny', acceptRanges: true }, error => {
+                if (!error || res.headersSent) return;
+                if (error.statusCode === 404 || error.code === 'ENOENT') return res.status(404).end();
+                res.status(500).end();
+            });
+        } catch (error) {
+            if (error instanceof TypeError) return res.status(404).end();
+            return res.status(500).end();
+        }
     };
 }
 
@@ -202,7 +218,8 @@ export function startDashboard(client) {
     const builtPublicPath = path.join(__dirname, '..', '..', 'dist', 'dashboard', 'public');
     app.use(express.static(builtPublicPath, { maxAge: 0, etag: true, dotfiles: 'deny' }));
     app.use(express.static(sourcePublicPath, { maxAge: 0, etag: true, dotfiles: 'deny' }));
-    app.get('/media/:guildId/:filename', createLocalMediaHandler());
+    app.get('/media/:filename', createLocalMediaHandler());
+    app.get('/media/:guildId/:filename', (req, res) => createLocalMediaHandler()(req, res));
     app.get('/favicon.ico', (req, res) => {
         if (!client || !client.user) return res.status(404).end();
         res.redirect(client.user.displayAvatarURL({ extension: 'png', size: 128 }));
